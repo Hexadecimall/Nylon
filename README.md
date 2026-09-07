@@ -21,7 +21,7 @@ cargo bench --locked --bench render
 cargo deny check
 ```
 
-`cargo-deny` is a separate development prerequisite. CI installs version 0.18.4.
+`cargo-deny` is a separate development prerequisite. CI installs version 0.20.2.
 The native compiler wrapper maps build and toolchain locations to relative
 diagnostic paths on macOS, Windows, and Linux. Rebuild it after cleaning `target`.
 The repository hook directory is `.githooks`.

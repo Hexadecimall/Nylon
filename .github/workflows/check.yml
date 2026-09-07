@@ -20,6 +20,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: sh scripts/lint-rules.sh
+      - run: python3 -B scripts/rt_lint.py
       - run: python3 -B scripts/bootstrap.py
       - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
       - run: cargo fmt --check
@@ -27,5 +28,16 @@ jobs:
       - run: cargo test --locked
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo bench --locked --bench render
-      - run: cargo install cargo-deny --version 0.18.4 --locked
+      - run: cargo install cargo-deny --version 0.20.2 --locked
       - run: cargo deny check
+      - run: cargo build --locked --release
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y qt6-base-dev
+      - if: runner.os != 'Linux'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          cache: true
+      - run: cmake -S desktop -B target/desktop -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build target/desktop --config Release --parallel 2
+      - run: ctest --test-dir target/desktop -C Release --output-on-failure

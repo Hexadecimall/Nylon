@@ -1,0 +1,68 @@
+# Graphite theme
+# Darker theme.
+# Format: key = value. Prefixes: color. (#RRGGBB or #RRGGBBAA), metric. (number), font. (text).
+
+name = Graphite
+
+font.family = system
+
+color.background = #0A0B0C
+color.panel = #111214
+color.raised = #1A1C1F
+color.separator = #222427
+color.text.primary = #DDDFE1
+color.text.secondary = #8F959A
+color.text.disabled = #50555A
+color.accent = #4E8FE8
+color.accent.text = #0A0B0C
+color.playhead = #4E8FE8
+color.selection = #4E8FE840
+color.session.slot = #141618
+color.session.slot.hover = #1A1C1F
+color.session.stop_button = #2E3236
+color.arrangement.ruler = #111214
+color.arrangement.lane = #0D0E10
+color.arrangement.lane.alt = #101113
+color.arrangement.grid = #1B1D20
+color.arrangement.grid.bar = #26282B
+color.control.background = #1A1C1F
+color.control.border = #26292D
+color.control.text = #DDDFE1
+color.control.hover = #212428
+color.control.pressed = #141618
+color.control.disabled = #5E6469
+color.meter.rms = #66A876
+color.meter.peak = #BB9845
+color.meter.clip = #BE6853
+
+color.track.1 = #C66954
+color.track.2 = #CE8546
+color.track.3 = #C59E44
+color.track.4 = #99B053
+color.track.5 = #68AF78
+color.track.6 = #56AB9A
+color.track.7 = #53A2B5
+color.track.8 = #5B8FC6
+color.track.9 = #777FCC
+color.track.10 = #9578C4
+color.track.11 = #B472AC
+color.track.12 = #C16888
+color.track.13 = #9C8772
+color.track.14 = #899585
+color.track.15 = #798794
+color.track.16 = #958F87
+
+metric.separator = 1
+metric.control.height = 20
+metric.control.padding = 4
+metric.transport.height = 28
+metric.session.slot.width = 96
+metric.session.slot.height = 18
+metric.session.scene.count = 8
+metric.session.master.width = 72
+metric.arrangement.ruler.height = 20
+metric.arrangement.lane.height = 56
+metric.arrangement.header.width = 140
+metric.arrangement.pixels_per_bar = 64
+metric.arrangement.bars = 64
+metric.font.size = 11

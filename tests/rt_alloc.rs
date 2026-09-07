@@ -59,3 +59,19 @@ fn render_callback_performs_no_allocator_operations() {
     ENABLED.with(|value| value.set(false));
     assert_eq!(COUNT.with(Cell::get), 0);
 }
+
+#[test]
+fn state_swap_defers_all_deallocation() {
+    let (mut control, mut audio) = nylon::exchange::exchange(Box::new([1.0_f32; 64]));
+    control.publish(Box::new([2.0_f32; 64])).unwrap();
+    COUNT.with(|value| value.set(0));
+    ENABLED.with(|value| value.set(true));
+    let changed = audio.apply_pending();
+    let unchanged = audio.apply_pending();
+    ENABLED.with(|value| value.set(false));
+    assert!(changed);
+    assert!(!unchanged);
+    assert_eq!(COUNT.with(Cell::get), 0);
+    assert_eq!(audio.current()[0], 2.0);
+    drop(control.reclaim());
+}

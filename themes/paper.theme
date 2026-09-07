@@ -1,0 +1,68 @@
+# Paper theme
+# Light theme.
+# Format: key = value. Prefixes: color. (#RRGGBB or #RRGGBBAA), metric. (number), font. (text).
+
+name = Paper
+
+font.family = system
+
+color.background = #F2F1EE
+color.panel = #E8E7E3
+color.raised = #DEDDD8
+color.separator = #CFCEC8
+color.text.primary = #1E2124
+color.text.secondary = #5C6166
+color.text.disabled = #A2A6AA
+color.accent = #2F6FD1
+color.accent.text = #F2F1EE
+color.playhead = #2F6FD1
+color.selection = #2F6FD140
+color.session.slot = #ECEBE7
+color.session.slot.hover = #E2E1DC
+color.session.stop_button = #C9C8C2
+color.arrangement.ruler = #E8E7E3
+color.arrangement.lane = #EFEEEA
+color.arrangement.lane.alt = #EBEAE6
+color.arrangement.grid = #D9D8D3
+color.arrangement.grid.bar = #C4C3BD
+color.control.background = #E8E7E3
+color.control.border = #C9C8C2
+color.control.text = #1E2124
+color.control.hover = #E0DFDA
+color.control.pressed = #D3D2CD
+color.control.disabled = #9A9EA2
+color.meter.rms = #3E8F51
+color.meter.peak = #A88B2E
+color.meter.clip = #B25541
+
+color.track.1 = #A34A36
+color.track.2 = #A6642C
+color.track.3 = #97782F
+color.track.4 = #72843D
+color.track.5 = #4A8C58
+color.track.6 = #3F7F72
+color.track.7 = #3B7B8A
+color.track.8 = #396EA6
+color.track.9 = #4652BA
+color.track.10 = #724CAE
+color.track.11 = #954F8C
+color.track.12 = #A44366
+color.track.13 = #776654
+color.track.14 = #687464
+color.track.15 = #5A6671
+color.track.16 = #746E66
+
+metric.separator = 1
+metric.control.height = 20
+metric.control.padding = 4
+metric.transport.height = 28
+metric.session.slot.width = 96
+metric.session.slot.height = 18
+metric.session.scene.count = 8
+metric.session.master.width = 72
+metric.arrangement.ruler.height = 20
+metric.arrangement.lane.height = 56
+metric.arrangement.header.width = 140
+metric.arrangement.pixels_per_bar = 64
+metric.arrangement.bars = 64
+metric.font.size = 11

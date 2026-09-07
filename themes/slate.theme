@@ -1,0 +1,68 @@
+# Slate theme
+# Mid-grey theme.
+# Format: key = value. Prefixes: color. (#RRGGBB or #RRGGBBAA), metric. (number), font. (text).
+
+name = Slate
+
+font.family = system
+
+color.background = #2B2F33
+color.panel = #33373C
+color.raised = #3E4348
+color.separator = #464B50
+color.text.primary = #EDEFF1
+color.text.secondary = #AEB4B9
+color.text.disabled = #6E7479
+color.accent = #6AA6F2
+color.accent.text = #1A1D20
+color.playhead = #6AA6F2
+color.selection = #6AA6F240
+color.session.slot = #363A3F
+color.session.slot.hover = #3E4348
+color.session.stop_button = #4E5358
+color.arrangement.ruler = #33373C
+color.arrangement.lane = #2F3337
+color.arrangement.lane.alt = #31353A
+color.arrangement.grid = #3D4146
+color.arrangement.grid.bar = #4A4F54
+color.control.background = #3E4348
+color.control.border = #4D5257
+color.control.text = #EDEFF1
+color.control.hover = #474C51
+color.control.pressed = #363A3F
+color.control.disabled = #7C8287
+color.meter.rms = #7ABE89
+color.meter.peak = #D2AD57
+color.meter.clip = #D47A66
+
+color.track.1 = #CF816F
+color.track.2 = #D59762
+color.track.3 = #CDAC5F
+color.track.4 = #A7BB6B
+color.track.5 = #80BC8D
+color.track.6 = #6EB7A8
+color.track.7 = #6CB0C0
+color.track.8 = #76A1D0
+color.track.9 = #9197D6
+color.track.10 = #A991CF
+color.track.11 = #C18ABA
+color.track.12 = #CB819C
+color.track.13 = #AB9987
+color.track.14 = #9BA698
+color.track.15 = #8D99A4
+color.track.16 = #A6A19A
+
+metric.separator = 1
+metric.control.height = 20
+metric.control.padding = 4
+metric.transport.height = 28
+metric.session.slot.width = 96
+metric.session.slot.height = 18
+metric.session.scene.count = 8
+metric.session.master.width = 72
+metric.arrangement.ruler.height = 20
+metric.arrangement.lane.height = 56
+metric.arrangement.header.width = 140
+metric.arrangement.pixels_per_bar = 64
+metric.arrangement.bars = 64
+metric.font.size = 11

@@ -1,0 +1,68 @@
+# Nylon theme
+# Default dark theme.
+# Format: key = value. Prefixes: color. (#RRGGBB or #RRGGBBAA), metric. (number), font. (text).
+
+name = Nylon
+
+font.family = system
+
+color.background = #0F1113
+color.panel = #181B1E
+color.raised = #24282C
+color.separator = #2C3034
+color.text.primary = #E6E8EA
+color.text.secondary = #9BA1A6
+color.text.disabled = #5C6166
+color.accent = #5B9CF6
+color.accent.text = #0F1113
+color.playhead = #5B9CF6
+color.selection = #5B9CF640
+color.session.slot = #1C1F23
+color.session.slot.hover = #24282C
+color.session.stop_button = #3A3F44
+color.arrangement.ruler = #181B1E
+color.arrangement.lane = #141618
+color.arrangement.lane.alt = #171A1D
+color.arrangement.grid = #232629
+color.arrangement.grid.bar = #2E3236
+color.control.background = #24282C
+color.control.border = #33383D
+color.control.text = #E6E8EA
+color.control.hover = #2C3136
+color.control.pressed = #1C1F23
+color.control.disabled = #6A7076
+color.meter.rms = #6FB37E
+color.meter.peak = #C7A24C
+color.meter.clip = #C9705C
+
+color.track.1 = #C9705C
+color.track.2 = #D08A4E
+color.track.3 = #C7A24C
+color.track.4 = #9DB35A
+color.track.5 = #6FB37E
+color.track.6 = #5DAE9E
+color.track.7 = #5AA6B8
+color.track.8 = #6394C9
+color.track.9 = #7E86CF
+color.track.10 = #9B7FC7
+color.track.11 = #B879B0
+color.track.12 = #C46F8E
+color.track.13 = #A08C78
+color.track.14 = #8E9A8A
+color.track.15 = #7F8C99
+color.track.16 = #9A948C
+
+metric.separator = 1
+metric.control.height = 20
+metric.control.padding = 4
+metric.transport.height = 28
+metric.session.slot.width = 96
+metric.session.slot.height = 18
+metric.session.scene.count = 8
+metric.session.master.width = 72
+metric.arrangement.ruler.height = 20
+metric.arrangement.lane.height = 56
+metric.arrangement.header.width = 140
+metric.arrangement.pixels_per_bar = 64
+metric.arrangement.bars = 64
+metric.font.size = 11

@@ -24,6 +24,15 @@ input processing.
 The allocation test counts allocation, reallocation, and deallocation operations
 on the calling thread. This is a runtime check of exercised paths, not a static
 proof. Render partition tests compare output across several block sizes.
+`scripts/rt_lint.py` rejects known allocator, lock, I/O, foreign-call, and cloning
+syntax in the render kernel. It is a conservative text check, not a transitive
+analysis of library calls; the allocation harness remains mandatory.
+
+The state exchange publishes prepared storage through a single pending slot.
+The callback moves replaced storage to a reclamation queue. Only the control
+thread destroys retired storage. If reclamation stalls, the callback retains
+its current state and defers the next publication. Endpoints must be destroyed
+on the control thread after the callback stops.
 
 The render benchmark reports nanoseconds per 256-frame stereo block after warmup.
 A statistically stable regression gate requires a dedicated runner and a stored

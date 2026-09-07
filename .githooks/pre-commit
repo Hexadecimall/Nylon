@@ -1,3 +1,4 @@
 #!/bin/sh
 set -eu
+python3 -B scripts/rt_lint.py
 exec sh scripts/lint-rules.sh --staged

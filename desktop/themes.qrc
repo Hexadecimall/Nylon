@@ -1,0 +1,9 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/themes">
+    <file alias="nylon.theme">../themes/nylon.theme</file>
+    <file alias="slate.theme">../themes/slate.theme</file>
+    <file alias="graphite.theme">../themes/graphite.theme</file>
+    <file alias="paper.theme">../themes/paper.theme</file>
+  </qresource>
+</RCC>
