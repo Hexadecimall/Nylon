@@ -1,0 +1,26 @@
+[package]
+name = "nylon"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Nylon Contributors"]
+description = "Native digital audio workstation"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+[[bench]]
+name = "render"
+harness = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
