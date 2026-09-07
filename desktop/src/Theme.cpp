@@ -278,7 +278,11 @@ QString Theme::resolvedFontFamily() const
     QString family = requested == QLatin1String("system")
         ? QFontDatabase::systemFont(QFontDatabase::GeneralFont).family()
         : requested;
-    if (QFontDatabase::hasFamily(family)) {
+    // Some platform backends advertise generic families that hasFamily does
+    // not recognize. Preserve an explicit selection from that advertised list.
+    const bool listedSelection = requested != QLatin1String("system")
+        && QFontDatabase::families().contains(family, Qt::CaseInsensitive);
+    if (QFontDatabase::hasFamily(family) || listedSelection) {
         return family;
     }
     // The family is not installed (a theme naming an absent font, or a

@@ -255,6 +255,12 @@ void TestTheme::resolvedFontFollowsTokens()
     QCOMPARE(named.resolvedFont().family(), installed.last());
     QCOMPARE(named.resolvedFont().pixelSize(), 9);
 
+    for (const QString& family : installed) {
+        const Theme advertised = Theme::parse(
+            QStringLiteral("font.family = %1\n").arg(family));
+        QCOMPARE(advertised.resolvedFontFamily(), family);
+    }
+
     const Theme missing = Theme::parse(QStringLiteral("font.family = No Such Family 0xDEAD\n"));
     QVERIFY(QFontDatabase::hasFamily(missing.resolvedFontFamily()));
     QVERIFY(missing.resolvedFontFamily() != QLatin1String("No Such Family 0xDEAD"));
