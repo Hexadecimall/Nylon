@@ -1,0 +1,134 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  QT_VERSION: '6.8.3'
+
+jobs:
+  macos-universal:
+    name: macOS universal
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - name: Build core for both architectures
+        run: |
+          cargo build --locked --release --target aarch64-apple-darwin
+          cargo build --locked --release --target x86_64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/libnylon.a \
+            target/aarch64-apple-darwin/release/libnylon.a \
+            target/x86_64-apple-darwin/release/libnylon.a
+          lipo -info target/release/libnylon.a
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+      - name: Configure
+        run: >
+          cmake -S desktop -B target/desktop -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+      - run: cmake --build target/desktop --parallel 3
+      - run: ctest --test-dir target/desktop --output-on-failure
+      - name: Verify both architectures are present
+        run: |
+          lipo -info target/desktop/Nylon.app/Contents/MacOS/Nylon | tee /dev/stderr | grep -q 'x86_64 arm64\|arm64 x86_64'
+      - name: Bundle Qt frameworks
+        run: macdeployqt target/desktop/Nylon.app -verbose=1
+      - name: Package
+        run: ditto -c -k --keepParent target/desktop/Nylon.app target/nylon-macos-universal.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nylon-macos-universal
+          path: target/nylon-macos-universal.zip
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev
+      - run: cargo build --locked --release
+      - run: cmake -S desktop -B target/desktop -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build target/desktop --parallel 2
+      - run: ctest --test-dir target/desktop --output-on-failure
+      - name: Package
+        run: |
+          mkdir -p target/package
+          cp target/desktop/Nylon target/package/nylon
+          tar -C target/package -czf target/nylon-linux-${{ matrix.arch }}.tar.gz nylon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nylon-linux-${{ matrix.arch }}
+          path: target/nylon-linux-${{ matrix.arch }}.tar.gz
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+            qt_arch: win64_msvc2022_64
+            qt_dir: msvc2022_64
+            cmake_platform: x64
+          - runner: windows-11-arm
+            arch: arm64
+            qt_arch: win64_msvc2022_arm64_cross_compiled
+            qt_dir: msvc2022_arm64
+            cmake_platform: ARM64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Qt
+        run: |
+          pip install aqtinstall
+          aqt install-qt windows desktop ${{ env.QT_VERSION }} win64_msvc2022_64 -O "${{ runner.temp }}/qt"
+          if [ "${{ matrix.qt_arch }}" != "win64_msvc2022_64" ]; then
+            aqt install-qt windows desktop ${{ env.QT_VERSION }} ${{ matrix.qt_arch }} -O "${{ runner.temp }}/qt"
+          fi
+      - run: cargo build --locked --release
+      - name: Configure
+        run: >
+          cmake -S desktop -B target/desktop -A ${{ matrix.cmake_platform }}
+          -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}"
+          -DQT_HOST_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64"
+      - run: cmake --build target/desktop --config Release --parallel 2
+      - run: ctest --test-dir target/desktop -C Release --output-on-failure
+      - name: Deploy Qt runtime
+        run: |
+          mkdir -p target/package
+          cp target/desktop/Release/Nylon.exe target/package/
+          "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64/bin/windeployqt.exe" \
+            --qtpaths "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin/qtpaths.bat" \
+            --release --no-translations --no-system-d3d-compiler --no-opengl-sw \
+            target/package/Nylon.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nylon-windows-${{ matrix.arch }}
+          path: target/package
