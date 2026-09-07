@@ -29,7 +29,8 @@ public:
     QStringList lastErrors() const { return m_errors; }
 
     // Loads a theme by name. Returns false and keeps the current theme when
-    // the file cannot be parsed or lacks required keys.
+    // the file cannot be parsed or lacks required keys. On success the
+    // theme's font becomes the application font and themeChanged fires.
     bool load(const QString& name);
     // Reloads the current theme from its source.
     bool reload();

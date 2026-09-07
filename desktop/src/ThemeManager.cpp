@@ -2,14 +2,24 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QStandardPaths>
 #include <QTimer>
+
+// The resource file is compiled into a static library, so the linker only
+// keeps its initializer when something references it explicitly. The
+// declaration Q_INIT_RESOURCE expands to must sit at global scope.
+static void initThemeResources()
+{
+    Q_INIT_RESOURCE(themes);
+}
 
 namespace nylon {
 
 ThemeManager::ThemeManager(QObject* parent)
     : QObject(parent)
 {
+    initThemeResources();
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, &ThemeManager::onFileChanged);
 }
 
@@ -77,6 +87,11 @@ bool ThemeManager::loadFrom(const QString& name, const QString& path, bool fromU
     m_fromUser = fromUser;
     m_errors.clear();
     watch(fromUser ? path : QString());
+    // Install the font before listeners build widgets so nothing is laid
+    // out with the platform placeholder font.
+    if (qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        QGuiApplication::setFont(m_theme.resolvedFont());
+    }
     emit themeChanged(m_theme);
     return true;
 }

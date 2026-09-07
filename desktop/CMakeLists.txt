@@ -21,6 +21,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         "-ffile-prefix-map=${NYLON_REPO_ROOT}=."
         "-fdebug-prefix-map=${NYLON_REPO_ROOT}=."
         "-fmacro-prefix-map=${NYLON_REPO_ROOT}=.")
+elseif(MSVC)
+    add_compile_options("/pathmap:${NYLON_REPO_ROOT}=.")
 endif()
 
 # Location of the Rust core static library. The default is the release
@@ -33,7 +35,7 @@ endif()
 set(NYLON_CORE_LIBRARY "${_nylon_core_default}" CACHE FILEPATH
     "Path to the Rust core static library (libnylon.a or nylon.lib)")
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Test)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test)
 
 add_library(nylon_core STATIC IMPORTED)
 set_target_properties(nylon_core PROPERTIES IMPORTED_LOCATION "${NYLON_CORE_LIBRARY}")
@@ -52,6 +54,7 @@ endif()
 # Everything except main.cpp lives in a static library so the tests link the
 # same objects as the application.
 add_library(nylon_desktop STATIC
+    src/LayoutMath.h
     src/Theme.cpp
     src/Theme.h
     src/ThemeManager.cpp
@@ -88,7 +91,7 @@ set_target_properties(nylon PROPERTIES
     MACOSX_BUNDLE_COPYRIGHT "Copyright (c) Nylon Contributors")
 
 enable_testing()
-foreach(_test theme bridge views)
+foreach(_test layout theme bridge views)
     add_executable(test_${_test} tests/test_${_test}.cpp)
     target_link_libraries(test_${_test} PRIVATE nylon_desktop Qt6::Test)
     add_test(NAME ${_test} COMMAND test_${_test})

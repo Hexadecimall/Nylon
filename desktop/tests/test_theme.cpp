@@ -1,6 +1,8 @@
 #include "Theme.h"
 #include "ThemeManager.h"
 
+#include <QFontDatabase>
+#include <QGuiApplication>
 #include <QtTest>
 
 using nylon::Theme;
@@ -12,12 +14,15 @@ private slots:
     void parsesColorsMetricsAndFonts();
     void parsesEightDigitColorsAsRgba();
     void reportsErrorsWithLineNumbersAndKeepsGoing();
+    void rejectsMalformedColors();
+    void rejectsNonFiniteAndOutOfRangeMetrics();
     void reportsDuplicates();
     void missingKeysListsRequiredTokens();
     void trackColorsCycle();
     void builtinThemesAreComplete();
     void builtinThemesShareTheSameKeySet();
     void styleSheetUsesTokens();
+    void resolvedFontFollowsTokens();
     void managerLoadsBuiltinAndRejectsUnknown();
     void managerKeepsCurrentThemeOnFailure();
 };
@@ -79,6 +84,65 @@ void TestTheme::reportsErrorsWithLineNumbersAndKeepsGoing()
     QVERIFY(t.hasColor(QStringLiteral("f")));
     QVERIFY(!t.hasColor(QStringLiteral("b")));
     QVERIFY(!t.hasMetric(QStringLiteral("c")));
+}
+
+void TestTheme::rejectsMalformedColors()
+{
+    const QStringList bad{
+        QStringLiteral("#+12345"),
+        QStringLiteral("#-12345"),
+        QStringLiteral("# 12345"),
+        QStringLiteral("#12345 "),
+        QStringLiteral("#12345G"),
+        QStringLiteral("#1234567"),
+        QStringLiteral("#12345"),
+        QStringLiteral("#1234567890"),
+        QStringLiteral("112233"),
+        QStringLiteral("#0x1122"),
+        QStringLiteral("#11 22 33"),
+        QStringLiteral("rgb(1,2,3)"),
+        QStringLiteral("red"),
+    };
+    for (const QString& value : bad) {
+        QStringList errors;
+        const Theme t = Theme::parse(QStringLiteral("color.x = %1\n").arg(value), &errors);
+        QVERIFY2(!t.hasColor(QStringLiteral("x")), qPrintable(value));
+        QCOMPARE(errors.size(), 1);
+        QVERIFY(errors.first().contains(QStringLiteral("invalid color")));
+    }
+    const Theme ok = Theme::parse(QStringLiteral("color.a = #aAbBcC\ncolor.b = #00000000\n"));
+    QCOMPARE(ok.color(QStringLiteral("a")), QColor(0xAA, 0xBB, 0xCC));
+    QCOMPARE(ok.color(QStringLiteral("b")).alpha(), 0);
+}
+
+void TestTheme::rejectsNonFiniteAndOutOfRangeMetrics()
+{
+    const QStringList bad{
+        QStringLiteral("nan"),
+        QStringLiteral("NaN"),
+        QStringLiteral("inf"),
+        QStringLiteral("-inf"),
+        QStringLiteral("1e400"),
+        QStringLiteral("-1"),
+        QStringLiteral("-0.5"),
+        QStringLiteral("100001"),
+        QStringLiteral("1e12"),
+        QStringLiteral("2147483648"),
+        QStringLiteral("12px"),
+        QStringLiteral("0x10"),
+    };
+    for (const QString& value : bad) {
+        QStringList errors;
+        const Theme t = Theme::parse(QStringLiteral("metric.x = %1\n").arg(value), &errors);
+        QVERIFY2(!t.hasMetric(QStringLiteral("x")), qPrintable(value));
+        QCOMPARE(errors.size(), 1);
+        QCOMPARE(t.metricInt(QStringLiteral("x"), 3), 3);
+    }
+    const Theme ok = Theme::parse(QStringLiteral("metric.a = 0\nmetric.b = 100000\nmetric.c = 1.5\n"));
+    QCOMPARE(ok.metricInt(QStringLiteral("a")), 0);
+    QCOMPARE(ok.metricInt(QStringLiteral("b")), 100000);
+    QCOMPARE(ok.metricInt(QStringLiteral("c")), 2);
+    QCOMPARE(ok.metric(QStringLiteral("c")), 1.5);
 }
 
 void TestTheme::reportsDuplicates()
@@ -158,6 +222,46 @@ void TestTheme::styleSheetUsesTokens()
     QVERIFY(css.contains(t.color(QStringLiteral("accent")).name(QColor::HexArgb)));
     QVERIFY(css.contains(QStringLiteral("border-radius: 0")));
     QVERIFY(!css.contains(QLatin1Char('%')));
+
+    // Metrics that reach the style sheet are clamped to renderable sizes.
+    const Theme extreme = Theme::parse(QStringLiteral(
+        "metric.separator = 100000\nmetric.control.padding = 100000\nmetric.control.height = 100000\n"));
+    const QString big = extreme.styleSheet();
+    QVERIFY(!big.contains(QStringLiteral("100000")));
+    QVERIFY(big.contains(QStringLiteral("border: 16px")));
+    QVERIFY(big.contains(QStringLiteral("max-height: 256px")));
+    const Theme tiny = Theme::parse(QStringLiteral("metric.control.height = 0\n"));
+    QVERIFY(tiny.styleSheet().contains(QStringLiteral("min-height: 8px")));
+}
+
+void TestTheme::resolvedFontFollowsTokens()
+{
+    const Theme system = Theme::parse(QStringLiteral("font.family = system\nmetric.font.size = 13\n"));
+    const QFont f = system.resolvedFont();
+    QCOMPARE(f.pixelSize(), 13);
+    QVERIFY(f.family() != QLatin1String("system"));
+    // Whatever was chosen must be installed, so the matcher never falls
+    // back through alias resolution.
+    QVERIFY2(QFontDatabase::hasFamily(f.family()), qPrintable(f.family()));
+    const QString sys = QFontDatabase::systemFont(QFontDatabase::GeneralFont).family();
+    if (QFontDatabase::hasFamily(sys)) {
+        QCOMPARE(f.family(), sys);
+    }
+
+    const QStringList installed = QFontDatabase::families();
+    QVERIFY(!installed.isEmpty());
+    const Theme named = Theme::parse(
+        QStringLiteral("font.family = %1\nmetric.font.size = 9\n").arg(installed.last()));
+    QCOMPARE(named.resolvedFont().family(), installed.last());
+    QCOMPARE(named.resolvedFont().pixelSize(), 9);
+
+    const Theme missing = Theme::parse(QStringLiteral("font.family = No Such Family 0xDEAD\n"));
+    QVERIFY(QFontDatabase::hasFamily(missing.resolvedFontFamily()));
+    QVERIFY(missing.resolvedFontFamily() != QLatin1String("No Such Family 0xDEAD"));
+
+    // No tokens at all still yields a usable font.
+    const QFont fallback = Theme::parse(QString()).resolvedFont();
+    QVERIFY(fallback.pixelSize() > 0);
 }
 
 void TestTheme::managerLoadsBuiltinAndRejectsUnknown()
@@ -167,6 +271,8 @@ void TestTheme::managerLoadsBuiltinAndRejectsUnknown()
     QSignalSpy failed(&m, &ThemeManager::loadFailed);
     QVERIFY(m.load(QStringLiteral("Slate")));
     QCOMPARE(m.currentName(), QStringLiteral("slate"));
+    QCOMPARE(QGuiApplication::font().pixelSize(), m.theme().metricInt(QStringLiteral("font.size")));
+    QCOMPARE(QGuiApplication::font().family(), m.theme().resolvedFontFamily());
     QCOMPARE(m.theme().name(), QStringLiteral("Slate"));
     QCOMPARE(changed.count(), 1);
     QVERIFY(!m.load(QStringLiteral("does-not-exist")));

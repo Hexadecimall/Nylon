@@ -1,21 +1,57 @@
 #include "Theme.h"
 
 #include <QFile>
+#include <QFontDatabase>
 #include <QTextStream>
+
+#include <cmath>
 
 namespace nylon {
 
 namespace {
 
-bool hexByte(const QString& s, int at, int* out)
+int hexDigit(QChar c)
 {
-    bool ok = false;
-    const int v = s.mid(at, 2).toInt(&ok, 16);
-    if (ok) {
-        *out = v;
+    const ushort u = c.unicode();
+    if (u >= '0' && u <= '9') {
+        return u - '0';
     }
-    return ok;
+    if (u >= 'a' && u <= 'f') {
+        return 10 + (u - 'a');
+    }
+    if (u >= 'A' && u <= 'F') {
+        return 10 + (u - 'A');
+    }
+    return -1;
 }
+
+// Reads exactly two hex digits. Rejects signs, whitespace, and anything
+// else QString::toInt would tolerate.
+bool hexByte(const QString& s, qsizetype at, int* out)
+{
+    const int hi = hexDigit(s.at(at));
+    const int lo = hexDigit(s.at(at + 1));
+    if (hi < 0 || lo < 0) {
+        return false;
+    }
+    *out = hi * 16 + lo;
+    return true;
+}
+
+// Largest metric accepted, in pixels or counts. Keeps layout arithmetic
+// far from int overflow even after multiplication by track counts.
+constexpr double kMaxMetric = 100000.0;
+
+bool validMetric(double v)
+{
+    return std::isfinite(v) && v >= 0.0 && v <= kMaxMetric;
+}
+
+// Bounds applied to metrics that reach the Qt style sheet.
+constexpr int kMaxStyleBorder = 16;
+constexpr int kMaxStylePadding = 64;
+constexpr int kMinStyleControlHeight = 8;
+constexpr int kMaxStyleControlHeight = 256;
 
 } // namespace
 
@@ -26,7 +62,7 @@ bool Theme::parseColor(const QString& text, QColor* out)
     if (!text.startsWith(QLatin1Char('#'))) {
         return false;
     }
-    const int len = text.size();
+    const qsizetype len = text.size();
     if (len != 7 && len != 9) {
         return false;
     }
@@ -51,13 +87,13 @@ Theme Theme::parse(const QString& text, QStringList* errors)
     };
 
     const QStringList lines = text.split(QLatin1Char('\n'));
-    for (int i = 0; i < lines.size(); ++i) {
-        const int lineNo = i + 1;
+    for (qsizetype i = 0; i < lines.size(); ++i) {
+        const int lineNo = static_cast<int>(i) + 1;
         const QString line = lines.at(i).trimmed();
         if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) {
             continue;
         }
-        const int eq = line.indexOf(QLatin1Char('='));
+        const qsizetype eq = line.indexOf(QLatin1Char('='));
         if (eq < 0) {
             report(lineNo, QStringLiteral("expected 'key = value'"));
             continue;
@@ -99,6 +135,9 @@ Theme Theme::parse(const QString& text, QStringList* errors)
                 report(lineNo, QStringLiteral("empty metric key"));
             } else if (!ok) {
                 report(lineNo, QStringLiteral("invalid number '%1' for '%2'").arg(value, key));
+            } else if (!validMetric(number)) {
+                report(lineNo, QStringLiteral("metric '%1' must be finite and within 0 to %2")
+                    .arg(key).arg(kMaxMetric, 0, 'f', 0));
             } else {
                 if (theme.m_metrics.contains(sub)) {
                     report(lineNo, QStringLiteral("duplicate '%1'").arg(key));
@@ -193,6 +232,13 @@ const QStringList& Theme::requiredMetrics()
         QStringLiteral("arrangement.pixels_per_bar"),
         QStringLiteral("arrangement.bars"),
         QStringLiteral("font.size"),
+        QStringLiteral("text.inset"),
+        QStringLiteral("transport.spacing"),
+        QStringLiteral("transport.tempo.width"),
+        QStringLiteral("session.header.band"),
+        QStringLiteral("session.stop.size"),
+        QStringLiteral("session.stop.inset"),
+        QStringLiteral("arrangement.header.band"),
     };
     return keys;
 }
@@ -226,6 +272,39 @@ QColor Theme::trackColor(int index) const
     return m_colors.value(QStringLiteral("track.%1").arg((index % n) + 1));
 }
 
+QString Theme::resolvedFontFamily() const
+{
+    const QString requested = m_fonts.value(QStringLiteral("family"), QStringLiteral("system"));
+    QString family = requested == QLatin1String("system")
+        ? QFontDatabase::systemFont(QFontDatabase::GeneralFont).family()
+        : requested;
+    if (QFontDatabase::hasFamily(family)) {
+        return family;
+    }
+    // The family is not installed (a theme naming an absent font, or a
+    // platform plugin whose default is a placeholder name). Pick an installed
+    // family directly rather than letting the font matcher hunt for aliases.
+    static const char* const preferred[] = {
+        "Helvetica Neue", "Helvetica", "Segoe UI", "Noto Sans", "DejaVu Sans",
+        "Liberation Sans", "Arial", "Cantarell", "Ubuntu",
+    };
+    for (const char* candidate : preferred) {
+        const QString name = QString::fromLatin1(candidate);
+        if (QFontDatabase::hasFamily(name)) {
+            return name;
+        }
+    }
+    const QStringList all = QFontDatabase::families();
+    return all.isEmpty() ? family : all.first();
+}
+
+QFont Theme::resolvedFont() const
+{
+    QFont font(resolvedFontFamily());
+    font.setPixelSize(qMax(1, metricInt(QStringLiteral("font.size"), 11)));
+    return font;
+}
+
 QStringList Theme::missingKeys() const
 {
     QStringList missing;
@@ -245,17 +324,13 @@ QStringList Theme::missingKeys() const
 QString Theme::styleSheet() const
 {
     const auto c = [this](const char* key) { return color(QLatin1String(key)).name(QColor::HexArgb); };
-    const int sep = metricInt(QStringLiteral("separator"), 1);
-    const int pad = metricInt(QStringLiteral("control.padding"), 4);
-    const int ctrlH = metricInt(QStringLiteral("control.height"), 20);
-    const int fontPx = metricInt(QStringLiteral("font.size"), 11);
-    const QString family = m_fonts.value(QStringLiteral("family"), QStringLiteral("system"));
-    const QString fontFamily = family == QLatin1String("system")
-        ? QString()
-        : QStringLiteral("font-family: \"%1\";").arg(family);
-
+    // Widget borders, padding, and heights are clamped to ranges a style
+    // sheet can render; the views use the unclamped values with 64-bit
+    // arithmetic instead.
+    const int sep = qBound(0, metricInt(QStringLiteral("separator"), 1), kMaxStyleBorder);
+    const int pad = qBound(0, metricInt(QStringLiteral("control.padding"), 4), kMaxStylePadding);
+    const int ctrlH = qBound(kMinStyleControlHeight, metricInt(QStringLiteral("control.height"), 20), kMaxStyleControlHeight);
     return QStringLiteral(
-        "* { font-size: %FONTPXpx; %FAMILY }"
         "QMainWindow, QDialog, QWidget#central { background: %BG; }"
         "QWidget { color: %TEXT; background: %BG; }"
         "QMenuBar { background: %PANEL; color: %TEXT; border-bottom: %SEPpx solid %SEPC; padding: 0; }"
@@ -290,8 +365,6 @@ QString Theme::styleSheet() const
         "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }"
         "QScrollBar::add-page, QScrollBar::sub-page { background: none; }"
         "QToolTip { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; padding: %PADpx; }")
-        .replace(QLatin1String("%FONTPX"), QString::number(fontPx))
-        .replace(QLatin1String("%FAMILY"), fontFamily)
         .replace(QLatin1String("%BG"), c("background"))
         .replace(QLatin1String("%PANEL"), c("panel"))
         .replace(QLatin1String("%RAISED"), c("raised"))

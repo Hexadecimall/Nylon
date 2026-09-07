@@ -4,7 +4,8 @@
 
 The GUI uses Qt. The native frontend communicates with the Rust control thread
 through a narrow interface. Toolkit selection does not change render-thread
-constraints. A Qt binding and minimum version have not been selected.
+constraints. The frontend is C++17 with Qt Widgets and links directly to the
+Rust static library through a C interface. No Rust Qt binding is required.
 The supported desktop platforms are macOS, Windows, and Linux. Platform-specific
 device backends remain behind the Rust engine boundary.
 

@@ -7,6 +7,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QSpacerItem>
 #include <QToolButton>
 
 namespace nylon {
@@ -45,11 +46,11 @@ TransportBar::TransportBar(ProjectBridge* bridge, QWidget* parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     layout->addWidget(m_tempo);
-    layout->addSpacing(8);
+    layout->addSpacerItem(m_gapA = new QSpacerItem(0, 0));
     layout->addWidget(m_addTrack);
     layout->addWidget(m_undo);
     layout->addWidget(m_redo);
-    layout->addSpacing(8);
+    layout->addSpacerItem(m_gapB = new QSpacerItem(0, 0));
     layout->addWidget(m_trackCount);
     layout->addStretch(1);
     layout->addWidget(m_session);
@@ -90,7 +91,11 @@ void TransportBar::applyTheme(const Theme& theme)
     setFixedHeight(h);
     const int pad = theme.metricInt(QStringLiteral("control.padding"), 4);
     layout()->setContentsMargins(pad, 0, pad, 0);
-    m_tempo->setFixedWidth(theme.metricInt(QStringLiteral("session.slot.width"), 96));
+    const int gap = theme.metricInt(QStringLiteral("transport.spacing"), 8);
+    m_gapA->changeSize(gap, 0);
+    m_gapB->changeSize(gap, 0);
+    layout()->invalidate();
+    m_tempo->setFixedWidth(qMax(40, theme.metricInt(QStringLiteral("transport.tempo.width"), 96)));
 }
 
 void TransportBar::showSessionActive(bool session)

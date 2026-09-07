@@ -6,6 +6,7 @@ class QDoubleSpinBox;
 class QPushButton;
 class QToolButton;
 class QLabel;
+class QSpacerItem;
 
 namespace nylon {
 
@@ -49,6 +50,8 @@ private:
     QToolButton* m_session;
     QToolButton* m_arrangement;
     QLabel* m_trackCount;
+    QSpacerItem* m_gapA = nullptr;
+    QSpacerItem* m_gapB = nullptr;
 };
 
 } // namespace nylon

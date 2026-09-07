@@ -35,13 +35,15 @@ its current state and defers the next publication. Endpoints must be destroyed
 on the control thread after the callback stops.
 
 The render benchmark reports nanoseconds per 256-frame stereo block after warmup.
-A statistically stable regression gate requires a dedicated runner and a stored
-baseline; the current shared-runner job reports measurements only.
+CI compares the previous revision and candidate on the same runner, alternating
+21 measurement pairs. A median increase above 5% fails the check. Dedicated
+performance hardware remains preferable because shared runners introduce noise.
 
 The project model publishes immutable snapshots through grouped commands. Undo
 and redo retain prior snapshots in memory. Track identifiers remain unique even
 after branching from an earlier undo state. Failed command groups publish nothing.
 
-Qt integration, device backends, routing, plugin isolation, and project persistence
+The C++ Qt frontend uses the native project interface for tempo, track creation,
+and undo/redo. Device backends, routing, plugin isolation, and project persistence
 are not implemented yet. These require separate integration checks
 before playback can be described as production-ready.

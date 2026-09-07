@@ -17,6 +17,8 @@ public:
 
     void setTheme(const Theme* theme);
 
+    // Counts as laid out. Both are capped so the content extent stays
+    // within layout::kMaxExtent; the project's own track count is unbounded.
     int columnCount() const;
     int sceneCount() const;
     // Rectangle of a slot in viewport coordinates, or an empty rect when the
@@ -30,6 +32,7 @@ protected:
 
 private:
     void updateScrollRanges();
+    int separator() const;
     int slotWidth() const;
     int slotHeight() const;
     int headerHeight() const;

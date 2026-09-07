@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QFont>
 #include <QHash>
 #include <QString>
 #include <QStringList>
@@ -43,6 +44,13 @@ public:
     double metric(const QString& key, double fallback = 0.0) const;
     int metricInt(const QString& key, int fallback = 0) const;
     QString font(const QString& key) const { return m_fonts.value(key); }
+
+    // Application font: `font.family` resolved through the platform font
+    // database when it is `system`, sized by `metric.font.size`.
+    QFont resolvedFont() const;
+    // Family used by resolvedFont(): the requested family when installed,
+    // otherwise the first installed family from a fixed preference list.
+    QString resolvedFontFamily() const;
 
     // Track color for a zero-based index, cycling through the palette.
     QColor trackColor(int index) const;

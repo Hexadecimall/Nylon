@@ -24,10 +24,17 @@ jobs:
       - run: python3 -B scripts/bootstrap.py
       - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
       - run: cargo fmt --check
+      - run: rustfmt --edition 2024 --check scripts/pathmap.rs
       - run: cargo build --locked --all-targets
       - run: cargo test --locked
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo bench --locked --bench render
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || github.event.repository.default_branch }}
+          path: target/perf-base
+          persist-credentials: false
+      - run: python3 -B scripts/benchmark_compare.py target/perf-base
       - run: cargo install cargo-deny --version 0.20.2 --locked
       - run: cargo deny check
       - run: cargo build --locked --release

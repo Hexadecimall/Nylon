@@ -17,7 +17,10 @@ public:
 
     void setTheme(const Theme* theme);
 
+    // Lanes as laid out, capped so the content extent stays within
+    // layout::kMaxExtent.
     int laneCount() const;
+    int barCount() const;
     // Rectangle of a lane body (excluding the header) in viewport
     // coordinates, or an empty rect when out of range.
     QRect laneRect(int track) const;
@@ -29,11 +32,11 @@ protected:
 
 private:
     void updateScrollRanges();
+    int separator() const;
     int laneHeight() const;
     int rulerHeight() const;
     int headerWidth() const;
     int pixelsPerBar() const;
-    int barCount() const;
 
     ProjectBridge* m_bridge;
     const Theme* m_theme;
