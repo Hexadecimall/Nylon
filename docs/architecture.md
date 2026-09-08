@@ -106,6 +106,11 @@ its start and its end; a note crossing the edge gets its end in a later
 block; a note shorter than a frame still starts before it ends. A full
 event buffer reports what it dropped rather than losing it quietly.
 
+`src/engine/sample` owns decoded stereo media and provides a borrowed player
+for real-time use. It supports linear or cubic interpolation, rate conversion,
+reverse playback, clip gain, seeking, and frame-accurate loops. Playback has
+an allocator test because media storage is prepared before rendering starts.
+
 The engine publishes these together as a score: per instrument track, the
 notes, the patch, and whether the track sounds. Notes sit at absolute
 beats on the timeline, which is how an arrangement reads; session clip

@@ -7,10 +7,9 @@
 //! through a [`Publisher`], and the engine picks it up at a block
 //! boundary. Nothing on this path allocates, locks, or blocks.
 //!
-//! There are no sound sources yet, so the engine mixes silence: every
-//! track contributes nothing and the output is quiet. The transport still
-//! runs, the meters still fall, and automation still lands on the sample
-//! it was written for, so the plumbing is real even though nothing sounds.
+//! MIDI tracks currently drive the built-in polyphonic instrument. Audio
+//! sample playback is provided separately and joins the timeline in the
+//! next graph layer.
 
 use crate::audio::{BlockTiming, Renderer, StreamConfig};
 use crate::engine::schedule::{

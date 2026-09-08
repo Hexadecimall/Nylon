@@ -1,6 +1,7 @@
 //! Fixed-capacity, sample-accurate stereo rendering.
 
 pub mod playback;
+pub mod sample;
 pub mod schedule;
 pub mod voice;
 

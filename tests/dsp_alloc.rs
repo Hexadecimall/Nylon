@@ -300,3 +300,34 @@ fn envelope_and_oscillator_state_changes_do_not_allocate() {
     });
     assert_eq!(operations, 0);
 }
+
+#[test]
+fn sample_playback_does_not_allocate() {
+    use nylon::engine::sample::{Interpolation, Player, Sample};
+
+    let frames = (0..4_096)
+        .map(|index| {
+            let value = (index as f32 * 0.01).sin();
+            [value, -value]
+        })
+        .collect();
+    let sample = Sample::new(48_000, frames).unwrap();
+    let mut player = Player::new(&sample, 44_100);
+    player.set_interpolation(Interpolation::Cubic);
+    assert!(player.set_loop(Some(128..4_000)));
+    player.trigger();
+    let mut output = vec![[0.0; 2]; BLOCK];
+
+    let operations = measure(|| {
+        for _ in 0..32 {
+            output.fill([0.0; 2]);
+            player.render_additive(&mut output);
+        }
+    });
+
+    assert_eq!(
+        operations, 0,
+        "{operations} allocator operations during sample playback"
+    );
+    assert!(output.iter().flatten().all(|sample| sample.is_finite()));
+}
