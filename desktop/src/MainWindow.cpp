@@ -16,7 +16,10 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QInputDialog>
+#include <QStandardPaths>
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
@@ -72,9 +75,8 @@ MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* par
     qApp->installEventFilter(this);
 
     connect(m_start, &StartScreen::newProjectRequested, this, &MainWindow::newProject);
-    connect(m_start, &StartScreen::openProjectRequested, this, [this] {
-        showStatus(tr("Opening projects is not available yet."));
-    });
+    connect(m_start, &StartScreen::openProjectRequested, this, &MainWindow::openProject);
+    connect(m_start, &StartScreen::recentProjectRequested, this, &MainWindow::openProjectAt);
     connect(m_themes, &ThemeManager::themeChanged, this, &MainWindow::applyTheme);
     connect(m_themes, &ThemeManager::loadFailed, this, [this](const QString& name, const QStringList& errors) {
         showStatus(tr("Theme '%1' not loaded: %2").arg(name, errors.join(QStringLiteral("; "))));
@@ -350,8 +352,107 @@ void MainWindow::showStartScreen()
 {
     statusBar()->clearMessage();
     m_start->reloadRecent();
+    rebuildRecentMenu();
     m_root->setCurrentWidget(m_start);
     setWindowTitle(QStringLiteral("Nylon"));
+}
+
+void MainWindow::updateWindowTitle()
+{
+    const QString path = m_bridge->bundlePath();
+    const QString name = path.isEmpty() ? tr("Untitled") : QFileInfo(path).completeBaseName();
+    setWindowTitle(tr("%1 - Nylon").arg(name));
+}
+
+void MainWindow::rebuildRecentMenu()
+{
+    if (!m_recentMenu) {
+        return;
+    }
+    const QList<QAction*> old = m_recentMenu->actions();
+    for (QAction* a : old) {
+        if (a->objectName() != QLatin1String("actionClearRecent") && !a->isSeparator()) {
+            m_recentMenu->removeAction(a);
+            a->deleteLater();
+        }
+    }
+    const QStringList recent = StartScreen::recentProjects();
+    QAction* clear = findChild<QAction*>(QStringLiteral("actionClearRecent"));
+    QAction* before = m_recentMenu->actions().isEmpty() ? nullptr : m_recentMenu->actions().first();
+    for (const QString& path : recent) {
+        auto* a = new QAction(QFileInfo(path).completeBaseName(), m_recentMenu);
+        a->setToolTip(path);
+        a->setStatusTip(path);
+        connect(a, &QAction::triggered, this, [this, path] { openProjectAt(path); });
+        m_recentMenu->insertAction(before, a);
+    }
+    if (!recent.isEmpty() && before) {
+        m_recentMenu->insertSeparator(before);
+    }
+    if (clear) {
+        clear->setEnabled(!recent.isEmpty());
+    }
+}
+
+void MainWindow::openProject()
+{
+    const QString dir = QFileDialog::getExistingDirectory(this, tr("Open Project"),
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
+    if (!dir.isEmpty()) {
+        openProjectAt(dir);
+    }
+}
+
+bool MainWindow::openProjectAt(const QString& bundleDirectory)
+{
+    if (!m_bridge->open(bundleDirectory)) {
+        showStatus(tr("Could not open %1: not a readable project bundle.").arg(QFileInfo(bundleDirectory).fileName()));
+        return false;
+    }
+    StartScreen::addRecentProject(bundleDirectory);
+    rebuildRecentMenu();
+    selectTrack(-1);
+    m_root->setCurrentWidget(m_workspace);
+    updateWindowTitle();
+    showSession();
+    showStatus(tr("Opened %1.").arg(QFileInfo(bundleDirectory).completeBaseName()));
+    return true;
+}
+
+bool MainWindow::saveProject()
+{
+    if (m_bridge->bundlePath().isEmpty()) {
+        saveProjectAs();
+        return !m_bridge->bundlePath().isEmpty();
+    }
+    return saveProjectTo(m_bridge->bundlePath());
+}
+
+void MainWindow::saveProjectAs()
+{
+    QString path = QFileDialog::getSaveFileName(this, tr("Save Project As"),
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + QStringLiteral("/Untitled.nylon"),
+        tr("Nylon project bundle (*.nylon)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    if (!path.endsWith(QLatin1String(".nylon"), Qt::CaseInsensitive)) {
+        path += QStringLiteral(".nylon");
+    }
+    saveProjectTo(path);
+}
+
+bool MainWindow::saveProjectTo(const QString& bundleDirectory)
+{
+    if (!m_bridge->save(bundleDirectory)) {
+        showStatus(tr("Could not save to %1.").arg(bundleDirectory));
+        return false;
+    }
+    StartScreen::addRecentProject(bundleDirectory);
+    rebuildRecentMenu();
+    updateWindowTitle();
+    showStatus(tr("Saved %1.").arg(QFileInfo(bundleDirectory).completeBaseName()));
+    return true;
 }
 
 void MainWindow::newProject()
@@ -362,7 +463,7 @@ void MainWindow::newProject()
     }
     selectTrack(-1);
     m_root->setCurrentWidget(m_workspace);
-    setWindowTitle(tr("Untitled - Nylon"));
+    updateWindowTitle();
     showSession();
 }
 
@@ -446,7 +547,7 @@ void MainWindow::buildMenus()
     QMenuBar* bar = m_titleBar->menuBar();
     QMenu* file = roundMenu(bar->addMenu(tr("&File")));
     add(file, QStringLiteral("actionNew"), tr("&New Project"), QKeySequence::New, [this] { newProject(); });
-    add(file, QStringLiteral("actionOpen"), tr("&Open..."), QKeySequence::Open, nullptr,
+    add(file, QStringLiteral("actionOpen"), tr("&Open..."), QKeySequence::Open, [this] { openProject(); },
         ProjectBridge::isPersistenceAvailable(), noPersist);
     m_recentMenu = roundMenu(file->addMenu(tr("Open &Recent")));
     m_recentMenu->setEnabled(ProjectBridge::isPersistenceAvailable());
@@ -455,12 +556,14 @@ void MainWindow::buildMenus()
     connect(clearRecent, &QAction::triggered, this, [this] {
         StartScreen::clearRecentProjects();
         m_start->reloadRecent();
+        rebuildRecentMenu();
     });
+    rebuildRecentMenu();
     add(file, QStringLiteral("actionClose"), tr("&Close Project"), QKeySequence(Qt::CTRL | Qt::Key_W), [this] { showStartScreen(); });
     file->addSeparator();
-    add(file, QStringLiteral("actionSave"), tr("&Save"), QKeySequence::Save, nullptr,
+    add(file, QStringLiteral("actionSave"), tr("&Save"), QKeySequence::Save, [this] { saveProject(); },
         ProjectBridge::isPersistenceAvailable(), noPersist);
-    add(file, QStringLiteral("actionSaveAs"), tr("Save &As..."), QKeySequence::SaveAs, nullptr,
+    add(file, QStringLiteral("actionSaveAs"), tr("Save &As..."), QKeySequence::SaveAs, [this] { saveProjectAs(); },
         ProjectBridge::isPersistenceAvailable(), noPersist);
     file->addSeparator();
     add(file, QStringLiteral("actionPreferences"), tr("&Preferences..."), QKeySequence(Qt::CTRL | Qt::Key_Comma),

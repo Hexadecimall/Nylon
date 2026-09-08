@@ -53,6 +53,13 @@ public slots:
     void renameSelectedTrack();
     void deleteSelectedTrack();
     void toggleMaximized();
+    // Bundle persistence. The dialog-free variants take a bundle directory
+    // and return false when the core rejected it.
+    void openProject();
+    bool openProjectAt(const QString& bundleDirectory);
+    bool saveProject();
+    void saveProjectAs();
+    bool saveProjectTo(const QString& bundleDirectory);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -71,6 +78,8 @@ private:
     void saveLayout();
     QString trackName(int index) const;
     void updateEditActions();
+    void updateWindowTitle();
+    void rebuildRecentMenu();
 
     ProjectBridge* m_bridge;
     ThemeManager* m_themes;

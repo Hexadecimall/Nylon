@@ -21,6 +21,8 @@
 #include <QStatusBar>
 #include <QDir>
 #include <QLineEdit>
+#include <QMenu>
+#include <QTemporaryDir>
 #include <QListWidget>
 #include <QFile>
 #include <QScrollBar>
@@ -51,6 +53,7 @@ private slots:
     void selectionFlowsBetweenGridMixerAndDetail();
     void browserShowsLibraryCategories();
     void framelessWindowWithTitleBar();
+    void saveOpenAndRecentThroughTheWindow();
 
 private:
     ThemeManager m_themes;
@@ -572,6 +575,67 @@ void TestViews::framelessWindowWithTitleBar()
     // Just inside the outline, above the window controls, the title band shows.
     const int r = m_themes.theme().metricInt(QStringLiteral("radius"));
     QCOMPARE(img.pixelColor(r + 4, 3), m_themes.theme().color(QStringLiteral("titlebar.background")));
+}
+
+void TestViews::saveOpenAndRecentThroughTheWindow()
+{
+    QStandardPaths::setTestModeEnabled(true);
+    StartScreen::clearRecentProjects();
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString bundle = dir.path() + QStringLiteral("/Demo.nylon");
+
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    QVERIFY(w.titleBar()->title().startsWith(QStringLiteral("Untitled")));
+    w.action(QStringLiteral("actionAddTrack"))->trigger();
+    QVERIFY(bridge.setTrackName(0, QStringLiteral("Drums")));
+    QVERIFY(w.saveProjectTo(bundle));
+    QCOMPARE(bridge.bundlePath(), bundle);
+    QCOMPARE(w.titleBar()->title(), QStringLiteral("Demo - Nylon"));
+    QVERIFY(w.statusBar()->currentMessage().startsWith(QStringLiteral("Saved")));
+    QCOMPARE(StartScreen::recentProjects(), QStringList{bundle});
+
+    // Save without a dialog once the bundle path is known.
+    w.action(QStringLiteral("actionAddTrack"))->trigger();
+    QVERIFY(w.saveProject());
+    QCOMPARE(bridge.trackCount(), 2ull);
+
+    // A fresh project, then reopen through the recent list on the start screen.
+    w.newProject();
+    QCOMPARE(bridge.trackCount(), 0ull);
+    w.action(QStringLiteral("actionClose"))->trigger();
+    QVERIFY(w.isStartScreenVisible());
+    QCOMPARE(w.startScreen()->recentList()->count(), 1);
+    QVERIFY(w.startScreen()->recentList()->isEnabled());
+    emit w.startScreen()->recentProjectRequested(bundle);
+    QVERIFY(!w.isStartScreenVisible());
+    QCOMPARE(bridge.trackCount(), 2ull);
+    QCOMPARE(bridge.trackName(0), QStringLiteral("Drums"));
+    QCOMPARE(w.mixer()->stripCount(), 2);
+    QCOMPARE(w.titleBar()->title(), QStringLiteral("Demo - Nylon"));
+
+    // The recent menu lists the bundle ahead of the clear entry.
+    QMenu* recentMenu = w.findChild<QMenu*>();
+    Q_UNUSED(recentMenu);
+    QAction* clear = w.action(QStringLiteral("actionClearRecent"));
+    QVERIFY(clear->isEnabled());
+    QMenu* menu = qobject_cast<QMenu*>(clear->parent());
+    QVERIFY(menu);
+    QCOMPARE(menu->actions().first()->text(), QStringLiteral("Demo"));
+
+    // Opening something that is not a bundle keeps the current project.
+    QVERIFY(!w.openProjectAt(dir.path() + QStringLiteral("/nope.nylon")));
+    QCOMPARE(bridge.trackCount(), 2ull);
+    QVERIFY(w.statusBar()->currentMessage().startsWith(QStringLiteral("Could not open")));
+
+    clear->trigger();
+    QVERIFY(StartScreen::recentProjects().isEmpty());
+    QVERIFY(!clear->isEnabled());
+    QStandardPaths::setTestModeEnabled(false);
 }
 
 QTEST_MAIN(TestViews)
