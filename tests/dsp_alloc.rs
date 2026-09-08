@@ -200,11 +200,13 @@ fn the_playback_engine_renders_without_allocating() {
             },
         );
     }
+    // The transport is started through the settings, since once the
+    // engine is handed to a stream it cannot be reached directly.
+    settings.set_playing(true);
     assert!(publisher.publish(&settings));
     let mut output = vec![[0.0_f32; 2]; BLOCK];
     // One block before counting so the settings are taken up.
     engine.render_block(&mut output, &[]);
-    engine.transport().play();
 
     let operations = measure(|| {
         for index in 0..64 {
