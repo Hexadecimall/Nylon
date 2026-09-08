@@ -156,7 +156,9 @@ void PreferencesDialog::buildShortcutRows()
         m_shortcuts->setItem(row, 0, name);
         auto* edit = new QKeySequenceEdit(a->shortcut(), m_shortcuts);
         edit->setClearButtonEnabled(true);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         edit->setMaximumSequenceLength(1);
+#endif
         m_shortcuts->setCellWidget(row, 1, edit);
         connect(edit, &QKeySequenceEdit::editingFinished, this, [this, row, edit] {
             if (!assignShortcut(row, edit->keySequence())) {

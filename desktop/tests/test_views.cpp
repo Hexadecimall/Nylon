@@ -1,6 +1,7 @@
 #include "ArrangementView.h"
 #include "BrowserPanel.h"
 #include "DetailPanel.h"
+#include "PianoRoll.h"
 #include "MainWindow.h"
 #include "MixerSection.h"
 #include "MixerStrip.h"
@@ -57,6 +58,7 @@ private slots:
     void framelessWindowWithTitleBar();
     void saveOpenAndRecentThroughTheWindow();
     void arrangementGridFollowsTimeSignature();
+    void detailClipPageHostsThePianoRoll();
 
 private:
     ThemeManager m_themes;
@@ -694,6 +696,29 @@ void TestViews::arrangementGridFollowsTimeSignature()
     img = view->viewport()->grab().toImage();
     QCOMPARE(img.pixelColor(x0 + ppb / 3, lane.center().y()), grid);
     QVERIFY(img.pixelColor(x0 + ppb / 4, lane.center().y()) != grid);
+}
+
+void TestViews::detailClipPageHostsThePianoRoll()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    QVERIFY(bridge.addTrack(ProjectBridge::TrackKind::Midi));
+    DetailPanel* detail = w.detail();
+    detail->setSelectedClip(0, 0);
+    QCOMPARE(detail->selectedClipTrack(), 0);
+    QCOMPARE(detail->selectedClipScene(), 0);
+    QCOMPARE(detail->selectedTrack(), 0);
+    QVERIFY(!detail->pianoRoll()->hasClip());
+    QVERIFY(bridge.sceneCount() >= 1 || bridge.createScene(QStringLiteral("Scene 1")));
+    QVERIFY(bridge.createMidiClip(0, 0, 4.0));
+    QVERIFY(detail->pianoRoll()->hasClip());
+    QCOMPARE(detail->pianoRoll()->track(), qint64(0));
+    detail->setSelectedClip(0, -1);
+    QVERIFY(!detail->pianoRoll()->hasClip());
+    QCOMPARE(detail->selectedTrack(), 0);
 }
 
 QTEST_MAIN(TestViews)

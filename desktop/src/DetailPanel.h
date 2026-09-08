@@ -8,6 +8,7 @@ class QStackedWidget;
 namespace nylon {
 
 class FlatButton;
+class PianoRoll;
 class ProjectBridge;
 class Theme;
 
@@ -22,6 +23,12 @@ public:
     void setTheme(const Theme* theme);
     void setSelectedTrack(int index, const QString& name);
     int selectedTrack() const { return m_track; }
+    // Shows the clip in `track`/`scene` on the Clip page; negative indices
+    // clear the clip selection. The track selection follows `track`.
+    void setSelectedClip(int track, int scene);
+    int selectedClipTrack() const { return m_clipTrack; }
+    int selectedClipScene() const { return m_clipScene; }
+    PianoRoll* pianoRoll() const { return m_pianoRoll; }
     Page page() const { return m_page; }
     QString headerText() const;
 
@@ -49,7 +56,12 @@ private:
     FlatButton* m_deviceTab;
     QStackedWidget* m_stack;
     QLabel* m_clipEmpty;
+    QWidget* m_clipPage;
+    QLabel* m_clipTitle;
+    PianoRoll* m_pianoRoll;
     QLabel* m_deviceEmpty;
+    int m_clipTrack = -1;
+    int m_clipScene = -1;
     Page m_page = Page::Device;
     int m_track = -1;
     QString m_trackName;

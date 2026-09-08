@@ -6,6 +6,7 @@
 
 #include <QPaintEvent>
 #include <QPainter>
+#include "PianoRoll.h"
 #include "widgets/FlatButton.h"
 
 #include <QHBoxLayout>
@@ -31,6 +32,9 @@ DetailPanel::DetailPanel(ProjectBridge* bridge, const Theme* theme, QWidget* par
     , m_deviceTab(new FlatButton(theme, this))
     , m_stack(new QStackedWidget(this))
     , m_clipEmpty(new QLabel(this))
+    , m_clipPage(new QWidget(this))
+    , m_clipTitle(new QLabel(this))
+    , m_pianoRoll(new PianoRoll(bridge, theme, this))
     , m_deviceEmpty(new QLabel(this))
 {
     setObjectName(QStringLiteral("detail"));
@@ -54,7 +58,16 @@ DetailPanel::DetailPanel(ProjectBridge* bridge, const Theme* theme, QWidget* par
     m_deviceEmpty->setObjectName(QStringLiteral("secondary"));
     m_deviceEmpty->setAlignment(Qt::AlignCenter);
     m_deviceEmpty->setWordWrap(true);
-    m_stack->addWidget(m_clipEmpty);
+    // Clip page: title row over the piano roll, or the empty label.
+    m_clipTitle->setObjectName(QStringLiteral("secondary"));
+    auto* clipLayout = new QVBoxLayout(m_clipPage);
+    clipLayout->setContentsMargins(0, 0, 0, 0);
+    clipLayout->setSpacing(4);
+    clipLayout->addWidget(m_clipTitle);
+    clipLayout->addWidget(m_pianoRoll, 1);
+    clipLayout->addWidget(m_clipEmpty, 1);
+    connect(m_pianoRoll, &PianoRoll::message, this, [this](const QString& text) { m_clipTitle->setText(text); });
+    m_stack->addWidget(m_clipPage);
     m_stack->addWidget(m_deviceEmpty);
 
     auto* header = new QHBoxLayout;
@@ -96,6 +109,7 @@ void DetailPanel::setTheme(const Theme* theme)
     m_theme = theme;
     m_clipTab->setTheme(theme);
     m_deviceTab->setTheme(theme);
+    m_pianoRoll->setTheme(theme);
     const int pad = m_theme->metricInt(QStringLiteral("panel.padding"), 8);
     layout()->setContentsMargins(pad, pad, pad, pad);
     refresh();
@@ -111,6 +125,18 @@ void DetailPanel::setSelectedTrack(int index, const QString& name)
 QString DetailPanel::headerText() const
 {
     return m_title->text();
+}
+
+void DetailPanel::setSelectedClip(int track, int scene)
+{
+    m_clipTrack = track;
+    m_clipScene = scene;
+    if (track >= 0 && track != m_track) {
+        m_track = track;
+        m_trackName = m_bridge->trackName(static_cast<quint64>(track));
+    }
+    m_pianoRoll->setClip(track, scene);
+    refresh();
 }
 
 void DetailPanel::showPage(Page page)
@@ -148,6 +174,18 @@ void DetailPanel::refresh()
     m_color->setText(tr("Palette %1").arg(m_bridge->trackColorIndex(track) + 1));
     m_clipEmpty->setText(tr("%1 has no clip in the selected slot.").arg(m_trackName));
     m_deviceEmpty->setText(tr("%1 has no devices.\nDrop an instrument or effect here from the browser.").arg(m_trackName));
+    const bool hasClip = m_clipTrack >= 0 && m_clipScene >= 0
+        && m_bridge->clipSlotOccupied(static_cast<quint64>(m_clipTrack), static_cast<quint64>(m_clipScene));
+    m_pianoRoll->setVisible(hasClip);
+    m_clipEmpty->setVisible(!hasClip);
+    if (hasClip) {
+        const QString name = m_bridge->clipName(static_cast<quint64>(m_clipTrack), static_cast<quint64>(m_clipScene));
+        const quint64 notes = m_bridge->clipNoteCount(static_cast<quint64>(m_clipTrack), static_cast<quint64>(m_clipScene));
+        m_clipTitle->setText(tr("%1 on %2, scene %3, %n note(s)", nullptr, static_cast<int>(notes))
+                                 .arg(name, m_trackName).arg(m_clipScene + 1));
+    } else {
+        m_clipTitle->clear();
+    }
 }
 
 void DetailPanel::paintEvent(QPaintEvent*)
