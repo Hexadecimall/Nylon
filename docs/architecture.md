@@ -147,9 +147,10 @@ Tests that need a real device are marked ignored and run deliberately.
 
 ## Benchmarks
 
-The render benchmark reports nanoseconds per 256-frame stereo block after warmup,
-and the mixer benchmark reports the same figure for a 32-track block with
-automation, alongside its share of the block's real-time budget.
+The render benchmark reports nanoseconds per 256-frame stereo block after warmup.
+The mixer benchmark measures a 32-track block with automation. The audio timeline
+benchmark measures the complete callback for 32 tracks and 64 looping regions.
+Both arrangement benchmarks report their share of the block's real-time budget.
 CI compares the previous revision and candidate on the same runner, alternating
 21 measurement pairs. A run fails only when the median rises more than 5% and the
 two samples separate, because at a few tens of nanoseconds a block, 5% is inside

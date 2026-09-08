@@ -24,6 +24,10 @@ harness = false
 name = "mixer"
 harness = false
 
+[[bench]]
+name = "audio_timeline"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
