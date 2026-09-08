@@ -64,6 +64,8 @@ add_library(nylon_desktop STATIC
     src/TitleBar.h
     src/PreferencesDialog.cpp
     src/PreferencesDialog.h
+    src/PianoRoll.cpp
+    src/PianoRoll.h
     src/CommandPalette.cpp
     src/CommandPalette.h
     src/Shortcuts.cpp
@@ -268,7 +270,7 @@ else()
 endif()
 
 enable_testing()
-foreach(_test layout theme bridge widgets views control commands)
+foreach(_test layout theme bridge widgets views control commands pianoroll)
     add_executable(test_${_test} tests/test_${_test}.cpp)
     target_link_libraries(test_${_test} PRIVATE nylon_desktop Qt6::Test)
     add_test(NAME ${_test} COMMAND test_${_test})
