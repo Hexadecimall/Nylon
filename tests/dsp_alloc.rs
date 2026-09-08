@@ -226,6 +226,44 @@ fn the_playback_engine_renders_without_allocating() {
 }
 
 #[test]
+fn a_voice_bank_sounds_notes_without_allocating() {
+    use nylon::engine::voice::{MAX_VOICES, Patch, VoiceBank};
+
+    let mut bank = VoiceBank::new(Patch::default(), RATE);
+    let mut output = vec![[0.0_f32; 2]; BLOCK];
+    // One pass before counting so anything lazy is already done.
+    bank.note_on(60, 100);
+    bank.render(&mut output, 0.0);
+
+    let operations = measure(|| {
+        for round in 0..16 {
+            // More notes than voices, so voice stealing runs too.
+            for offset in 0..MAX_VOICES as u8 + 8 {
+                bank.note_on(40 + offset, 90);
+            }
+            bank.render(&mut output, if round % 2 == 0 { -0.5 } else { 0.5 });
+            for offset in 0..MAX_VOICES as u8 + 8 {
+                bank.note_off(40 + offset);
+            }
+            bank.render_additive(&mut output, 0.0);
+            bank.set_patch(Patch {
+                cutoff: 1_000.0 + round as f32 * 100.0,
+                ..Patch::default()
+            });
+            bank.set_polyphony(8 + round);
+        }
+        bank.all_notes_off();
+        bank.reset();
+    });
+
+    assert_eq!(
+        operations, 0,
+        "{operations} allocator operations while voices sounded"
+    );
+    assert!(output.iter().all(|frame| frame[0].is_finite()));
+}
+
+#[test]
 fn envelope_and_oscillator_state_changes_do_not_allocate() {
     let mut oscillator = Oscillator::new(Shape::Sine, 440.0, RATE);
     let mut envelope = Envelope::new(Settings::default(), RATE);
