@@ -142,7 +142,10 @@ jobs:
           cd "${{ runner.temp }}"
           "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon.exe" --tracks 2 --screenshot "${{ runner.temp }}/installed.png"
         env:
+          # The portable layout ships only the windows platform plugin; the
+          # headless smoke test borrows offscreen from the Qt kit.
           QT_QPA_PLATFORM: offscreen
+          QT_PLUGIN_PATH: ${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/plugins
       - uses: actions/upload-artifact@v4
         with:
           name: nylon-windows-${{ matrix.arch }}
