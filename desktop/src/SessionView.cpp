@@ -317,7 +317,7 @@ void SessionView::paintEvent(QPaintEvent* event)
         p.fillRect(header, panel);
         p.setPen(secondary);
         p.drawText(header.adjusted(textInset, band, -textInset, 0), Qt::AlignLeft | Qt::AlignVCenter, tr("Master"));
-        const int labelInset = stopInset + stopSize + textInset;
+        const int labelInset = stopInset + qMax(5, sh / 2 - 1) + textInset + 2;
         for (qint64 s = firstScene; s <= lastScene; ++s) {
             const int y = static_cast<int>(gridTop + s * (sh + sep) - scrollY);
             const QRect slot(mx, y, mw, sh);
