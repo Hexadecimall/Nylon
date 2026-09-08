@@ -316,8 +316,8 @@ void ArrangementView::paintEvent(QPaintEvent* event)
                 p.fontMetrics().elidedText(m_bridge->trackName(static_cast<quint64>(t)), Qt::ElideRight,
                     title.width() - 2 * textInset));
             p.setPen(secondary);
-            p.drawText(QRect(hw - 42, y + 5, 34, title.height()), Qt::AlignRight | Qt::AlignVCenter,
-                QString::number(t + 1));
+            p.drawText(QRect(hw - 68, y + 5, 60, title.height()), Qt::AlignRight | Qt::AlignVCenter,
+                ProjectBridge::kindName(m_bridge->trackKind(static_cast<quint64>(t))).toUpper());
             const bool states[] = {m_bridge->trackMuted(static_cast<quint64>(t)),
                 m_bridge->trackSolo(static_cast<quint64>(t)), m_bridge->trackArmed(static_cast<quint64>(t))};
             const QString labels[] = {tr("M"), tr("S"), tr("R")};

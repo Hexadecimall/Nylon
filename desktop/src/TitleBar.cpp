@@ -125,8 +125,14 @@ void TitleBar::paintEvent(QPaintEvent*)
             } else if (i == 1) {
                 p.drawLine(c0 + QPointF(-s, 0), c0 + QPointF(s, 0));
             } else {
-                p.drawLine(c0 + QPointF(-s, 0), c0 + QPointF(s, 0));
-                p.drawLine(c0 + QPointF(0, -s), c0 + QPointF(0, s));
+                const double tip = s * 1.15;
+                const double wing = s * 0.35;
+                p.drawLine(c0 + QPointF(-wing, -wing), c0 + QPointF(-tip, -tip));
+                p.drawLine(c0 + QPointF(-tip, -tip), c0 + QPointF(-tip, -wing));
+                p.drawLine(c0 + QPointF(-tip, -tip), c0 + QPointF(-wing, -tip));
+                p.drawLine(c0 + QPointF(wing, wing), c0 + QPointF(tip, tip));
+                p.drawLine(c0 + QPointF(tip, tip), c0 + QPointF(tip, wing));
+                p.drawLine(c0 + QPointF(tip, tip), c0 + QPointF(wing, tip));
             }
             p.setPen(Qt::NoPen);
         }
