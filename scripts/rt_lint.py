@@ -30,10 +30,38 @@ def sources():
     yield pathlib.Path("src/engine/schedule.rs")
 
 
+OPEN = "// off the audio thread"
+CLOSE = "// back on the audio thread"
+
+
 def strip_tests(source):
     """Drops the test module, which may allocate freely."""
     marker = source.find("#[cfg(test)]")
     return source if marker < 0 else source[:marker]
+
+
+def strip_control(path, source):
+    """Blanks the regions a file marks as control-thread only.
+
+    Setup, publication and the type declarations behind them run before
+    or beside playback, never inside the callback, so they are allowed to
+    allocate. Each region is blanked rather than removed so that a hit
+    still reports the line it is on.
+    """
+    kept = []
+    depth = 0
+    for number, line in enumerate(source.splitlines(), 1):
+        stripped = line.strip()
+        if stripped == OPEN:
+            depth += 1
+        elif stripped == CLOSE:
+            if depth == 0:
+                raise SystemExit(f"{path}:{number}: region closed but never opened")
+            depth -= 1
+        kept.append("" if depth else line)
+    if depth:
+        raise SystemExit(f"{path}: a control-thread region was never closed")
+    return "\n".join(kept)
 
 
 def main():
@@ -41,7 +69,7 @@ def main():
     for path in sources():
         if not path.exists():
             continue
-        hits = hazards(strip_tests(path.read_text()))
+        hits = hazards(strip_control(path, strip_tests(path.read_text())))
         for number in hits:
             print(f"{path}:{number}: callback hazard")
             failed = True

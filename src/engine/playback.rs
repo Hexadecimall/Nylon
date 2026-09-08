@@ -359,9 +359,10 @@ impl Default for PlaybackState {
 }
 
 /// Control-thread end of the link to a running engine.
+// off the audio thread
 pub struct Publisher {
     settings: ControlSlot<MixSettings>,
-    score: ControlSlot<Score>,
+    score: ControlSlot<Box<Score>>,
     state: Reader<PlaybackState>,
 }
 
@@ -386,8 +387,12 @@ impl Publisher {
     #[must_use]
     pub fn publish_score(&mut self, score: &Score) -> bool {
         while self.score.reclaim().is_some() {}
-        self.score.publish(*score).is_ok()
+        // The score is boxed here, on the control thread, so that what
+        // crosses to the audio thread is a pointer rather than a copy of
+        // every note. The engine hands the old box back for release here.
+        self.score.publish(Box::new(*score)).is_ok()
     }
+    // back on the audio thread
 
     /// Reads whatever the engine last reported. Repeats the previous
     /// reading when no new one has arrived.
@@ -396,20 +401,41 @@ impl Publisher {
     }
 }
 
+// off the audio thread
+/// Builds the per-track buffers directly on the heap.
+///
+/// A vector grows into an allocation of its own, so the whole block of
+/// silence never passes through the stack the way `Box::new` of a large
+/// array would in a build without optimisation.
+fn zeroed_track_audio() -> Box<[[[f32; 2]; MAX_FRAMES]; MAX_INSTRUMENTS]> {
+    let buffers: Vec<[[f32; 2]; MAX_FRAMES]> = vec![[[0.0; 2]; MAX_FRAMES]; MAX_INSTRUMENTS];
+    // The vector was built with exactly this many elements, so the
+    // conversion cannot fail.
+    buffers
+        .into_boxed_slice()
+        .try_into()
+        .unwrap_or_else(|_| unreachable!())
+}
+
 /// The renderer that mixes a project.
 pub struct PlaybackEngine {
     mixer: Mixer,
     transport: Transport,
     settings: AudioSlot<MixSettings>,
-    score: AudioSlot<Score>,
+    score: AudioSlot<Box<Score>>,
     state: Writer<PlaybackState>,
     // Settings currently in force, kept so they can be read back.
     applied: MixSettings,
-    applied_score: Score,
-    instruments: [VoiceBank; MAX_INSTRUMENTS],
+    // The score, the voice banks and the per-track buffers are the bulk of
+    // an engine, and they sit behind boxes so that moving an engine moves a
+    // handful of pointers rather than several hundred kilobytes. A build
+    // without optimisation copies a returned value through the stack, and a
+    // thread with a small stack cannot afford that.
+    applied_score: Box<Score>,
+    instruments: Box<[VoiceBank; MAX_INSTRUMENTS]>,
     // One buffer per instrument track, which the mixer then sums. Owned so
     // the render path borrows it rather than allocating.
-    track_audio: [[[f32; 2]; MAX_FRAMES]; MAX_INSTRUMENTS],
+    track_audio: Box<[[[f32; 2]; MAX_FRAMES]; MAX_INSTRUMENTS]>,
 }
 
 impl PlaybackEngine {
@@ -425,7 +451,7 @@ impl PlaybackEngine {
             48_000.0
         };
         let (settings_control, settings_audio) = exchange(MixSettings::new());
-        let (score_control, score_audio) = exchange(Score::new());
+        let (score_control, score_audio) = exchange(Box::new(Score::new()));
         let (state_writer, state_reader) = latest(PlaybackState::default());
         let engine = Self {
             mixer: Mixer::new(0, rate as f32),
@@ -434,9 +460,11 @@ impl PlaybackEngine {
             score: score_audio,
             state: state_writer,
             applied: MixSettings::new(),
-            applied_score: Score::new(),
-            instruments: core::array::from_fn(|_| VoiceBank::new(Patch::default(), rate as f32)),
-            track_audio: [[[0.0; 2]; MAX_FRAMES]; MAX_INSTRUMENTS],
+            applied_score: Box::new(Score::new()),
+            instruments: Box::new(core::array::from_fn(|_| {
+                VoiceBank::new(Patch::default(), rate as f32)
+            })),
+            track_audio: zeroed_track_audio(),
         };
         let publisher = Publisher {
             settings: settings_control,
@@ -445,6 +473,7 @@ impl PlaybackEngine {
         };
         (engine, publisher)
     }
+    // back on the audio thread
 
     /// The transport, for a caller driving the engine directly rather than
     /// through a stream.
@@ -471,7 +500,7 @@ impl PlaybackEngine {
         if !self.score.apply_pending() {
             return;
         }
-        self.applied_score = *self.score.current();
+        *self.applied_score = **self.score.current();
         for index in 0..MAX_INSTRUMENTS {
             let Some(track) = self.applied_score.track(index) else {
                 continue;
@@ -514,7 +543,7 @@ impl PlaybackEngine {
             self.transport.locate_beats(beats);
             // Moving the playhead abandons whatever was sounding, so no
             // note hangs on from where playback used to be.
-            for bank in &mut self.instruments {
+            for bank in self.instruments.iter_mut() {
                 bank.reset();
             }
         }
@@ -524,7 +553,7 @@ impl PlaybackEngine {
             } else {
                 self.transport.stop();
                 // Stopping releases notes rather than cutting them dead.
-                for bank in &mut self.instruments {
+                for bank in self.instruments.iter_mut() {
                     bank.all_notes_off();
                 }
             }
@@ -680,6 +709,40 @@ mod tests {
     use crate::mixer::Parameter;
 
     const RATE: f64 = 48_000.0;
+
+    /// The most an engine may take on the stack when it is moved. A test
+    /// thread gets two mebibytes, and a build without optimisation copies a
+    /// returned value through several frames, so an engine that carried its
+    /// buffers inline would exhaust that stack before the test ran.
+    const STACK_BUDGET: usize = 128 * 1024;
+
+    #[test]
+    fn an_engine_is_small_enough_to_move() {
+        let size = core::mem::size_of::<PlaybackEngine>();
+        assert!(
+            size <= STACK_BUDGET,
+            "an engine is {size} bytes, over the {STACK_BUDGET} byte budget"
+        );
+    }
+
+    #[test]
+    fn an_engine_builds_and_renders_on_a_small_stack() {
+        // Half a mebibyte, well under what a test thread is given, so a
+        // regression that puts the buffers back on the stack fails here
+        // rather than aborting the whole run with a stack overflow.
+        let thread = std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
+                assert!(publisher.publish(&playing_settings(2)));
+                let mut output = [[0.0_f32; 2]; 128];
+                engine.render(&mut output, BlockTiming::default());
+                engine.transport().position_beats()
+            })
+            .expect("the thread could not be started");
+        let position = thread.join().expect("the engine overflowed the stack");
+        assert!(position > 0.0, "the transport did not move");
+    }
 
     /// Settings for `count` tracks with the transport already running.
     fn playing_settings(count: usize) -> MixSettings {
