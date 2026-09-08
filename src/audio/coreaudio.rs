@@ -1122,6 +1122,73 @@ mod tests {
         assert!(!state.playing, "the transport was never started");
     }
 
+    /// Plays a short chord through the speakers, at a quiet level.
+    ///
+    /// This is the end-to-end check: notes on a timeline, through the
+    /// instrument, the mixer, and a real device. It makes a sound, so it
+    /// is only run deliberately.
+    #[test]
+    #[ignore = "plays audio through the speakers"]
+    fn a_chord_plays_through_the_speakers() {
+        use crate::engine::playback::{MixSettings, PlaybackEngine, Score, TrackSettings};
+        use crate::engine::schedule::ScheduledNote;
+
+        let backend = CoreAudioBackend::new();
+        let device = backend.default_output().expect("no default output");
+        let (engine, mut publisher) = PlaybackEngine::new(48_000.0);
+
+        let mut settings = MixSettings::new();
+        settings.set_track_count(3);
+        for index in 0..3 {
+            settings.set_track(
+                index,
+                TrackSettings {
+                    // Quiet, so a deliberate test is not startling.
+                    volume_db: -18.0,
+                    ..TrackSettings::default()
+                },
+            );
+        }
+        settings.set_playing(true);
+        settings.set_locate_beats(Some(0.0));
+        assert!(publisher.publish(&settings));
+
+        let mut score = Score::new();
+        // A major triad, each note held for two beats.
+        for (index, pitch) in [60_u8, 64, 67].into_iter().enumerate() {
+            let track = score.track_mut(index).unwrap();
+            track.set_enabled(true);
+            track.set_notes(&[ScheduledNote {
+                start_beats: 0.0,
+                length_beats: 2.0,
+                pitch,
+                velocity: 90,
+            }]);
+        }
+        assert!(publisher.publish_score(&score));
+
+        let config = StreamConfig {
+            device,
+            sample_rate: 48_000,
+            block_frames: 256,
+            channels: 2,
+        };
+        let mut stream = backend.open_output(config, engine).expect("device refused");
+        stream.start().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1_500));
+        stream.stop().unwrap();
+
+        assert!(stream.frames_rendered() > 0, "the device never called back");
+        let state = publisher.state();
+        assert_eq!(state.track_count, 3);
+        // The meters saw the chord, which is the proof it was audible
+        // rather than merely rendered.
+        let heard = state.levels[..3]
+            .iter()
+            .any(|levels| levels.peak_left > 0.0 || levels.peak_right > 0.0);
+        assert!(heard, "no track produced any level");
+    }
+
     /// Supplies a value to fill the enumeration buffer with.
     struct OfflinePlaceholder;
     impl OfflinePlaceholder {

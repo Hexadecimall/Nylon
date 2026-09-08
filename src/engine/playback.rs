@@ -68,6 +68,10 @@ pub struct MixSettings {
     numerator: u16,
     denominator: u16,
     loop_range: LoopRange,
+    playing: bool,
+    // Where to move the playhead, applied once when these settings are
+    // taken up. `None` leaves it where it is.
+    locate_beats: Option<f64>,
 }
 
 impl Default for MixSettings {
@@ -91,7 +95,35 @@ impl MixSettings {
                 start_beats: 0.0,
                 length_beats: 0.0,
             },
+            playing: false,
+            locate_beats: None,
         }
+    }
+
+    /// Whether the transport should run.
+    #[inline]
+    #[must_use]
+    pub const fn is_playing(&self) -> bool {
+        self.playing
+    }
+
+    /// Starts or stops the transport.
+    pub fn set_playing(&mut self, playing: bool) {
+        self.playing = playing;
+    }
+
+    /// Beat the playhead should move to when these settings are taken up,
+    /// or `None` to leave it alone.
+    #[inline]
+    #[must_use]
+    pub const fn locate_beats(&self) -> Option<f64> {
+        self.locate_beats
+    }
+
+    /// Moves the playhead. The move happens once, at the block boundary
+    /// where the settings are taken up.
+    pub fn set_locate_beats(&mut self, beats: Option<f64>) {
+        self.locate_beats = beats;
     }
 
     /// Number of tracks described.
@@ -478,6 +510,25 @@ impl PlaybackEngine {
         let (numerator, denominator) = settings.time_signature();
         let _ = self.transport.set_time_signature(numerator, denominator);
         self.transport.set_loop(settings.loop_range());
+        if let Some(beats) = settings.locate_beats() {
+            self.transport.locate_beats(beats);
+            // Moving the playhead abandons whatever was sounding, so no
+            // note hangs on from where playback used to be.
+            for bank in &mut self.instruments {
+                bank.reset();
+            }
+        }
+        if settings.is_playing() != self.transport.is_playing() {
+            if settings.is_playing() {
+                self.transport.play();
+            } else {
+                self.transport.stop();
+                // Stopping releases notes rather than cutting them dead.
+                for bank in &mut self.instruments {
+                    bank.all_notes_off();
+                }
+            }
+        }
     }
 
     /// Reports the position and levels back to the control thread. A
@@ -629,6 +680,13 @@ mod tests {
     use crate::mixer::Parameter;
 
     const RATE: f64 = 48_000.0;
+
+    /// Settings for `count` tracks with the transport already running.
+    fn playing_settings(count: usize) -> MixSettings {
+        let mut settings = settings_with(count);
+        settings.set_playing(true);
+        settings
+    }
 
     fn settings_with(count: usize) -> MixSettings {
         let mut settings = MixSettings::new();
@@ -862,7 +920,8 @@ mod tests {
         // Stopped, nothing sounds even though a note sits at beat zero.
         assert_eq!(play(&mut engine, 2, 256), 0.0);
 
-        engine.transport().play();
+        assert!(publisher.publish(&playing_settings(1)));
+
         let loudest = play(&mut engine, 40, 256);
         assert!(loudest > 0.001, "the note never sounded: {loudest}");
     }
@@ -870,11 +929,10 @@ mod tests {
     #[test]
     fn a_track_that_is_not_enabled_stays_silent() {
         let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
-        assert!(publisher.publish(&settings_with(1)));
+        assert!(publisher.publish(&playing_settings(1)));
         let mut score = Score::new();
         score.track_mut(0).unwrap().set_notes(&[note(0.0, 4.0, 60)]);
         assert!(publisher.publish_score(&score));
-        engine.transport().play();
         assert_eq!(play(&mut engine, 20, 256), 0.0);
         assert_eq!(score.sounding_tracks(), 0);
     }
@@ -882,7 +940,7 @@ mod tests {
     #[test]
     fn a_note_starts_and_stops_at_its_written_position() {
         let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
-        assert!(publisher.publish(&settings_with(1)));
+        assert!(publisher.publish(&playing_settings(1)));
         let mut score = Score::new();
         let track = score.track_mut(0).unwrap();
         track.set_enabled(true);
@@ -890,7 +948,6 @@ mod tests {
         // note runs from 0.5 s to 1.0 s.
         track.set_notes(&[note(1.0, 1.0, 64)]);
         assert!(publisher.publish_score(&score));
-        engine.transport().play();
 
         // First half second: nothing.
         let before = play(&mut engine, 24_000 / 256, 256);
@@ -914,20 +971,20 @@ mod tests {
                 ..TrackSettings::default()
             },
         );
+        settings.set_playing(true);
         assert!(publisher.publish(&settings));
         let mut score = Score::new();
         let track = score.track_mut(0).unwrap();
         track.set_enabled(true);
         track.set_notes(&[note(0.0, 4.0, 60)]);
         assert!(publisher.publish_score(&score));
-        engine.transport().play();
         assert_eq!(play(&mut engine, 30, 256), 0.0);
     }
 
     #[test]
     fn several_instrument_tracks_sound_together() {
         let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
-        assert!(publisher.publish(&settings_with(3)));
+        assert!(publisher.publish(&playing_settings(3)));
         let mut score = Score::new();
         for (index, pitch) in [60, 64, 67].into_iter().enumerate() {
             let track = score.track_mut(index).unwrap();
@@ -936,7 +993,6 @@ mod tests {
         }
         assert_eq!(score.sounding_tracks(), 3);
         assert!(publisher.publish_score(&score));
-        engine.transport().play();
         let three = play(&mut engine, 40, 256);
         assert!(three > 0.001);
 
@@ -974,13 +1030,12 @@ mod tests {
     #[test]
     fn switching_an_instrument_off_stops_it_at_once() {
         let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
-        assert!(publisher.publish(&settings_with(1)));
+        assert!(publisher.publish(&playing_settings(1)));
         let mut score = Score::new();
         let track = score.track_mut(0).unwrap();
         track.set_enabled(true);
         track.set_notes(&[note(0.0, 8.0, 60)]);
         assert!(publisher.publish_score(&score));
-        engine.transport().play();
         assert!(play(&mut engine, 40, 256) > 0.001);
 
         let mut off = score;
@@ -1015,7 +1070,7 @@ mod tests {
     fn playing_the_same_notes_twice_gives_the_same_audio() {
         let render = || {
             let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
-            assert!(publisher.publish(&settings_with(2)));
+            assert!(publisher.publish(&playing_settings(2)));
             let mut score = Score::new();
             for index in 0..2 {
                 let track = score.track_mut(index).unwrap();
@@ -1027,7 +1082,6 @@ mod tests {
                 ]);
             }
             assert!(publisher.publish_score(&score));
-            engine.transport().play();
             let mut all = Vec::new();
             let mut output = [[0.0_f32; 2]; 256];
             for _ in 0..60 {
