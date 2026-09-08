@@ -312,6 +312,29 @@ impl Score {
         }
     }
 
+    /// A score with no instrument playing, built on the heap.
+    ///
+    /// A score is a large value, and a build without optimisation would
+    /// pass one through the stack on its way into a box. Filling a vector
+    /// a track at a time keeps the largest thing on the stack down to a
+    /// single track.
+    // off the audio thread
+    #[must_use]
+    pub fn boxed() -> Box<Self> {
+        let mut score = Box::<Self>::new_uninit();
+        let pointer = score.as_mut_ptr();
+        for index in 0..MAX_INSTRUMENTS {
+            // SAFETY: The allocation is the size of a score, so every
+            // track slot is within it, and each is written exactly once
+            // before the value is treated as initialised.
+            unsafe { (&raw mut (*pointer).tracks[index]).write(TrackScore::new()) };
+        }
+        // SAFETY: Every field of a score is one of the tracks written
+        // above, so the whole value is now initialised.
+        unsafe { score.assume_init() }
+    }
+    // back on the audio thread
+
     /// One track's part, or `None` past [`MAX_INSTRUMENTS`].
     #[must_use]
     pub fn track(&self, index: usize) -> Option<&TrackScore> {
@@ -390,7 +413,9 @@ impl Publisher {
         // The score is boxed here, on the control thread, so that what
         // crosses to the audio thread is a pointer rather than a copy of
         // every note. The engine hands the old box back for release here.
-        self.score.publish(Box::new(*score)).is_ok()
+        let mut published = Score::boxed();
+        *published = *score;
+        self.score.publish(published).is_ok()
     }
     // back on the audio thread
 
@@ -451,7 +476,7 @@ impl PlaybackEngine {
             48_000.0
         };
         let (settings_control, settings_audio) = exchange(MixSettings::new());
-        let (score_control, score_audio) = exchange(Box::new(Score::new()));
+        let (score_control, score_audio) = exchange(Score::boxed());
         let (state_writer, state_reader) = latest(PlaybackState::default());
         let engine = Self {
             mixer: Mixer::new(0, rate as f32),
@@ -460,7 +485,7 @@ impl PlaybackEngine {
             score: score_audio,
             state: state_writer,
             applied: MixSettings::new(),
-            applied_score: Box::new(Score::new()),
+            applied_score: Score::boxed(),
             instruments: Box::new(core::array::from_fn(|_| {
                 VoiceBank::new(Patch::default(), rate as f32)
             })),
