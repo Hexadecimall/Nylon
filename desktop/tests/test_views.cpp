@@ -356,6 +356,12 @@ void TestViews::startScreenThenWorkspace()
     QVERIFY(w.isStartScreenVisible());
     QVERIFY(w.startScreen()->newButton()->isEnabled());
     QVERIFY(!w.startScreen()->openButton()->isEnabled());
+    // The launcher is a compact centered card, not a canvas-wide layout.
+    const QRect card = w.startScreen()->cardRect();
+    QVERIFY(card.width() <= 700);
+    QVERIFY(card.height() < w.startScreen()->height() / 2);
+    QVERIFY(qAbs(card.center().x() - w.startScreen()->width() / 2) < 4);
+    QVERIFY(card.contains(w.startScreen()->newButton()->geometry().translated(card.topLeft())));
     bridge.addTrack();
     QCOMPARE(bridge.trackCount(), 1ull);
     w.startScreen()->newButton()->click();

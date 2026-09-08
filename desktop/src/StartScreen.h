@@ -10,8 +10,9 @@ namespace nylon {
 class FlatButton;
 class Theme;
 
-// First screen after launch: create a project, open one, or pick a recent
-// one. Opening is enabled only when the core can read project bundles.
+// First screen after launch: a centered launcher card with the actions to
+// create or open a project and the recent list. The card sizes to its
+// content; the surrounding canvas stays empty.
 class StartScreen : public QWidget {
     Q_OBJECT
 public:
@@ -29,6 +30,8 @@ public:
     FlatButton* newButton() const { return m_new; }
     FlatButton* openButton() const { return m_open; }
     QListWidget* recentList() const { return m_recent; }
+    // The launcher card in widget coordinates.
+    QRect cardRect() const;
 
 public slots:
     void reloadRecent();
@@ -43,13 +46,16 @@ protected:
 
 private:
     const Theme* m_theme;
+    QWidget* m_card;
     QLabel* m_title;
     QLabel* m_version;
+    QLabel* m_tagline;
     FlatButton* m_new;
     FlatButton* m_open;
     QLabel* m_recentTitle;
     QListWidget* m_recent;
     QLabel* m_recentEmpty;
+    QLabel* m_footer;
     bool m_persistence = false;
 };
 

@@ -289,6 +289,24 @@ void SessionView::paintEvent(QPaintEvent* event)
 
     // Header underline across the visible width.
     p.fillRect(QRect(0, static_cast<int>(hh - scrollY), viewW, sep), sepColor);
+
+    // Below the last scene, dim placeholder rows keep the grid readable
+    // down to the bottom of the panel. They are not launchable slots.
+    QColor ghost = slotColor;
+    ghost.setAlpha(90);
+    const qint64 filledBottom = gridTop + gridHeight - scrollY;
+    if (columns > 0 && filledBottom < viewH) {
+        const qint64 rowPitch = sh + sep;
+        const qint64 firstGhost = scenes;
+        const qint64 lastGhost = firstGhost + (viewH - filledBottom) / rowPitch + 1;
+        for (qint64 t = firstCol; t <= lastCol; ++t) {
+            const int x = static_cast<int>(t * (sw + sep) - scrollX);
+            for (qint64 s = firstGhost; s <= lastGhost; ++s) {
+                const int y = static_cast<int>(gridTop + s * rowPitch - scrollY);
+                p.fillPath(paint::rounded(*m_theme, QRectF(x + 1, y + 1, sw - 2, sh - 2)), ghost);
+            }
+        }
+    }
 }
 
 } // namespace nylon
