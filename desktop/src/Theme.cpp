@@ -367,8 +367,9 @@ QString Theme::styleSheet() const
         "QMenuBar { background: transparent; color: %TEXT; border: none; padding: 0; }"
         "QMenuBar::item { padding: %PADpx %PAD2px; background: transparent; border-radius: %RSMALLpx; }"
         "QMenuBar::item:selected { background: %HOVER; }"
-        "QMenu { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; border-radius: %RADIUSpx; padding: %PADpx; }"
-        "QMenu::item { padding: %PADpx %PAD3px; border-radius: %RSMALLpx; }"
+        "QMenuBar::item:pressed { background: %PRESSED; }"
+        "QMenu { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; border-radius: %RADIUSpx; padding: %PADpx; min-width: %MENUWpx; }"
+        "QMenu::item { padding: %PAD2px %PAD3px; border-radius: %RSMALLpx; }"
         "QMenu::item:selected { background: %ACCENT; color: %ACCENTTEXT; }"
         "QMenu::item:disabled { color: %DISABLED; }"
         "QMenu::separator { height: %SEPpx; background: %SEPC; margin: %PADpx 0; }"
@@ -414,6 +415,7 @@ QString Theme::styleSheet() const
         "QLabel#detailTitle { color: %TEXT; padding-left: %PADpx; }"
         "QLabel#stripName { color: %TEXT; }"
         "QSplitter::handle { background: %SEPC; }")
+        .replace(QLatin1String("%MENUW"), QString::number(ctrlH * 11))
         .replace(QLatin1String("%BROWSERBG"), c("browser.background"))
         .replace(QLatin1String("%BROWSERSEL"), c("browser.selection"))
         .replace(QLatin1String("%BG"), c("background"))

@@ -64,6 +64,10 @@ MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* par
     m_root->addWidget(m_workspace);
     setCentralWidget(m_root);
     statusBar()->setSizeGripEnabled(false);
+    statusBar()->hide();
+    connect(statusBar(), &QStatusBar::messageChanged, this, [this](const QString& text) {
+        statusBar()->setVisible(!text.isEmpty());
+    });
     // Edge resizing works on every child, so the filter sits on the app.
     qApp->installEventFilter(this);
 
@@ -151,8 +155,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
                 updateResizeCursor(pos);
             } else if (event->type() == QEvent::MouseButtonPress && edges && me->button() == Qt::LeftButton) {
                 if (QWindow* handle = windowHandle()) {
-                    handle->startSystemResize(edges);
-                    return true;
+                    if (handle->startSystemResize(edges)) return true;
                 }
             }
         }
@@ -165,8 +168,7 @@ void MainWindow::mousePressEvent(QMouseEvent* event)
     const Qt::Edges edges = edgesAt(event->pos());
     if (edges && event->button() == Qt::LeftButton) {
         if (QWindow* handle = windowHandle()) {
-            handle->startSystemResize(edges);
-            return;
+            if (handle->startSystemResize(edges)) return;
         }
     }
     QMainWindow::mousePressEvent(event);
@@ -346,6 +348,7 @@ QAction* MainWindow::action(const QString& objectName) const
 
 void MainWindow::showStartScreen()
 {
+    statusBar()->clearMessage();
     m_start->reloadRecent();
     m_root->setCurrentWidget(m_start);
     setWindowTitle(QStringLiteral("Nylon"));
@@ -365,12 +368,14 @@ void MainWindow::newProject()
 
 void MainWindow::showSession()
 {
+    m_root->setCurrentWidget(m_workspace);
     m_views->setCurrentIndex(0);
     m_transport->showSessionActive(true);
 }
 
 void MainWindow::showArrangement()
 {
+    m_root->setCurrentWidget(m_workspace);
     m_views->setCurrentIndex(1);
     m_transport->showSessionActive(false);
 }
@@ -414,6 +419,7 @@ void MainWindow::buildMenus()
                    const std::function<void()>& slot, bool enabled = true, const QString& why = QString()) {
         QAction* a = menu->addAction(text);
         a->setObjectName(name);
+        a->setMenuRole(QAction::NoRole);
         if (!shortcut.isEmpty()) {
             a->setShortcut(shortcut);
         }
@@ -450,17 +456,17 @@ void MainWindow::buildMenus()
         StartScreen::clearRecentProjects();
         m_start->reloadRecent();
     });
-    add(file, QStringLiteral("actionClose"), tr("&Close Project"), QKeySequence::Close, [this] { showStartScreen(); });
+    add(file, QStringLiteral("actionClose"), tr("&Close Project"), QKeySequence(Qt::CTRL | Qt::Key_W), [this] { showStartScreen(); });
     file->addSeparator();
     add(file, QStringLiteral("actionSave"), tr("&Save"), QKeySequence::Save, nullptr,
         ProjectBridge::isPersistenceAvailable(), noPersist);
     add(file, QStringLiteral("actionSaveAs"), tr("Save &As..."), QKeySequence::SaveAs, nullptr,
         ProjectBridge::isPersistenceAvailable(), noPersist);
     file->addSeparator();
-    add(file, QStringLiteral("actionPreferences"), tr("&Preferences..."), QKeySequence::Preferences,
+    add(file, QStringLiteral("actionPreferences"), tr("&Preferences..."), QKeySequence(Qt::CTRL | Qt::Key_Comma),
         [this] { showPreferences(); });
     file->addSeparator();
-    add(file, QStringLiteral("actionQuit"), tr("&Quit"), QKeySequence::Quit, [this] { close(); });
+    add(file, QStringLiteral("actionQuit"), tr("&Quit"), QKeySequence(Qt::CTRL | Qt::Key_Q), [this] { close(); });
 
     QMenu* edit = roundMenu(bar->addMenu(tr("&Edit")));
     add(edit, QStringLiteral("actionUndo"), tr("&Undo"), QKeySequence::Undo, [this] {
@@ -490,6 +496,7 @@ void MainWindow::buildMenus()
             showStatus(tr("Could not add a track."));
             return;
         }
+        m_root->setCurrentWidget(m_workspace);
         selectTrack(static_cast<int>(m_bridge->trackCount()) - 1);
     };
     add(create, QStringLiteral("actionAddTrack"), tr("Insert &Audio Track"), QKeySequence(Qt::CTRL | Qt::Key_T),

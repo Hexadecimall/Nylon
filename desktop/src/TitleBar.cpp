@@ -8,6 +8,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QWindow>
+#include <QResizeEvent>
 
 namespace nylon {
 
@@ -24,11 +25,6 @@ TitleBar::TitleBar(const Theme* theme, QWidget* parent)
     m_title->setAlignment(Qt::AlignCenter);
     m_title->setAttribute(Qt::WA_TransparentForMouseEvents);
 
-    auto* layout = new QHBoxLayout(this);
-    layout->setSpacing(0);
-    layout->addSpacing(0);
-    layout->addWidget(m_menuBar, 0, Qt::AlignVCenter);
-    layout->addWidget(m_title, 1);
     setTheme(theme);
 }
 
@@ -37,16 +33,35 @@ void TitleBar::setTheme(const Theme* theme)
     m_theme = theme;
     const int h = theme->metricInt(QStringLiteral("titlebar.height"), 36);
     setFixedHeight(h);
-    const int size = theme->metricInt(QStringLiteral("window.control.size"), 12);
-    const int pad = theme->metricInt(QStringLiteral("panel.padding"), 8);
-    // Space for three controls and their gaps ahead of the menu bar.
-    layout()->setContentsMargins(pad + 3 * (size + pad / 2) + pad, 0, pad, 0);
+    updateGeometry();
     update();
 }
 
 void TitleBar::setTitle(const QString& title)
 {
     m_title->setText(title);
+    updateGeometry();
+}
+
+
+void TitleBar::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    updateGeometry();
+}
+
+void TitleBar::updateGeometry()
+{
+    const int pad = m_theme->metricInt(QStringLiteral("panel.padding"), 8);
+    const int left = zoomRect().right() + 1 + pad * 2;
+    const QSize menuSize = m_menuBar->sizeHint();
+    const int menuWidth = qMin(menuSize.width(), qMax(0, width() - left - pad));
+    const int menuHeight = qMin(menuSize.height(), height());
+    m_menuBar->setGeometry(left, (height() - menuHeight) / 2, menuWidth, menuHeight);
+    const int reserved = left + menuWidth + pad;
+    const int titleWidth = qMax(0, width() - 2 * reserved);
+    m_title->setGeometry(reserved, 0, titleWidth, height());
+    m_title->setVisible(titleWidth >= m_title->sizeHint().width());
 }
 
 QString TitleBar::title() const
@@ -97,11 +112,11 @@ void TitleBar::paintEvent(QPaintEvent*)
             c = c.darker(130);
         }
         p.setBrush(c);
-        const QRect r = controlRect(i);
+        const QRectF r(controlRect(i));
         p.drawEllipse(r);
         if (m_hoverControl >= 0) {
-            p.setPen(QPen(glyph, 1.4));
-            const QPointF c0 = r.center() + QPointF(0.5, 0.5);
+            p.setPen(QPen(glyph, 1.2, Qt::SolidLine, Qt::RoundCap));
+            const QPointF c0 = r.center();
             const double s = r.width() / 4.0;
             if (i == 0) {
                 p.drawLine(c0 + QPointF(-s, -s), c0 + QPointF(s, s));
@@ -109,9 +124,8 @@ void TitleBar::paintEvent(QPaintEvent*)
             } else if (i == 1) {
                 p.drawLine(c0 + QPointF(-s, 0), c0 + QPointF(s, 0));
             } else {
-                p.drawLine(c0 + QPointF(-s, s), c0 + QPointF(s, -s));
-                p.drawLine(c0 + QPointF(-s, s), c0 + QPointF(-s, -s * 0.2));
-                p.drawLine(c0 + QPointF(s, -s), c0 + QPointF(s * 0.2, -s));
+                p.drawLine(c0 + QPointF(-s, 0), c0 + QPointF(s, 0));
+                p.drawLine(c0 + QPointF(0, -s), c0 + QPointF(0, s));
             }
             p.setPen(Qt::NoPen);
         }
@@ -141,7 +155,7 @@ void TitleBar::mouseReleaseEvent(QMouseEvent* event)
     const int pressed = m_pressedControl;
     m_pressedControl = -1;
     update();
-    if (pressed >= 0 && controlAt(event->pos()) == pressed) {
+    if (event->button() == Qt::LeftButton && pressed >= 0 && controlAt(event->pos()) == pressed) {
         switch (pressed) {
         case 0:
             emit closeRequested();
