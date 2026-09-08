@@ -190,6 +190,8 @@ fn mixing_a_block_performs_no_allocator_operations() {
 #[test]
 fn the_playback_engine_renders_without_allocating() {
     use nylon::engine::playback::{MixSettings, PlaybackEngine, TrackSettings};
+    use nylon::engine::sample::Sample;
+    use nylon::engine::timeline::{AudioRegion, AudioTimeline};
 
     let (mut engine, mut publisher) = PlaybackEngine::new(48_000.0);
     let mut settings = MixSettings::new();
@@ -209,6 +211,14 @@ fn the_playback_engine_renders_without_allocating() {
     // engine is handed to a stream it cannot be reached directly.
     settings.set_playing(true);
     assert!(publisher.publish(&settings));
+    let mut timeline = AudioTimeline::new();
+    let media = timeline
+        .add_sample(Sample::new(48_000, vec![[0.1, -0.1]; 4_096]).unwrap())
+        .unwrap();
+    let mut region = AudioRegion::new(media, 9, 0.0, 8.0, 0.0, 24_000.0).unwrap();
+    assert!(region.set_loop(Some(0..4_096)));
+    timeline.add_region(region).unwrap();
+    assert!(publisher.publish_audio(timeline));
     let mut output = vec![[0.0_f32; 2]; BLOCK];
     // One block before counting so the settings are taken up.
     engine.render_block(&mut output, &[]);

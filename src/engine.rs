@@ -3,6 +3,7 @@
 pub mod playback;
 pub mod sample;
 pub mod schedule;
+pub mod timeline;
 pub mod voice;
 
 /// Maximum supported callback size in frames.

@@ -111,6 +111,12 @@ for real-time use. It supports linear or cubic interpolation, rate conversion,
 reverse playback, clip gain, seeking, and frame-accurate loops. Playback has
 an allocator test because media storage is prepared before rendering starts.
 
+`src/engine/timeline` groups decoded media with beat-based track placements.
+Regions are indexed by track before publication, so the callback visits only
+placements that can contribute to each buffer. A timeline crosses the same
+bounded ownership exchange as other engine state; replaced media returns to
+the control thread for destruction.
+
 The engine publishes these together as a score: per instrument track, the
 notes, the patch, and whether the track sounds. Notes sit at absolute
 beats on the timeline, which is how an arrangement reads; session clip

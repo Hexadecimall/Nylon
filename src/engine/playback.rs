@@ -15,6 +15,7 @@ use crate::audio::{BlockTiming, Renderer, StreamConfig};
 use crate::engine::schedule::{
     MAX_NOTE_EVENTS, NoteAction, NoteEvent, ScheduledNote, Span, schedule_block, sort_notes,
 };
+use crate::engine::timeline::AudioTimeline;
 use crate::engine::voice::{Patch, VoiceBank};
 use crate::exchange::{AudioSlot, ControlSlot, exchange};
 use crate::latest::{Reader, Writer, latest};
@@ -385,6 +386,7 @@ impl Default for PlaybackState {
 pub struct Publisher {
     settings: ControlSlot<MixSettings>,
     score: ControlSlot<Box<Score>>,
+    audio: ControlSlot<Box<AudioTimeline>>,
     state: Reader<PlaybackState>,
 }
 
@@ -416,6 +418,13 @@ impl Publisher {
         *published = *score;
         self.score.publish(published).is_ok()
     }
+
+    /// Transfers a prepared audio timeline to the engine.
+    #[must_use]
+    pub fn publish_audio(&mut self, timeline: AudioTimeline) -> bool {
+        while self.audio.reclaim().is_some() {}
+        self.audio.publish(Box::new(timeline)).is_ok()
+    }
     // back on the audio thread
 
     /// Reads whatever the engine last reported. Repeats the previous
@@ -431,8 +440,8 @@ impl Publisher {
 /// A vector grows into an allocation of its own, so the whole block of
 /// silence never passes through the stack the way `Box::new` of a large
 /// array would in a build without optimisation.
-fn zeroed_track_audio() -> Box<[[[f32; 2]; MAX_FRAMES]; MAX_INSTRUMENTS]> {
-    let buffers: Vec<[[f32; 2]; MAX_FRAMES]> = vec![[[0.0; 2]; MAX_FRAMES]; MAX_INSTRUMENTS];
+fn zeroed_track_audio() -> Box<[[[f32; 2]; MAX_FRAMES]; MAX_TRACKS]> {
+    let buffers: Vec<[[f32; 2]; MAX_FRAMES]> = vec![[[0.0; 2]; MAX_FRAMES]; MAX_TRACKS];
     // The vector was built with exactly this many elements, so the
     // conversion cannot fail.
     buffers
@@ -447,6 +456,7 @@ pub struct PlaybackEngine {
     transport: Transport,
     settings: AudioSlot<MixSettings>,
     score: AudioSlot<Box<Score>>,
+    audio: AudioSlot<Box<AudioTimeline>>,
     state: Writer<PlaybackState>,
     // Settings currently in force, kept so they can be read back.
     applied: MixSettings,
@@ -459,7 +469,7 @@ pub struct PlaybackEngine {
     instruments: Box<[VoiceBank; MAX_INSTRUMENTS]>,
     // One buffer per instrument track, which the mixer then sums. Owned so
     // the render path borrows it rather than allocating.
-    track_audio: Box<[[[f32; 2]; MAX_FRAMES]; MAX_INSTRUMENTS]>,
+    track_audio: Box<[[[f32; 2]; MAX_FRAMES]; MAX_TRACKS]>,
 }
 
 impl PlaybackEngine {
@@ -476,12 +486,14 @@ impl PlaybackEngine {
         };
         let (settings_control, settings_audio) = exchange(MixSettings::new());
         let (score_control, score_audio) = exchange(Score::boxed());
+        let (audio_control, audio_audio) = exchange(Box::new(AudioTimeline::new()));
         let (state_writer, state_reader) = latest(PlaybackState::default());
         let engine = Self {
             mixer: Mixer::new(0, rate as f32),
             transport: Transport::new(rate, 120.0),
             settings: settings_audio,
             score: score_audio,
+            audio: audio_audio,
             state: state_writer,
             applied: MixSettings::new(),
             applied_score: Score::boxed(),
@@ -493,6 +505,7 @@ impl PlaybackEngine {
         let publisher = Publisher {
             settings: settings_control,
             score: score_control,
+            audio: audio_control,
             state: state_reader,
         };
         (engine, publisher)
@@ -535,6 +548,12 @@ impl PlaybackEngine {
                 self.instruments[index].reset();
             }
         }
+    }
+
+    /// Takes prepared media ownership without releasing the previous value
+    /// on this thread.
+    fn take_audio(&mut self) {
+        self.audio.apply_pending();
     }
 
     /// Takes any published settings and applies them to the mixer and the
@@ -657,6 +676,7 @@ impl PlaybackEngine {
     pub fn render_block(&mut self, output: &mut [[f32; 2]], events: &[MixEvent]) {
         self.take_settings();
         self.take_score();
+        self.take_audio();
         let frames = output.len().min(MAX_FRAMES);
 
         // The span this block covers, taken before the transport moves so
@@ -668,9 +688,18 @@ impl PlaybackEngine {
             frames,
         };
 
-        let instrument_tracks = MAX_INSTRUMENTS.min(self.mixer.track_count());
+        let track_count = self.mixer.track_count();
+        for buffer in self.track_audio.iter_mut().take(track_count) {
+            buffer[..frames].fill([0.0; 2]);
+        }
+        let instrument_tracks = MAX_INSTRUMENTS.min(track_count);
         for index in 0..instrument_tracks {
             self.render_instrument(index, frames, span);
+        }
+        for (index, buffer) in self.track_audio.iter_mut().take(track_count).enumerate() {
+            self.audio
+                .current()
+                .render_track(index, span, &mut buffer[..frames]);
         }
 
         // Borrowing the buffers and the mixer at once needs the fields
@@ -681,15 +710,15 @@ impl PlaybackEngine {
         let mut inputs = [TrackInput {
             track: 0,
             samples: &[],
-        }; MAX_INSTRUMENTS];
-        for (index, buffer) in track_audio.iter().take(instrument_tracks).enumerate() {
+        }; MAX_TRACKS];
+        for (index, buffer) in track_audio.iter().take(track_count).enumerate() {
             inputs[index] = TrackInput {
                 track: index as u16,
                 samples: &buffer[..frames],
             };
         }
         if mixer
-            .render(&inputs[..instrument_tracks], output, events)
+            .render(&inputs[..track_count], output, events)
             .is_err()
         {
             // A block the mixer refuses must still be silent rather than
@@ -1151,6 +1180,28 @@ mod tests {
         assert_eq!(engine.instrument(0).unwrap().patch().cutoff, 500.0);
         assert!(engine.instrument(MAX_INSTRUMENTS).is_none());
         assert_eq!(engine.score().sounding_tracks(), 1);
+    }
+
+    #[test]
+    fn a_published_audio_timeline_reaches_the_mixer() {
+        use crate::engine::sample::{Interpolation, Sample};
+        use crate::engine::timeline::{AudioRegion, AudioTimeline};
+
+        let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
+        assert!(publisher.publish(&playing_settings(1)));
+        let sample = Sample::new(48_000, vec![[0.25, -0.5]; 512]).unwrap();
+        let mut timeline = AudioTimeline::new();
+        let media = timeline.add_sample(sample).unwrap();
+        let mut region = AudioRegion::new(media, 0, 0.0, 1.0, 0.0, 24_000.0).unwrap();
+        region.set_interpolation(Interpolation::Linear);
+        timeline.add_region(region).unwrap();
+        assert!(publisher.publish_audio(timeline));
+
+        let mut output = [[0.0; 2]; 256];
+        engine.render_block(&mut output, &[]);
+        assert!((output[0][0] - 0.25).abs() < 0.000_001);
+        assert!((output[0][1] + 0.5).abs() < 0.000_001);
+        assert!(output.iter().flatten().any(|sample| *sample != 0.0));
     }
 
     #[test]
