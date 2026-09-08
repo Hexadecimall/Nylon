@@ -382,7 +382,9 @@ void PianoRoll::paintEvent(QPaintEvent*)
     // Columns: grid, beat, and bar lines; the loop end is marked.
     const double firstBeat = qMax(0.0, static_cast<double>(scrollX) / m_pixelsPerBeat);
     const double lastBeat = static_cast<double>(scrollX + view.width()) / m_pixelsPerBeat;
-    for (double b = std::floor(firstBeat / m_gridBeats) * m_gridBeats; b <= lastBeat; b += m_gridBeats) {
+    const bool showSubGrid = m_gridBeats * m_pixelsPerBeat >= 6.0;
+    const double step = showSubGrid ? m_gridBeats : 1.0;
+    for (double b = std::floor(firstBeat / step) * step; b <= lastBeat; b += step) {
         const int x = gridLeft + static_cast<int>(std::lround(b * m_pixelsPerBeat)) - scrollX;
         if (x < gridLeft) {
             continue;
@@ -390,10 +392,10 @@ void PianoRoll::paintEvent(QPaintEvent*)
         const long beatIndex = std::lround(b);
         const bool onBeat = std::abs(b - beatIndex) < 1e-9;
         const bool onBar = onBeat && beatIndex % beatsPerBar == 0;
-        p.fillRect(QRect(x, m_rulerHeight, 1, view.height()), onBar ? gridBar : (onBeat ? grid : grid.darker(115)));
+        p.fillRect(QRect(x, m_rulerHeight, 1, view.height()), onBar ? gridBar : (onBeat ? grid : grid.darker(112)));
     }
     const int loopX = gridLeft + static_cast<int>(std::lround(loopEnd * m_pixelsPerBeat)) - scrollX;
-    p.fillRect(QRect(loopX, m_rulerHeight, view.width(), view.height()), QColor(0, 0, 0, 70));
+    p.fillRect(QRect(loopX, m_rulerHeight, view.width(), view.height()), QColor(0, 0, 0, 110));
     p.fillRect(QRect(loopX, 0, 2, view.height()), m_theme->color(QStringLiteral("state.loop")));
 
     // Notes.
@@ -412,12 +414,18 @@ void PianoRoll::paintEvent(QPaintEvent*)
         }
         const QRect r = noteRect(note);
         QColor fill = clipColor;
-        fill.setAlpha(120 + note.velocity);
-        p.fillPath(paint::rounded(*m_theme, QRectF(r)), fill);
+        fill.setAlpha(qMin(255, 110 + note.velocity));
+        QPainterPath shape;
+        shape.addRoundedRect(QRectF(r), 2, 2);
+        p.fillPath(shape, fill);
+        // Lit top edge, so overlapping notes stay distinguishable.
+        p.fillRect(QRect(r.x() + 1, r.y(), qMax(0, r.width() - 2), 1), fill.lighter(140));
         if (selected) {
+            QPainterPath outline;
+            outline.addRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), 2, 2);
             p.setPen(QPen(primary, 1.5));
             p.setBrush(Qt::NoBrush);
-            p.drawPath(paint::rounded(*m_theme, QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5)));
+            p.drawPath(outline);
             const QRect grip = noteResizeGrip(note);
             p.fillRect(QRect(grip.x(), grip.y() + 2, 1, grip.height() - 4), primary);
         }
@@ -425,17 +433,29 @@ void PianoRoll::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, false);
 
     p.restore();
-    // Keyboard, pinned at the left.
+    // Keyboard, pinned at the left: a continuous run of white keys with the
+    // black keys laid over them, as on an instrument.
+    const QColor whiteKey(232, 233, 235);
+    const QColor blackKey(26, 27, 29);
+    p.fillRect(QRect(0, m_rulerHeight, m_keyboardWidth, view.height() - m_rulerHeight), whiteKey);
     for (int row = firstRow; row <= lastRow; ++row) {
         const int pitch = (kPitchCount - 1) - row;
         const int y = m_rulerHeight + row * m_rowHeight - scrollY;
-        const bool black = isBlackKey(pitch);
-        p.fillRect(QRect(0, y, m_keyboardWidth, m_rowHeight), black ? QColor(30, 31, 33) : QColor(226, 228, 230));
-        p.fillRect(QRect(0, y + m_rowHeight - 1, m_keyboardWidth, 1), QColor(0, 0, 0, 80));
+        if (isBlackKey(pitch)) {
+            p.fillRect(QRect(0, y, m_keyboardWidth * 3 / 5, m_rowHeight), blackKey);
+        } else {
+            // A separator only between adjacent white keys (B/C and E/F).
+            const int below = pitch - 1;
+            if (below >= 0 && !isBlackKey(below)) {
+                p.fillRect(QRect(0, y + m_rowHeight - 1, m_keyboardWidth, 1), QColor(150, 152, 155));
+            }
+        }
         if (pitch % 12 == 0) {
-            p.setPen(QColor(40, 42, 45));
-            p.drawText(QRect(4, y, m_keyboardWidth - 8, m_rowHeight), Qt::AlignLeft | Qt::AlignVCenter,
+            p.setPen(QColor(60, 62, 65));
+            p.drawText(QRect(4, y, m_keyboardWidth - 8, m_rowHeight), Qt::AlignRight | Qt::AlignVCenter,
                 QStringLiteral("%1%2").arg(QLatin1String(kNoteNames[0])).arg(pitch / 12 - 2));
+            // Octave boundary across the keyboard.
+            p.fillRect(QRect(0, y + m_rowHeight - 1, m_keyboardWidth, 1), QColor(120, 122, 125));
         }
     }
     p.fillRect(QRect(m_keyboardWidth - 1, 0, 1, view.height()), gridBar);

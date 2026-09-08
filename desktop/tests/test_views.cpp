@@ -118,7 +118,12 @@ void TestViews::addTrackButtonGrowsBothViews()
     // away from the selection outline and the name text.
     const int headerMid = (slot.y() - 2) / 2;
     QCOMPARE(img.pixelColor(slot.right() - 6, headerMid), m_themes.theme().trackColor(bridge.trackColorIndex(2)));
-    QCOMPARE(img.pixelColor(slot.center()), m_themes.theme().color(QStringLiteral("session.slot")));
+    // Empty cells are shaded, so compare with a tolerance.
+    const QColor cell = img.pixelColor(slot.center());
+    const QColor base = m_themes.theme().color(QStringLiteral("session.slot"));
+    QVERIFY2(qAbs(cell.red() - base.red()) <= 20 && qAbs(cell.green() - base.green()) <= 20
+            && qAbs(cell.blue() - base.blue()) <= 20,
+        qPrintable(cell.name()));
 }
 
 void TestViews::undoRedoFromButtonsAndActions()

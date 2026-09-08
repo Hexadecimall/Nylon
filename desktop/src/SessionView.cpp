@@ -284,7 +284,9 @@ void SessionView::paintEvent(QPaintEvent* event)
                 const bool hovered = t == m_hoverTrack && s == m_hoverScene;
                 const bool occupied = m_bridge->clipSlotOccupied(static_cast<quint64>(t), static_cast<quint64>(s));
                 const QColor fill = occupied ? trackColor : hovered ? slotHover : slotColor;
-                p.fillPath(paint::rounded(*m_theme, QRectF(x + 1, y + 1, sw - 2, sh - 2)), fill);
+                const QPainterPath slotShape = paint::rounded(*m_theme, QRectF(x + 1.5, y + 1.5, sw - 3, sh - 3));
+                // Empty cells sit recessed; a clip reads as a raised block.
+                paint::control(p, *m_theme, slotShape, fill, !occupied);
                 // Launch button at the left edge of every slot: a triangle,
                 // solid on a clip and dim on an empty slot. Launching itself
                 // waits for a transport.
