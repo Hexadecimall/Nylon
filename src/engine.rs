@@ -1,6 +1,7 @@
 //! Fixed-capacity, sample-accurate stereo rendering.
 
 pub mod playback;
+pub mod schedule;
 pub mod voice;
 
 /// Maximum supported callback size in frames.
