@@ -4,6 +4,7 @@
 
 #include <QList>
 #include <QObject>
+#include <QTimer>
 
 namespace nylon {
 
@@ -73,6 +74,8 @@ public:
     QString audioDeviceName() const { return m_deviceName; }
     // Frames the device asked for that arrived late enough to be dropped.
     quint64 audioDropouts() const;
+    // What the open stream negotiated. False when nothing is open.
+    bool audioConfig(AudioConfig& config) const;
     bool isPlaying() const;
     double positionBeats() const;
     // Peak and RMS for one track, or for the master when the index is past
@@ -90,6 +93,11 @@ public slots:
     bool play();
     bool stop();
     bool locate(double beats);
+    // Re-sends a transport request the engine has not taken up yet. The
+    // core publishes through a single slot that refuses a second value
+    // before the audio thread has taken the first, so a request made right
+    // after the device opens can be dropped.
+    void reconcileTransport();
 
     // Discards the current project and starts an empty one.
     bool reset();
@@ -140,6 +148,10 @@ private:
     QString m_bundlePath;
     mutable AudioEngine m_audio;
     QString m_deviceName;
+    // What the last play or stop asked for, and the timer that keeps the
+    // engine in step with it.
+    bool m_intendedPlaying = false;
+    QTimer* m_reconcile = nullptr;
 };
 
 } // namespace nylon

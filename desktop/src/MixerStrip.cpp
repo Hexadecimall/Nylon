@@ -63,7 +63,7 @@ MixerStrip::MixerStrip(const Theme* theme, Kind kind, QWidget* parent)
     m_fader->setShowScale(kind == Kind::Master);
     m_meter->setStatusTip(tr("Output level."));
     m_volume->setAlignment(Qt::AlignCenter);
-    m_volume->setObjectName(QStringLiteral("secondary"));
+    m_volume->setObjectName(QStringLiteral("stripValue"));
 
     // Session mixer order: status, pan, then the fader and meter with the
     // activator, solo, and arm stacked beside them.

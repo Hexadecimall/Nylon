@@ -86,6 +86,7 @@ private:
     void startPlayback();
     void stopPlayback();
     void pollAudio();
+    void updateEngineStatus();
     void buildMenus();
     void buildWorkspace();
     void applyTheme(const Theme& theme);
@@ -129,6 +130,8 @@ private:
     QSize m_workspaceSize{1440, 900};
     // Drives the position readout and the meters while audio is open.
     QTimer* m_audioPoll = nullptr;
+    // Reads out the device, the block size and any dropouts.
+    QLabel* m_engineStatus = nullptr;
 
     Qt::Edges edgesAt(const QPoint& pos) const;
     void updateResizeCursor(const QPoint& pos);

@@ -320,6 +320,11 @@ void MainWindow::buildWorkspace()
     m_workspaceContext->setObjectName(QStringLiteral("workspaceContext"));
     viewBarLayout->addWidget(m_workspaceContext);
     viewBarLayout->addStretch(1);
+    m_engineStatus = new QLabel(viewBar);
+    m_engineStatus->setObjectName(QStringLiteral("workspaceContext"));
+    m_engineStatus->setStatusTip(tr("Output device, sample rate, block size and dropouts."));
+    viewBarLayout->addWidget(m_engineStatus);
+    viewBarLayout->addSpacing(8);
     viewBarLayout->addWidget(m_browserToggle);
     viewBarLayout->addWidget(m_editorToggle);
     viewBarLayout->addWidget(m_mixerToggle);
@@ -681,14 +686,37 @@ void MainWindow::openAudio()
     m_audioPoll->start();
 }
 
+void MainWindow::updateEngineStatus()
+{
+    if (!m_engineStatus) {
+        return;
+    }
+    if (!m_bridge->isAudioOpen()) {
+        m_engineStatus->setText(tr("AUDIO OFF"));
+        return;
+    }
+    AudioConfig config {};
+    if (!m_bridge->audioConfig(config)) {
+        m_engineStatus->setText(m_bridge->audioDeviceName().toUpper());
+        return;
+    }
+    const quint64 dropped = m_bridge->audioDropouts();
+    const QString rate = tr("%1 kHz").arg(config.sampleRate / 1000.0, 0, 'f', 1);
+    const QString base = QStringLiteral("%1  %2  %3")
+                             .arg(m_bridge->audioDeviceName().toUpper(), rate,
+                                 tr("%1 frames").arg(config.blockFrames));
+    m_engineStatus->setText(dropped == 0 ? base : base + tr("  %1 dropped").arg(dropped));
+}
+
 void MainWindow::startPlayback()
 {
-    // The device is opened on the first request rather than when a project
-    // opens, so a window that is never played leaves the output alone.
-    openAudio();
+    // The bridge opens the device on the first play; the window only has
+    // to start following it once that has happened.
     if (!m_bridge->play()) {
         showStatus(tr("The engine would not start."));
+        return;
     }
+    openAudio();
 }
 
 void MainWindow::stopPlayback()
@@ -701,6 +729,8 @@ void MainWindow::pollAudio()
     if (!m_bridge->isAudioOpen()) {
         return;
     }
+    m_bridge->reconcileTransport();
+    updateEngineStatus();
     const double beats = m_bridge->positionBeats();
     m_arrangement->setPlayheadBeats(beats);
     m_transport->showPosition(beats);
@@ -744,6 +774,7 @@ void MainWindow::enterWorkspace()
     // the stream itself waits for the first play.
     const bool available = ProjectBridge::hasAudioOutput();
     m_transport->setTransportAvailable(available);
+    updateEngineStatus();
     for (const char* name : {"actionPlay", "actionStop"}) {
         if (QAction* item = action(QLatin1String(name))) {
             item->setEnabled(available);

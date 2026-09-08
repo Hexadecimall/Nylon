@@ -27,6 +27,9 @@ ProjectBridge::ProjectBridge(QObject* parent)
     // Playback follows the project, so every accepted edit is handed to a
     // running engine before the next block is rendered.
     connect(this, &ProjectBridge::changed, this, &ProjectBridge::syncAudio);
+    m_reconcile = new QTimer(this);
+    m_reconcile->setInterval(50);
+    connect(m_reconcile, &QTimer::timeout, this, &ProjectBridge::reconcileTransport);
 }
 
 ProjectBridge::~ProjectBridge() = default;
@@ -70,6 +73,7 @@ bool ProjectBridge::openAudio(quint64 deviceId, unsigned int sampleRate, unsigne
             break;
         }
     }
+    m_reconcile->start();
     emit audioStateChanged();
     return true;
 }
@@ -79,6 +83,8 @@ bool ProjectBridge::closeAudio()
     if (!m_audio.isOpen()) {
         return false;
     }
+    m_intendedPlaying = false;
+    m_reconcile->stop();
     const bool closed = m_audio.close();
     if (closed) {
         m_deviceName.clear();
@@ -89,10 +95,13 @@ bool ProjectBridge::closeAudio()
 
 bool ProjectBridge::play()
 {
-    if (!m_audio.isOpen()) {
+    // Playing is the point at which an output is needed, so the device
+    // opens here rather than when a project does.
+    if (!m_audio.isOpen() && !openAudio()) {
         return false;
     }
     syncAudio();
+    m_intendedPlaying = true;
     const bool started = m_audio.play();
     if (started) {
         emit audioStateChanged();
@@ -105,6 +114,7 @@ bool ProjectBridge::stop()
     if (!m_audio.isOpen()) {
         return false;
     }
+    m_intendedPlaying = false;
     const bool stopped = m_audio.stop();
     if (stopped) {
         emit audioStateChanged();
@@ -115,6 +125,18 @@ bool ProjectBridge::stop()
 bool ProjectBridge::locate(double beats)
 {
     return m_audio.isOpen() && m_audio.locate(beats);
+}
+
+void ProjectBridge::reconcileTransport()
+{
+    if (!m_audio.isOpen() || m_audio.isPlaying() == m_intendedPlaying) {
+        return;
+    }
+    if (m_intendedPlaying) {
+        m_audio.play();
+    } else {
+        m_audio.stop();
+    }
 }
 
 bool ProjectBridge::isPlaying() const
@@ -130,6 +152,11 @@ double ProjectBridge::positionBeats() const
 quint64 ProjectBridge::audioDropouts() const
 {
     return m_audio.isOpen() ? m_audio.dropouts() : 0;
+}
+
+bool ProjectBridge::audioConfig(AudioConfig& config) const
+{
+    return m_audio.isOpen() && m_audio.config(config);
 }
 
 bool ProjectBridge::trackLevels(quint64 index, Levels& levels) const
