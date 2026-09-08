@@ -195,15 +195,21 @@ void ArrangementView::paintEvent(QPaintEvent* event)
     if (anyLane) {
         for (qint64 t = firstLane; t <= lastLane; ++t) {
             const int y = static_cast<int>(lanesTop + t * (lh + sep) - scrollY);
+            // Lane header: a track-colored name bar over the panel color,
+            // matching the session title bars.
             const QRect header(0, y, hw, lh);
             p.fillRect(header, panel);
             const int colorIndex = m_bridge->trackColorIndex(static_cast<quint64>(t));
-            p.fillRect(QRect(0, y, band, lh),
-                m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16)));
-            p.setPen(primary);
-            p.drawText(header.adjusted(band + textInset, textInset, -textInset, 0), Qt::AlignLeft | Qt::AlignTop,
+            const QColor trackColor = m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16));
+            const int titleH = m_theme->metricInt(QStringLiteral("control.height"), 20);
+            const QRect title(header.x() + 1, y + 1, hw - 2, qMin(titleH, lh - 2));
+            p.fillPath(paint::rounded(*m_theme, QRectF(title)), trackColor);
+            p.setPen(m_theme->color(QStringLiteral("track.text")));
+            p.drawText(title.adjusted(textInset, 0, -textInset, 0), Qt::AlignLeft | Qt::AlignVCenter,
                 p.fontMetrics().elidedText(m_bridge->trackName(static_cast<quint64>(t)), Qt::ElideRight,
-                    hw - band - 2 * textInset));
+                    hw - 2 * textInset));
+            Q_UNUSED(band);
+            Q_UNUSED(primary);
             p.fillRect(QRect(hw, y, sep, lh), sepColor);
         }
     }

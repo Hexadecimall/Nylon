@@ -204,7 +204,8 @@ void TestViews::themeSwitchRepaintsWithNewTokens()
     const QRect lane = w.arrangementView()->laneRect(0);
     QVERIFY(!lane.isEmpty());
     QCOMPARE(img.pixelColor(lane.center()), m_themes.theme().color(QStringLiteral("arrangement.lane")));
-    QCOMPARE(img.pixelColor(1, lane.center().y()), m_themes.theme().trackColor(0));
+    // The lane's title bar carries the track color.
+    QCOMPARE(img.pixelColor(lane.x() / 2, lane.y() + 8), m_themes.theme().trackColor(bridge.trackColorIndex(0)));
     QVERIFY(m_themes.load(QStringLiteral("nylon")));
 }
 
