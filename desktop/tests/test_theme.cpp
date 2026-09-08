@@ -1,7 +1,11 @@
 #include "Theme.h"
 #include "ThemeManager.h"
 
+#include <QDir>
+#include <QFile>
 #include <QFontDatabase>
+#include <QRegularExpression>
+#include <QStandardPaths>
 #include <QGuiApplication>
 #include <QtTest>
 
@@ -25,6 +29,7 @@ private slots:
     void resolvedFontFollowsTokens();
     void managerLoadsBuiltinAndRejectsUnknown();
     void managerKeepsCurrentThemeOnFailure();
+    void managerReloadsUserOverrideWhenTheFileChanges();
 };
 
 void TestTheme::parsesColorsMetricsAndFonts()
@@ -299,6 +304,55 @@ void TestTheme::managerKeepsCurrentThemeOnFailure()
     QVERIFY(!m.load(QString()));
     QCOMPARE(m.theme().color(QStringLiteral("background")), before);
     QVERIFY(!m.lastErrors().isEmpty());
+}
+
+void TestTheme::managerReloadsUserOverrideWhenTheFileChanges()
+{
+    QStandardPaths::setTestModeEnabled(true);
+    const QString dir = ThemeManager::userThemeDirectory();
+    QVERIFY(QDir().mkpath(dir));
+    const QString path = dir + QStringLiteral("/slate.theme");
+    QFile src(QStringLiteral(":/themes/slate.theme"));
+    QVERIFY(src.open(QIODevice::ReadOnly | QIODevice::Text));
+    QString text = QString::fromUtf8(src.readAll());
+    auto write = [&](const QString& accent) {
+        QString copy = text;
+        const QRegularExpression re(QStringLiteral("^color\\.accent = .*$"), QRegularExpression::MultilineOption);
+        QVERIFY(copy.contains(re));
+        copy.replace(re, QStringLiteral("color.accent = %1").arg(accent));
+        QFile out(path);
+        QVERIFY(out.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text));
+        out.write(copy.toUtf8());
+        out.close();
+    };
+    write(QStringLiteral("#112233"));
+
+    ThemeManager m;
+    QSignalSpy changed(&m, &ThemeManager::themeChanged);
+    QVERIFY(m.load(QStringLiteral("slate")));
+    QVERIFY(m.isUserOverride());
+    QCOMPARE(m.theme().color(QStringLiteral("accent")), QColor(0x11, 0x22, 0x33));
+    QCOMPARE(changed.count(), 1);
+
+    // Editing the file on disk reloads it without any call.
+    write(QStringLiteral("#445566"));
+    QTRY_COMPARE_WITH_TIMEOUT(changed.count(), 2, 5000);
+    QCOMPARE(m.theme().color(QStringLiteral("accent")), QColor(0x44, 0x55, 0x66));
+    QVERIFY(m.isUserOverride());
+
+    // A broken override falls back to the built-in copy and reports it.
+    QSignalSpy failed(&m, &ThemeManager::loadFailed);
+    QFile broken(path);
+    QVERIFY(broken.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text));
+    broken.write("name = Broken\ncolor.background = nope\n");
+    broken.close();
+    QTRY_VERIFY_WITH_TIMEOUT(failed.count() >= 1, 5000);
+    QVERIFY(m.load(QStringLiteral("slate")));
+    QVERIFY(!m.isUserOverride());
+    QCOMPARE(m.theme().name(), QStringLiteral("Slate"));
+
+    QVERIFY(QFile::remove(path));
+    QStandardPaths::setTestModeEnabled(false);
 }
 
 QTEST_MAIN(TestTheme)
