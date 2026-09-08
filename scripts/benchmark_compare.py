@@ -1,4 +1,13 @@
-"""Compare render benchmarks from two revisions on the same host."""
+"""Compare benchmarks from two revisions on the same host.
+
+A shared runner's timings wander by a few per cent between runs, so a
+median that moved past the threshold is not on its own evidence of a
+regression: at forty nanoseconds a block, five per cent is two
+nanoseconds. A run counts as a regression when the median moved past the
+threshold and the two samples separate, meaning the candidate's lower
+quartile sits at or above the baseline's upper quartile. Noise fails the
+second test; a real slowdown passes both.
+"""
 import json
 import math
 import pathlib
@@ -7,55 +16,100 @@ import statistics
 import subprocess
 import sys
 
+# Benchmarks compared, each with the name it prints its figure under.
+BENCHMARKS = (
+    ("render", "render_ns_per_block"),
+    ("mixer", "mixer_ns_per_block"),
+)
+THRESHOLD = 1.05
+SAMPLES = 21
+
+
+def quantile(values, fraction):
+    """Linearly interpolated quantile, so small samples still separate."""
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = fraction * (len(ordered) - 1)
+    low = math.floor(position)
+    high = math.ceil(position)
+    if low == high:
+        return ordered[low]
+    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
 
 def regression(baseline, candidate):
+    """True when the candidate is slower past the threshold and the two
+    samples do not overlap."""
     if not baseline or not candidate:
         raise ValueError("empty benchmark sample")
     if any(not math.isfinite(value) or value <= 0 for value in baseline + candidate):
         raise ValueError("invalid benchmark sample")
-    return statistics.median(candidate) > statistics.median(baseline) * 1.05
+    moved = statistics.median(candidate) > statistics.median(baseline) * THRESHOLD
+    separated = quantile(candidate, 0.25) >= quantile(baseline, 0.75)
+    return moved and separated
 
 
-def build(root):
+def build(root, name):
     subprocess.run([sys.executable, "-B", "scripts/bootstrap.py"], cwd=root, check=True)
     output = subprocess.check_output([
-        "cargo", "bench", "--locked", "--bench", "render", "--no-run",
+        "cargo", "bench", "--locked", "--bench", name, "--no-run",
         "--message-format=json",
     ], cwd=root, text=True)
     for line in output.splitlines():
         item = json.loads(line)
         if item.get("reason") == "compiler-artifact" and item.get("executable"):
-            if item["target"]["name"] == "render":
+            if item["target"]["name"] == name:
                 return item["executable"]
-    raise RuntimeError("render benchmark executable missing")
+    raise RuntimeError(f"{name} benchmark executable missing")
 
 
-def measure(executable):
+def measure(executable, key):
     output = subprocess.check_output([executable], text=True)
-    match = re.search(r"render_ns_per_block=([0-9.]+)", output)
+    match = re.search(rf"{key}=([0-9.]+)", output)
     if not match:
-        raise RuntimeError("render benchmark measurement missing")
+        raise RuntimeError(f"{key} measurement missing")
     return float(match[1])
+
+
+def compare(root, name, key):
+    """Measures both revisions and reports whether the candidate regressed."""
+    baseline_binary = build(root, name)
+    candidate_binary = build(pathlib.Path.cwd(), name)
+    baseline, candidate = [], []
+    for index in range(SAMPLES):
+        # Alternate order to reduce systematic thermal and scheduling bias.
+        if index % 2:
+            candidate.append(measure(candidate_binary, key))
+            baseline.append(measure(baseline_binary, key))
+        else:
+            baseline.append(measure(baseline_binary, key))
+            candidate.append(measure(candidate_binary, key))
+    old, new = statistics.median(baseline), statistics.median(candidate)
+    print(f"{name} median: baseline={old:.2f} ns, candidate={new:.2f} ns")
+    print(f"{name} change: {(new / old - 1) * 100:+.2f}%")
+    print(
+        f"{name} spread: baseline upper quartile={quantile(baseline, 0.75):.2f} ns, "
+        f"candidate lower quartile={quantile(candidate, 0.25):.2f} ns"
+    )
+    slower = regression(baseline, candidate)
+    print(f"{name} verdict: {'regression' if slower else 'within noise'}")
+    return slower
 
 
 def main():
     if len(sys.argv) != 2:
         raise ValueError("expected baseline checkout directory")
-    baseline_binary = build(pathlib.Path(sys.argv[1]).resolve())
-    candidate_binary = build(pathlib.Path.cwd())
-    baseline, candidate = [], []
-    for index in range(21):
-        # Alternate order to reduce systematic thermal and scheduling bias.
-        if index % 2:
-            candidate.append(measure(candidate_binary))
-            baseline.append(measure(baseline_binary))
-        else:
-            baseline.append(measure(baseline_binary))
-            candidate.append(measure(candidate_binary))
-    old, new = statistics.median(baseline), statistics.median(candidate)
-    print(f"Render median: baseline={old:.2f} ns, candidate={new:.2f} ns")
-    print(f"Render change: {(new / old - 1) * 100:+.2f}%")
-    return regression(baseline, candidate)
+    root = pathlib.Path(sys.argv[1]).resolve()
+    failed = False
+    for name, key in BENCHMARKS:
+        # A benchmark the baseline does not carry cannot be compared.
+        if not (root / "benches" / f"{name}.rs").exists():
+            print(f"{name}: absent from the baseline, skipped")
+            continue
+        if compare(root, name, key):
+            failed = True
+    return failed
 
 
 if __name__ == "__main__":
