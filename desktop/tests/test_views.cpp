@@ -39,6 +39,22 @@
 
 using namespace nylon;
 
+namespace {
+// A grab from a widget carries the screen's device pixel ratio, so a
+// point in widget coordinates is not a pixel in the image. Every colour
+// check goes through this.
+QColor pixelAt(const QImage& image, int x, int y)
+{
+    const qreal ratio = image.devicePixelRatio();
+    return image.pixelColor(qRound(static_cast<qreal>(x) * ratio), qRound(static_cast<qreal>(y) * ratio));
+}
+
+QColor pixelAt(const QImage& image, const QPoint& point)
+{
+    return pixelAt(image, point.x(), point.y());
+}
+} // namespace
+
 class TestViews : public QObject {
     Q_OBJECT
 private slots:
@@ -59,6 +75,7 @@ private slots:
     void framelessWindowWithTitleBar();
     void saveOpenAndRecentThroughTheWindow();
     void arrangementGridFollowsTimeSignature();
+    void trackHeaderCarriesStateAndVolume();
     void detailClipPageHostsThePianoRoll();
 
 private:
@@ -92,7 +109,8 @@ void TestViews::emptyStateWhenNoTracks()
     const QImage img = w.sessionView()->viewport()->grab().toImage();
     QVERIFY(!img.isNull());
     // Inside the rounded panel outline the grid shows the panel color.
-    QCOMPARE(img.pixelColor(12, img.height() - 12), m_themes.theme().color(QStringLiteral("panel")));
+    QCOMPARE(pixelAt(img, 12, img.height() / img.devicePixelRatio() - 12),
+        m_themes.theme().color(QStringLiteral("panel")));
 }
 
 void TestViews::addTrackButtonGrowsBothViews()
@@ -118,9 +136,9 @@ void TestViews::addTrackButtonGrowsBothViews()
     // The title bar is filled with the track color; sample its middle,
     // away from the selection outline and the name text.
     const int headerMid = (slot.y() - 2) / 2;
-    QCOMPARE(img.pixelColor(slot.right() - 6, headerMid), m_themes.theme().trackColor(bridge.trackColorIndex(2)));
+    QCOMPARE(pixelAt(img, slot.right() - 6, headerMid), m_themes.theme().trackColor(bridge.trackColorIndex(2)));
     // Empty cells are shaded, so compare with a tolerance.
-    const QColor cell = img.pixelColor(slot.center());
+    const QColor cell = pixelAt(img, slot.center());
     const QColor base = m_themes.theme().color(QStringLiteral("session.slot"));
     QVERIFY2(qAbs(cell.red() - base.red()) <= 20 && qAbs(cell.green() - base.green()) <= 20
             && qAbs(cell.blue() - base.blue()) <= 20,
@@ -221,10 +239,10 @@ void TestViews::themeSwitchRepaintsWithNewTokens()
     QVERIFY(!lane.isEmpty());
     // Sample between grid lines; the lane center can coincide with a beat
     // line when platform font metrics change the viewport width.
-    QCOMPARE(img.pixelColor(lane.left() + 3, lane.center().y()),
+    QCOMPARE(pixelAt(img, lane.left() + 3, lane.center().y()),
         m_themes.theme().color(QStringLiteral("arrangement.lane")));
     // The track header carries a narrow color strip.
-    QCOMPARE(img.pixelColor(8, lane.y() + 10), m_themes.theme().trackColor(bridge.trackColorIndex(0)));
+    QCOMPARE(pixelAt(img, 8, lane.y() + 10), m_themes.theme().trackColor(bridge.trackColorIndex(0)));
     QVERIFY(m_themes.load(QStringLiteral("nylon")));
 }
 
@@ -638,10 +656,11 @@ void TestViews::framelessWindowWithTitleBar()
     // The window paints rounded: the very corner pixel stays transparent
     // while a pixel just inside is the background.
     const QImage img = w.grab().toImage();
-    QVERIFY(img.pixelColor(0, 0).alpha() < 255 || img.pixelColor(0, 0) != m_themes.theme().color(QStringLiteral("titlebar.background")));
+    QVERIFY(pixelAt(img, 0, 0).alpha() < 255
+        || pixelAt(img, 0, 0) != m_themes.theme().color(QStringLiteral("titlebar.background")));
     // Just inside the outline, above the window controls, the title band shows.
     const int r = m_themes.theme().metricInt(QStringLiteral("radius"));
-    QCOMPARE(img.pixelColor(r + 4, 3), m_themes.theme().color(QStringLiteral("titlebar.background")));
+    QCOMPARE(pixelAt(img, r + 4, 3), m_themes.theme().color(QStringLiteral("titlebar.background")));
 }
 
 void TestViews::saveOpenAndRecentThroughTheWindow()
@@ -728,19 +747,15 @@ void TestViews::arrangementGridFollowsTimeSignature()
     const QColor grid = t.color(QStringLiteral("arrangement.grid"));
     const QColor gridBar = t.color(QStringLiteral("arrangement.grid.bar"));
     QImage img = view->viewport()->grab().toImage();
-    const auto pixelAt = [&img](int x, int y) {
-        const qreal scale = img.devicePixelRatio();
-        return img.pixelColor(qRound(static_cast<qreal>(x) * scale), qRound(static_cast<qreal>(y) * scale));
-    };
     // In 4/4 the second beat line sits a quarter bar in; in 3/4 a third.
-    QCOMPARE(pixelAt(x0, lane.center().y()), t.color(QStringLiteral("playhead")));
-    QCOMPARE(pixelAt(view->barX(1), lane.center().y()), gridBar);
-    QCOMPARE(pixelAt(x0 + ppb / 4, lane.center().y()), grid);
+    QCOMPARE(pixelAt(img, x0, lane.center().y()), t.color(QStringLiteral("playhead")));
+    QCOMPARE(pixelAt(img, view->barX(1), lane.center().y()), gridBar);
+    QCOMPARE(pixelAt(img, x0 + ppb / 4, lane.center().y()), grid);
     QVERIFY(bridge.setTimeSignature(3, 4));
     QCOMPARE(view->beatsPerBar(), 3);
     img = view->viewport()->grab().toImage();
-    QCOMPARE(pixelAt(x0 + ppb / 3, lane.center().y()), grid);
-    QVERIFY(pixelAt(x0 + ppb / 4, lane.center().y()) != grid);
+    QCOMPARE(pixelAt(img, x0 + ppb / 3, lane.center().y()), grid);
+    QVERIFY(pixelAt(img, x0 + ppb / 4, lane.center().y()) != grid);
     view->setPlayheadBeats(6.0);
     QCOMPARE(view->playheadBeats(), 6.0);
     QCOMPARE(view->playheadX(), x0 + ppb * 2);
@@ -748,6 +763,55 @@ void TestViews::arrangementGridFollowsTimeSignature()
     QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x0 + ppb, 4));
     QCOMPARE(located.count(), 1);
     QCOMPARE(view->playheadBeats(), 3.0);
+}
+
+void TestViews::trackHeaderCarriesStateAndVolume()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    bridge.addTrack();
+    w.showArrangement();
+    QCoreApplication::processEvents();
+
+    ArrangementView* view = w.arrangementView();
+    const QRect slider = view->headerVolumeRect(0);
+    QVERIFY(!slider.isEmpty());
+    // The name sits above the controls, not beside them.
+    QVERIFY(view->headerNameRect(0).bottom() < slider.top());
+
+    // Dragging the slider changes the track's volume, and dragging it to
+    // the far left silences the track rather than leaving it near silent.
+    QCOMPARE(bridge.trackVolumeDb(0), 0.0);
+    QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, slider.center());
+    QVERIFY(bridge.trackVolumeDb(0) < 0.0);
+    QTest::mouseMove(view->viewport(), QPoint(slider.right(), slider.center().y()));
+    QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier,
+        QPoint(slider.right(), slider.center().y()));
+    QVERIFY(bridge.trackVolumeDb(0) > 0.0);
+
+    QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier,
+        QPoint(slider.left(), slider.center().y()));
+    QVERIFY(std::isinf(bridge.trackVolumeDb(0)));
+
+    // A release outside the header leaves the volume where the drag left
+    // it rather than following the pointer forever.
+    const double held = bridge.trackVolumeDb(0);
+    QTest::mouseMove(view->viewport(), QPoint(slider.right() + 40, slider.center().y()));
+    QCOMPARE(bridge.trackVolumeDb(0), held);
+
+    // The state buttons still answer to a click after the rearrangement,
+    // and they sit clear of the slider.
+    QVERIFY(!bridge.trackMuted(0));
+    QVERIFY(view->headerStateRect(0, 2).right() < slider.left());
+    QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, view->headerStateRect(0, 0).center());
+    QVERIFY(bridge.trackMuted(0));
+    QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, view->headerStateRect(0, 1).center());
+    QVERIFY(bridge.trackSolo(0));
+    QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, view->headerStateRect(0, 2).center());
+    QVERIFY(bridge.trackArmed(0));
 }
 
 void TestViews::detailClipPageHostsThePianoRoll()

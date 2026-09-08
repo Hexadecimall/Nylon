@@ -27,6 +27,12 @@ public:
     // Rectangle of a lane body (excluding the header) in viewport
     // coordinates, or an empty rect when out of range.
     QRect laneRect(int track) const;
+    // Rectangles inside a track header, in viewport coordinates. Empty
+    // when the track is not laid out.
+    QRect headerVolumeRect(int track) const;
+    QRect headerNameRect(int track) const;
+    // Mute, solo and record buttons, in that order.
+    QRect headerStateRect(int track, int button) const;
     bool isShowingEmptyState() const;
     int selectedTrack() const { return m_selected; }
     double playheadBeats() const { return m_playheadBeats; }
@@ -44,6 +50,8 @@ protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
 
 private:
     void updateScrollRanges();
@@ -53,11 +61,15 @@ private:
     int headerWidth() const;
     int pixelsPerBar() const;
     int trackAt(int y) const;
-    QRect headerButtonRect(int track, int button) const;
+    QRect headerRect(int track) const;
+    // Applies a volume drag at a point inside the header.
+    void dragVolume(int track, int x);
 
     ProjectBridge* m_bridge;
     const Theme* m_theme;
     int m_selected = -1;
+    // Track whose volume slider is being dragged, or -1.
+    int m_volumeDrag = -1;
     double m_playheadBeats = 0.0;
 };
 

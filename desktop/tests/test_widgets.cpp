@@ -10,6 +10,16 @@
 
 using namespace nylon;
 
+namespace {
+// A grab carries the screen's device pixel ratio, so a point in widget
+// coordinates is not a pixel in the image.
+QColor pixelAt(const QImage& image, int x, int y)
+{
+    const qreal ratio = image.devicePixelRatio();
+    return image.pixelColor(qRound(static_cast<qreal>(x) * ratio), qRound(static_cast<qreal>(y) * ratio));
+}
+} // namespace
+
 class TestWidgets : public QObject {
     Q_OBJECT
 private slots:
@@ -160,18 +170,18 @@ void TestWidgets::flatButtonPaintsActiveColor()
         return qAbs(a.red() - b.red()) <= 40 && qAbs(a.green() - b.green()) <= 40 && qAbs(a.blue() - b.blue()) <= 40;
     };
     QImage off = b.grab().toImage();
-    QVERIFY2(near(off.pixelColor(6, 10), t.color(QStringLiteral("control.background"))),
-        qPrintable(off.pixelColor(6, 10).name()));
+    QVERIFY2(near(pixelAt(off, 6, 10), t.color(QStringLiteral("control.background"))),
+        qPrintable(pixelAt(off, 6, 10).name()));
     b.setChecked(true);
     QImage on = b.grab().toImage();
-    QVERIFY2(near(on.pixelColor(6, 10), t.color(QStringLiteral("state.solo"))), qPrintable(on.pixelColor(6, 10).name()));
-    QVERIFY(!near(on.pixelColor(6, 10), t.color(QStringLiteral("control.background"))));
+    QVERIFY2(near(pixelAt(on, 6, 10), t.color(QStringLiteral("state.solo"))), qPrintable(pixelAt(on, 6, 10).name()));
+    QVERIFY(!near(pixelAt(on, 6, 10), t.color(QStringLiteral("control.background"))));
     b.setChecked(false);
     b.setProminent(true);
     QVERIFY(b.isProminent());
     QImage prominent = b.grab().toImage();
-    QVERIFY2(near(prominent.pixelColor(6, 10), t.color(QStringLiteral("accent"))),
-        qPrintable(prominent.pixelColor(6, 10).name()));
+    QVERIFY2(near(pixelAt(prominent, 6, 10), t.color(QStringLiteral("accent"))),
+        qPrintable(pixelAt(prominent, 6, 10).name()));
     b.setGlyph(FlatButton::Glyph::Play);
     b.setText(QString());
     b.setSquare(24);

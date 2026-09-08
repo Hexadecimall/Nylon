@@ -4,6 +4,7 @@
 #include "PanelPaint.h"
 #include "ProjectBridge.h"
 #include "Theme.h"
+#include "widgets/Fader.h"
 
 #include <QPaintEvent>
 #include <QMouseEvent>
@@ -16,6 +17,22 @@
 namespace nylon {
 
 using namespace layout;
+
+namespace {
+// Track header geometry. A header reads as two rows: name and kind on
+// top, state buttons and level below.
+constexpr int kHeaderMargin = 7;
+constexpr int kHeaderGap = 5;
+constexpr int kHeaderBandLeft = 6;
+constexpr int kHeaderBandWidth = 12;
+constexpr int kHeaderBadgeWidth = 52;
+constexpr int kHeaderReadoutWidth = 54;
+constexpr int kHeaderSliderMinimum = 24;
+// The volume slider spans the same range a mixer fader does.
+constexpr double kHeaderMinimumDb = -70.0;
+constexpr double kHeaderMaximumDb = 6.0;
+const double kInfinity = std::numeric_limits<double>::infinity();
+} // namespace
 
 ArrangementView::ArrangementView(ProjectBridge* bridge, const Theme* theme, QWidget* parent)
     : QAbstractScrollArea(parent)
@@ -130,13 +147,68 @@ int ArrangementView::trackAt(int y) const
     return static_cast<int>(track);
 }
 
-QRect ArrangementView::headerButtonRect(int track, int button) const
+QRect ArrangementView::headerRect(int track) const
 {
-    if (track < 0 || track >= laneCount() || button < 0 || button > 2) return QRect();
+    if (track < 0 || track >= laneCount()) {
+        return QRect();
+    }
     const int y = rulerHeight() + separator() + track * (laneHeight() + separator())
         - verticalScrollBar()->value();
-    const int h = qMin(20, laneHeight() / 3);
-    return QRect(18 + button * (h + 5), y + laneHeight() - h - 7, h, h);
+    return QRect(0, y, headerWidth(), laneHeight());
+}
+
+QRect ArrangementView::headerStateRect(int track, int button) const
+{
+    const QRect header = headerRect(track);
+    if (header.isNull() || button < 0 || button > 2) {
+        return QRect();
+    }
+    // The controls sit on a second row under the name, the way a track
+    // header reads in an arrangement: name and kind above, state and
+    // level below.
+    const int size = qBound(12, header.height() / 3, 20);
+    const int top = header.bottom() - size - kHeaderMargin + 1;
+    return QRect(kHeaderBandWidth + kHeaderMargin + button * (size + kHeaderGap), top, size, size);
+}
+
+QRect ArrangementView::headerNameRect(int track) const
+{
+    const QRect header = headerRect(track);
+    if (header.isNull()) {
+        return QRect();
+    }
+    const int left = kHeaderBandWidth + kHeaderMargin;
+    const int height = qBound(14, header.height() / 3, 24);
+    return QRect(left, header.top() + kHeaderMargin, qMax(0, header.width() - left - kHeaderBadgeWidth - kHeaderMargin),
+        height);
+}
+
+QRect ArrangementView::headerVolumeRect(int track) const
+{
+    const QRect header = headerRect(track);
+    const QRect last = headerStateRect(track, 2);
+    if (header.isNull() || last.isNull()) {
+        return QRect();
+    }
+    const int left = last.right() + kHeaderGap + 1;
+    const int right = header.right() - kHeaderMargin - kHeaderReadoutWidth;
+    if (right - left < kHeaderSliderMinimum) {
+        return QRect();
+    }
+    const int height = qMax(4, last.height() / 3);
+    return QRect(left, last.center().y() - height / 2 + 1, right - left, height);
+}
+
+void ArrangementView::dragVolume(int track, int x)
+{
+    const QRect slider = headerVolumeRect(track);
+    if (slider.isNull() || slider.width() <= 0) {
+        return;
+    }
+    const double position = qBound(0.0, static_cast<double>(x - slider.left()) / slider.width(), 1.0);
+    const double db = Fader::decibelsForPosition(position, kHeaderMinimumDb, kHeaderMaximumDb);
+    m_bridge->setTrackVolumeDb(static_cast<quint64>(track), db <= kHeaderMinimumDb ? -kInfinity : db);
+    viewport()->update();
 }
 
 void ArrangementView::selectTrack(int track)
@@ -178,13 +250,38 @@ void ArrangementView::mousePressEvent(QMouseEvent* event)
     emit trackSelected(track);
     if (point.x() < headerWidth()) {
         const quint64 index = static_cast<quint64>(track);
-        if (headerButtonRect(track, 0).contains(point))
+        const QRect slider = headerVolumeRect(track);
+        if (headerStateRect(track, 0).contains(point)) {
             m_bridge->setTrackMuted(index, !m_bridge->trackMuted(index));
-        else if (headerButtonRect(track, 1).contains(point))
+        } else if (headerStateRect(track, 1).contains(point)) {
             m_bridge->setTrackSolo(index, !m_bridge->trackSolo(index));
-        else if (headerButtonRect(track, 2).contains(point))
+        } else if (headerStateRect(track, 2).contains(point)) {
             m_bridge->setTrackArmed(index, !m_bridge->trackArmed(index));
+        } else if (!slider.isNull() && slider.adjusted(0, -6, 0, 6).contains(point)) {
+            m_volumeDrag = track;
+            dragVolume(track, point.x());
+        }
     }
+    event->accept();
+}
+
+void ArrangementView::mouseMoveEvent(QMouseEvent* event)
+{
+    if (m_volumeDrag < 0) {
+        QAbstractScrollArea::mouseMoveEvent(event);
+        return;
+    }
+    dragVolume(m_volumeDrag, event->position().toPoint().x());
+    event->accept();
+}
+
+void ArrangementView::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (m_volumeDrag < 0) {
+        QAbstractScrollArea::mouseReleaseEvent(event);
+        return;
+    }
+    m_volumeDrag = -1;
     event->accept();
 }
 
@@ -313,39 +410,85 @@ void ArrangementView::paintEvent(QPaintEvent* event)
 
     // Track headers, drawn after the grid so they cover scrolled content.
     if (anyLane) {
+        const QColor raised = m_theme->color(QStringLiteral("raised"));
+        const QColor control = m_theme->color(QStringLiteral("control.background"));
         for (qint64 t = firstLane; t <= lastLane; ++t) {
-            const int y = static_cast<int>(lanesTop + t * (lh + sep) - scrollY);
-            const QRect header(0, y, hw, lh);
-            p.fillRect(header, t == m_selected ? m_theme->color(QStringLiteral("raised")) : panel);
-            const int colorIndex = m_bridge->trackColorIndex(static_cast<quint64>(t));
-            const QColor trackColor = m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16));
-            p.fillPath(paint::rounded(*m_theme, QRectF(6, y + 7, 6, lh - 14)), trackColor);
-            const QRect title(18, y + 5, hw - 62, qMin(24, lh / 2));
-            p.setPen(primary);
-            p.drawText(title.adjusted(textInset, 0, -textInset, 0), Qt::AlignLeft | Qt::AlignVCenter,
-                p.fontMetrics().elidedText(m_bridge->trackName(static_cast<quint64>(t)), Qt::ElideRight,
-                    title.width() - 2 * textInset));
+            const int track = static_cast<int>(t);
+            const quint64 index = static_cast<quint64>(t);
+            const QRect header = headerRect(track);
+            const bool selected = track == m_selected;
+            p.fillRect(header, selected ? raised : panel);
+            const int colorIndex = m_bridge->trackColorIndex(index);
+            const QColor trackColor = m_theme->trackColor(colorIndex >= 0 ? colorIndex : track % 16);
+            // The colour band names the track at a glance, and widens on
+            // the selected track so the selection reads from across the
+            // window.
+            const int bandWidth = selected ? band + 3 : band;
+            p.fillPath(paint::rounded(*m_theme,
+                           QRectF(kHeaderBandLeft, header.top() + 6, bandWidth, header.height() - 12)),
+                trackColor);
+
+            const QRect name = headerNameRect(track);
+            // The number keeps a row identifiable when names repeat.
+            const QRect number(name.left(), name.top(), kHeaderBadgeWidth / 2, name.height());
             p.setPen(secondary);
-            p.drawText(QRect(hw - 68, y + 5, 60, title.height()), Qt::AlignRight | Qt::AlignVCenter,
-                ProjectBridge::kindName(m_bridge->trackKind(static_cast<quint64>(t))).toUpper());
-            const bool states[] = {m_bridge->trackMuted(static_cast<quint64>(t)),
-                m_bridge->trackSolo(static_cast<quint64>(t)), m_bridge->trackArmed(static_cast<quint64>(t))};
+            p.drawText(number, Qt::AlignLeft | Qt::AlignVCenter, QString::number(track + 1));
+            const int numberWidth = p.fontMetrics().horizontalAdvance(QStringLiteral("00")) + kHeaderGap;
+            const QRect title = name.adjusted(numberWidth, 0, 0, 0);
+            p.setPen(primary);
+            p.drawText(title, Qt::AlignLeft | Qt::AlignVCenter,
+                p.fontMetrics().elidedText(m_bridge->trackName(index), Qt::ElideRight, title.width()));
+
+            // Kind badge, right aligned on the first row.
+            const QRect badge(header.right() - kHeaderBadgeWidth - kHeaderMargin, name.top(),
+                kHeaderBadgeWidth, name.height());
+            p.fillPath(paint::rounded(*m_theme, QRectF(badge)), control);
+            p.setPen(secondary);
+            p.drawText(badge, Qt::AlignCenter,
+                ProjectBridge::kindName(m_bridge->trackKind(index)).toUpper());
+
+            const bool states[] = {m_bridge->trackMuted(index), m_bridge->trackSolo(index),
+                m_bridge->trackArmed(index)};
             const QString labels[] = {tr("M"), tr("S"), tr("R")};
-            const QString keys[] = {QStringLiteral("control.hover"), QStringLiteral("state.solo"), QStringLiteral("state.arm")};
+            const QString keys[] = {QStringLiteral("state.mute"), QStringLiteral("state.solo"),
+                QStringLiteral("state.arm")};
             for (int button = 0; button < 3; ++button) {
-                const QRect rect = headerButtonRect(static_cast<int>(t), button);
+                const QRect rect = headerStateRect(track, button);
                 p.fillPath(paint::rounded(*m_theme, QRectF(rect)),
                     m_theme->color(states[button] ? keys[button] : QStringLiteral("control.background")));
                 p.setPen(states[button] ? m_theme->color(QStringLiteral("accent.text")) : secondary);
                 p.drawText(rect, Qt::AlignCenter, labels[button]);
             }
+
+            // Volume, as a slider that can be dragged rather than a number
+            // that can only be read.
+            const double db = m_bridge->trackVolumeDb(index);
+            const QRect slider = headerVolumeRect(track);
+            if (!slider.isNull()) {
+                p.fillPath(paint::rounded(*m_theme, QRectF(slider)), control);
+                const double position = std::isinf(db) && db < 0.0
+                    ? 0.0
+                    : Fader::positionForDecibels(db, kHeaderMinimumDb, kHeaderMaximumDb);
+                const int filled = qRound(position * slider.width());
+                if (filled > 0) {
+                    QColor fill = trackColor;
+                    fill.setAlpha(selected ? 255 : 200);
+                    p.fillPath(paint::rounded(*m_theme,
+                                   QRectF(slider.left(), slider.top(), filled, slider.height())),
+                        fill);
+                }
+                const int handleX = slider.left() + filled;
+                p.fillPath(paint::rounded(*m_theme,
+                               QRectF(handleX - 2, slider.top() - 4, 4, slider.height() + 8)),
+                    primary);
+            }
             p.setPen(secondary);
-            const double db = m_bridge->trackVolumeDb(static_cast<quint64>(t));
-            p.drawText(QRect(hw - 76, y + lh - 27, 68, 20), Qt::AlignRight | Qt::AlignVCenter,
-                std::isinf(db) ? tr("-inf dB") : tr("%1 dB").arg(db, 0, 'f', 1));
-            Q_UNUSED(band);
-            Q_UNUSED(primary);
-            p.fillRect(QRect(hw, y, sep, lh), sepColor);
+            const QRect readout(header.right() - kHeaderReadoutWidth - kHeaderMargin + 2,
+                headerStateRect(track, 0).top(), kHeaderReadoutWidth, headerStateRect(track, 0).height());
+            p.drawText(readout, Qt::AlignRight | Qt::AlignVCenter,
+                std::isinf(db) ? tr("-inf") : tr("%1 dB").arg(db, 0, 'f', 1));
+
+            p.fillRect(QRect(hw, header.top(), sep, header.height()), sepColor);
         }
     }
 

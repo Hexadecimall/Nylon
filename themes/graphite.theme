@@ -76,6 +76,7 @@ metric.arrangement.header.band = 3
 
 # Panels and controls
 color.state.on = #D7B542
+color.state.mute = #D0982F
 color.state.solo = #47B0C6
 color.state.arm = #D25454
 color.state.play = #68AF78

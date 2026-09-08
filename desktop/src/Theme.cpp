@@ -210,7 +210,7 @@ const QStringList& Theme::requiredColors()
         for (int i = 1; i <= 16; ++i) {
             k.append(QStringLiteral("track.%1").arg(i));
         }
-        for (const char* extra : {"state.on", "state.solo", "state.arm", "state.play", "state.record",
+        for (const char* extra : {"state.on", "state.mute", "state.solo", "state.arm", "state.play", "state.record",
                  "state.loop", "browser.background", "browser.selection", "browser.header",
                  "detail.background", "mixer.background", "fader.track", "fader.fill", "fader.handle",
                  "knob.track", "knob.arc", "meter.background", "clip.empty.hover", "track.text", "lcd.background",
