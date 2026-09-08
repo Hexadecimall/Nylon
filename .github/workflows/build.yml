@@ -134,13 +134,33 @@ jobs:
           echo "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin" >> "$GITHUB_PATH"
           echo "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64/bin" >> "$GITHUB_PATH"
       - run: cargo build --locked --release
+      - name: Locate the target kit's qtpaths
+        # A cross-compiled kit is deployed with the host kit's windeployqt,
+        # which needs the target kit's qtpaths. A native kit needs neither.
+        run: |
+          qtpaths=""
+          if [ "${{ matrix.qt_dir }}" != "msvc2022_64" ]; then
+            for candidate in qtpaths.bat qtpaths6.bat qtpaths.exe qtpaths6.exe; do
+              path="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin/$candidate"
+              if [ -f "$path" ]; then
+                qtpaths="$path"
+                break
+              fi
+            done
+            if [ -z "$qtpaths" ]; then
+              echo "no qtpaths found in the target kit" >&2
+              ls "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin" >&2
+              exit 1
+            fi
+          fi
+          echo "NYLON_QTPATHS=$qtpaths" >> "$GITHUB_ENV"
       - name: Configure
         run: >
           cmake -S desktop -B target/desktop -A ${{ matrix.cmake_platform }}
           -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}"
           -DQT_HOST_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64"
           -DNYLON_WINDEPLOYQT="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64/bin/windeployqt.exe"
-          -DNYLON_WINDEPLOYQT_QTPATHS="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin/qtpaths.bat"
+          -DNYLON_WINDEPLOYQT_QTPATHS="$NYLON_QTPATHS"
       - run: cmake --build target/desktop --config Release --parallel 2
       - run: ctest --test-dir target/desktop -C Release --output-on-failure --timeout 600
       - name: Show Qt test logs
