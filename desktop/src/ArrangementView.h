@@ -21,6 +21,11 @@ public:
     // layout::kMaxExtent.
     int laneCount() const;
     int barCount() const;
+    // X coordinate of the start of a bar in viewport space, or -1 when the
+    // bar is not laid out.
+    int barX(int bar) const;
+    // Beat lines drawn inside each bar, from the project's time signature.
+    int beatsPerBar() const;
     // Rectangle of a lane body (excluding the header) in viewport
     // coordinates, or an empty rect when out of range.
     QRect laneRect(int track) const;

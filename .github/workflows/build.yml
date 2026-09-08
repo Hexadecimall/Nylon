@@ -79,11 +79,13 @@ jobs:
       - name: Install portable layout
         run: cmake --install target/desktop --prefix target/package
       - name: Verify the installed application starts
+        # The portable layout ships no offscreen plugin; the headless smoke
+        # test borrows it from the system Qt.
         run: |
+          plugins="$(qtpaths6 --plugin-dir)"
           cd "${{ runner.temp }}"
-          QT_QPA_PLATFORM=offscreen "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon" --tracks 2 --screenshot "${{ runner.temp }}/installed.png"
-        env:
-          QT_PLUGIN_PATH: /usr/lib/${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}-linux-gnu/qt6/plugins
+          QT_QPA_PLATFORM=offscreen QT_PLUGIN_PATH="$plugins" \
+            "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon" --tracks 2 --screenshot "${{ runner.temp }}/installed.png"
       - name: Package
         run: tar -C target/package -czf target/nylon-linux-${{ matrix.arch }}.tar.gz Nylon
       - uses: actions/upload-artifact@v4

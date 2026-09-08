@@ -72,6 +72,20 @@ int ArrangementView::barCount() const
     return static_cast<int>(layoutCount(requested, pixelsPerBar(), headerWidth() + separator()));
 }
 
+int ArrangementView::beatsPerBar() const
+{
+    return qBound(1, m_bridge->timeSignatureNumerator(), 64);
+}
+
+int ArrangementView::barX(int bar) const
+{
+    if (bar < 0 || bar >= barCount()) {
+        return -1;
+    }
+    const qint64 x = headerWidth() + separator() + qint64(bar) * pixelsPerBar() - horizontalScrollBar()->value();
+    return fitsCoordinate(x) ? static_cast<int>(x) : -1;
+}
+
 bool ArrangementView::isShowingEmptyState() const
 {
     return m_bridge->trackCount() == 0;
@@ -146,6 +160,8 @@ void ArrangementView::paintEvent(QPaintEvent* event)
     const bool anyLane = visibleRange(lanes, lh, lh + sep, lanesTop, scrollY, viewH, &firstLane, &lastLane);
     qint64 firstBar = 0, lastBar = -1;
     const bool anyBar = visibleRange(bars, ppb, ppb, timelineX, scrollX, viewW, &firstBar, &lastBar);
+    // Beat subdivisions follow the project's time signature.
+    const int beatsPerBar = qBound(1, m_bridge->timeSignatureNumerator(), 64);
 
     // Lane bodies.
     if (anyLane) {
@@ -166,8 +182,8 @@ void ArrangementView::paintEvent(QPaintEvent* event)
             if (x >= timelineX && x <= viewW) {
                 p.fillRect(QRect(x, gridTop, sep, gridH), gridBar);
             }
-            for (int beat = 1; beat < 4; ++beat) {
-                const int bx = x + (beat * ppb) / 4;
+            for (int beat = 1; beat < beatsPerBar; ++beat) {
+                const int bx = x + (beat * ppb) / beatsPerBar;
                 if (bx >= timelineX && bx <= viewW) {
                     p.fillRect(QRect(bx, gridTop, sep, gridH), grid);
                 }

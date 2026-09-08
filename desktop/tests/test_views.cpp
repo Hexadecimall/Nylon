@@ -27,6 +27,7 @@
 #include <QListWidget>
 #include <QFile>
 #include <QScrollBar>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QtTest>
 
@@ -55,6 +56,7 @@ private slots:
     void browserShowsLibraryCategories();
     void framelessWindowWithTitleBar();
     void saveOpenAndRecentThroughTheWindow();
+    void arrangementGridFollowsTimeSignature();
 
 private:
     ThemeManager m_themes;
@@ -62,6 +64,8 @@ private:
 
 void TestViews::initTestCase()
 {
+    QStandardPaths::setTestModeEnabled(true);
+    QSettings().clear();
     QVERIFY(m_themes.load(QStringLiteral("nylon")));
 }
 
@@ -233,7 +237,6 @@ void TestViews::extremeMetricsStayWithinIntRange()
 {
     // Write a user override that keeps every color but pushes the layout
     // metrics to the accepted maximum, then load it through the manager.
-    QStandardPaths::setTestModeEnabled(true);
     const QString dir = ThemeManager::userThemeDirectory();
     QVERIFY(QDir().mkpath(dir));
     QFile src(QStringLiteral(":/themes/nylon.theme"));
@@ -323,7 +326,6 @@ void TestViews::extremeMetricsStayWithinIntRange()
     QVERIFY2(timer.elapsed() < 5000, qPrintable(QString::number(timer.elapsed())));
 
     QVERIFY(QFile::remove(dir + QStringLiteral("/extreme.theme")));
-    QStandardPaths::setTestModeEnabled(false);
 }
 
 void TestViews::transportSpacingFollowsTokens()
@@ -657,6 +659,38 @@ void TestViews::saveOpenAndRecentThroughTheWindow()
     QVERIFY(StartScreen::recentProjects().isEmpty());
     QVERIFY(!clear->isEnabled());
     QStandardPaths::setTestModeEnabled(false);
+}
+
+void TestViews::arrangementGridFollowsTimeSignature()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    bridge.addTrack();
+    w.showArrangement();
+    ArrangementView* view = w.arrangementView();
+    QCOMPARE(view->beatsPerBar(), 4);
+    const nylon::Theme& t = m_themes.theme();
+    const int ppb = t.metricInt(QStringLiteral("arrangement.pixels_per_bar"));
+    const int x0 = view->barX(0);
+    QVERIFY(x0 >= 0);
+    QCOMPARE(view->barX(1) - x0, ppb);
+    QCOMPARE(view->barX(view->barCount()), -1);
+
+    const QRect lane = view->laneRect(0);
+    const QColor grid = t.color(QStringLiteral("arrangement.grid"));
+    const QColor gridBar = t.color(QStringLiteral("arrangement.grid.bar"));
+    QImage img = view->viewport()->grab().toImage();
+    // In 4/4 the second beat line sits a quarter bar in; in 3/4 a third.
+    QCOMPARE(img.pixelColor(x0, lane.center().y()), gridBar);
+    QCOMPARE(img.pixelColor(x0 + ppb / 4, lane.center().y()), grid);
+    QVERIFY(bridge.setTimeSignature(3, 4));
+    QCOMPARE(view->beatsPerBar(), 3);
+    img = view->viewport()->grab().toImage();
+    QCOMPARE(img.pixelColor(x0 + ppb / 3, lane.center().y()), grid);
+    QVERIFY(img.pixelColor(x0 + ppb / 4, lane.center().y()) != grid);
 }
 
 QTEST_MAIN(TestViews)
