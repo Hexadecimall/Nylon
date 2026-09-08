@@ -9,6 +9,8 @@
 //! the machine allows, which is what a bounce needs and what the tests
 //! use. A platform backend renders in real time against a device clock.
 
+#[cfg(target_os = "macos")]
+pub mod coreaudio;
 pub mod offline;
 
 use core::fmt;
