@@ -31,8 +31,13 @@ target_include_directories(nylon_core INTERFACE "${_nylon_root}/bindings/c")
 # is linked statically.
 if(NOT _nylon_core_ext MATCHES "\\.(dylib|so|dll)$")
     if(APPLE)
+        # CoreFoundation, Security and iconv are what the Rust standard
+        # library needs; AudioToolbox and CoreAudio are what the audio
+        # backend calls into. A static core carries no record of them, so
+        # anything linking it has to name them.
         set_property(TARGET nylon_core PROPERTY INTERFACE_LINK_LIBRARIES
-            "-framework CoreFoundation" "-framework Security" "-liconv")
+            "-framework CoreFoundation" "-framework Security" "-liconv"
+            "-framework AudioToolbox" "-framework CoreAudio")
     elseif(WIN32)
         set_property(TARGET nylon_core PROPERTY INTERFACE_LINK_LIBRARIES
             ws2_32 userenv bcrypt ntdll advapi32 kernel32)
