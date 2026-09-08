@@ -17,37 +17,18 @@ inline void panel(QPainter& p, const Theme& theme, const QRect& rect, const QCol
     QPainterPath path;
     path.addRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
     p.fillPath(path, fill);
-    // Top-edge highlight gives the panel a lit upper edge.
-    p.save();
-    p.setClipPath(path);
-    p.fillRect(QRectF(rect.left(), rect.top(), rect.width(), 1.0), QColor(255, 255, 255, 14));
-    p.restore();
     p.setPen(QPen(theme.color(QStringLiteral("panel.border")), 1));
     p.setBrush(Qt::NoBrush);
     p.drawPath(path);
     p.restore();
 }
 
-// Fills a control shape with a vertical gradient (lighter at the top) and a
-// one-pixel highlight along the top edge, the depth cue used by every
-// button, field, and cap.
+// Fills a control shape with a flat surface and one-pixel outline.
 inline void control(QPainter& p, const Theme& theme, const QPainterPath& shape, const QColor& base, bool sunken = false)
 {
-    QLinearGradient g(shape.boundingRect().topLeft(), shape.boundingRect().bottomLeft());
-    if (sunken) {
-        g.setColorAt(0.0, base.darker(120));
-        g.setColorAt(1.0, base);
-    } else {
-        g.setColorAt(0.0, base.lighter(116));
-        g.setColorAt(1.0, base.darker(104));
-    }
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
-    p.fillPath(shape, g);
-    p.setClipPath(shape);
-    QColor edge = sunken ? QColor(0, 0, 0, 70) : QColor(255, 255, 255, 28);
-    const QRectF r = shape.boundingRect();
-    p.fillRect(QRectF(r.left(), r.top(), r.width(), 1.0), edge);
+    p.fillPath(shape, sunken ? base.darker(108) : base);
     p.restore();
     p.setPen(QPen(theme.color(QStringLiteral("control.border")), 1));
     p.setBrush(Qt::NoBrush);

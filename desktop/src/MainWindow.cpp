@@ -887,6 +887,8 @@ void MainWindow::buildMenus()
 void MainWindow::applyTheme(const Theme& theme)
 {
     qApp->setStyleSheet(theme.styleSheet());
+    const int border = qBound(0, theme.metricInt(QStringLiteral("window.border"), 1), 4);
+    setContentsMargins(border, border, border, border);
     m_titleBar->setTheme(&theme);
     const int gap = qBound(0, theme.metricInt(QStringLiteral("panel.gap"), 6), 32);
     if (auto* layout = m_workspace->layout()) {

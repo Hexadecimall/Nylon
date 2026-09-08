@@ -390,7 +390,7 @@ void PianoRoll::paintEvent(QPaintEvent*)
             continue;
         }
         const long beatIndex = std::lround(b);
-        const bool onBeat = std::abs(b - beatIndex) < 1e-9;
+        const bool onBeat = std::abs(b - static_cast<double>(beatIndex)) < 1e-9;
         const bool onBar = onBeat && beatIndex % beatsPerBar == 0;
         p.fillRect(QRect(x, m_rulerHeight, 1, view.height()), onBar ? gridBar : (onBeat ? grid : grid.darker(112)));
     }

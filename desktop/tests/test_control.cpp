@@ -31,9 +31,11 @@ private slots:
         QVERIFY(title->isVisible());
         QVERIFY(qAbs(title->geometry().center().x() - bar->rect().center().x()) <= 1);
         QVERIFY(bar->menuBar()->geometry().right() < title->geometry().left());
+        QCOMPARE(bar->menuBar()->geometry().center().y(), bar->rect().center().y());
         const auto close = bar->closeRect();
         QCOMPARE(close.center().y(), bar->minimizeRect().center().y());
         QCOMPARE(close.center().y(), bar->zoomRect().center().y());
+        QCOMPARE(close.center().y(), bar->rect().center().y());
         QSignalSpy zoom(bar, &nylon::TitleBar::zoomRequested);
         QTest::mouseMove(bar, bar->zoomRect().center());
         QCOMPARE(bar->closeRect(), close);
@@ -50,8 +52,10 @@ private slots:
         menu->popup(bar->mapToGlobal(QPoint(0, bar->height())));
         QTest::qWait(1);
         for (auto* action : menu->actions()) {
-            if (!action->isSeparator() && action->isVisible())
+            if (!action->isSeparator() && action->isVisible()) {
                 QCOMPARE(menu->actionAt(menu->actionGeometry(action).center()), action);
+                QVERIFY(menu->actionGeometry(action).height() <= bar->height());
+            }
         }
         if (!captures.isEmpty()) {
             QVERIFY(menu->grab().save(QDir(captures).filePath("file-menu.png")));
@@ -87,7 +91,8 @@ private slots:
         window.show();
         QTest::qWait(1);
         QVERIFY(!window.statusBar()->isVisible());
-        QCOMPARE(window.centralWidget()->geometry().bottom(), window.height() - 1);
+        QCOMPARE(window.centralWidget()->geometry().bottom(),
+            window.height() - window.contentsMargins().bottom() - 1);
         window.statusBar()->showMessage("Status");
         QVERIFY(window.statusBar()->isVisible());
         window.statusBar()->clearMessage();

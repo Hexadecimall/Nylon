@@ -1,6 +1,8 @@
 #include "ThemeManager.h"
 
 #include <QDir>
+#include <QCryptographicHash>
+#include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QStandardPaths>
@@ -15,6 +17,15 @@ static void initThemeResources()
 }
 
 namespace nylon {
+
+namespace {
+QByteArray fileDigest(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    return QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256);
+}
+} // namespace
 
 ThemeManager::ThemeManager(QObject* parent)
     : QObject(parent)
@@ -34,7 +45,8 @@ void ThemeManager::pollOverride()
     if (!info.exists()) {
         return;
     }
-    if (info.lastModified() != m_lastModified || info.size() != m_lastSize) {
+    const QByteArray digest = fileDigest(m_path);
+    if (info.lastModified() != m_lastModified || info.size() != m_lastSize || digest != m_lastDigest) {
         onFileChanged(m_path);
     }
 }
@@ -106,6 +118,7 @@ bool ThemeManager::loadFrom(const QString& name, const QString& path, bool fromU
     const QFileInfo info(path);
     m_lastModified = info.lastModified();
     m_lastSize = info.size();
+    m_lastDigest = fromUser ? fileDigest(path) : QByteArray();
     if (fromUser) {
         m_poll.start();
     } else {
@@ -141,6 +154,7 @@ void ThemeManager::onFileChanged(const QString& path)
     const QFileInfo info(path);
     m_lastModified = info.lastModified();
     m_lastSize = info.size();
+    m_lastDigest = fileDigest(path);
     QTimer::singleShot(100, this, [this, path] {
         if (QFileInfo::exists(path)) {
             loadFrom(m_name, path, true);

@@ -32,6 +32,7 @@ void TitleBar::setTheme(const Theme* theme)
 {
     m_theme = theme;
     const int h = theme->metricInt(QStringLiteral("titlebar.height"), 36);
+    m_menuBar->setFixedHeight(theme->metricInt(QStringLiteral("control.height"), 24));
     setFixedHeight(h);
     updateGeometry();
     update();
@@ -56,7 +57,7 @@ void TitleBar::updateGeometry()
     const int left = zoomRect().right() + 1 + pad * 2;
     const QSize menuSize = m_menuBar->sizeHint();
     const int menuWidth = qMin(menuSize.width(), qMax(0, width() - left - pad));
-    const int menuHeight = qMin(menuSize.height(), height());
+    const int menuHeight = qMin(m_menuBar->height(), height());
     m_menuBar->setGeometry(left, (height() - menuHeight) / 2, menuWidth, menuHeight);
     const int reserved = left + menuWidth + pad;
     const int titleWidth = qMax(0, width() - 2 * reserved);

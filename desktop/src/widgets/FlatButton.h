@@ -20,6 +20,8 @@ public:
     void setTheme(const Theme* theme);
     void setActiveColorKey(const QString& key);
     QString activeColorKey() const { return m_activeKey; }
+    void setProminent(bool prominent);
+    bool isProminent() const { return m_prominent; }
     void setGlyph(Glyph glyph);
     Glyph glyph() const { return m_glyph; }
     // Fixed size for square controls; zero keeps the size hint from text.
@@ -41,6 +43,7 @@ private:
     Glyph m_glyph = Glyph::None;
     int m_square = 0;
     bool m_hover = false;
+    bool m_prominent = false;
 };
 
 } // namespace nylon

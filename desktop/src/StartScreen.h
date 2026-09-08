@@ -10,9 +10,7 @@ namespace nylon {
 class FlatButton;
 class Theme;
 
-// First screen after launch: a centered launcher card with the actions to
-// create or open a project and the recent list. The card sizes to its
-// content; the surrounding canvas stays empty.
+// Project launcher with a compact action rail and a recent-project workspace.
 class StartScreen : public QWidget {
     Q_OBJECT
 public:
@@ -47,6 +45,8 @@ protected:
 private:
     const Theme* m_theme;
     QWidget* m_card;
+    QWidget* m_sidebar;
+    QWidget* m_recentPane;
     QLabel* m_title;
     QLabel* m_version;
     QLabel* m_tagline;

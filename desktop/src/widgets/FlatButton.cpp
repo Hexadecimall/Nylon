@@ -28,6 +28,12 @@ void FlatButton::setActiveColorKey(const QString& key)
     update();
 }
 
+void FlatButton::setProminent(bool prominent)
+{
+    m_prominent = prominent;
+    update();
+}
+
 void FlatButton::setGlyph(Glyph glyph)
 {
     m_glyph = glyph;
@@ -118,6 +124,9 @@ void FlatButton::paintEvent(QPaintEvent*)
     QColor text = m_theme->color(QStringLiteral("control.text"));
     if (!isEnabled()) {
         text = m_theme->color(QStringLiteral("control.disabled"));
+    } else if (m_prominent) {
+        fill = m_theme->color(QStringLiteral("accent"));
+        text = m_theme->color(QStringLiteral("accent.text"));
     } else if (isChecked()) {
         fill = m_theme->color(m_activeKey);
         text = m_theme->color(QStringLiteral("accent.text"));

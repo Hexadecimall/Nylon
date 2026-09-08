@@ -247,7 +247,8 @@ void TestTheme::resolvedFontFollowsTokens()
     QCOMPARE(f.pixelSize(), 13);
     QVERIFY(f.family() != QLatin1String("system"));
     if (QFontDatabase::families().isEmpty()) {
-        QSKIP("The platform has no fonts installed; family resolution cannot be checked.");
+        QTest::qSkip("The platform has no fonts installed; family resolution cannot be checked.", __FILE__, __LINE__);
+        return;
     }
     // Whatever was chosen must be installed, so the matcher never falls
     // back through alias resolution.

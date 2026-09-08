@@ -3,6 +3,7 @@
 #include "Theme.h"
 
 #include <QDateTime>
+#include <QByteArray>
 #include <QFileSystemWatcher>
 #include <QObject>
 #include <QStringList>
@@ -53,10 +54,11 @@ private:
     QStringList m_errors;
     QFileSystemWatcher m_watcher;
     // Watcher notifications are not delivered uniformly on every platform,
-    // so an active override is also polled for size and time changes.
+    // so an active override is also polled by content fingerprint.
     QTimer m_poll;
     QDateTime m_lastModified;
     qint64 m_lastSize = -1;
+    QByteArray m_lastDigest;
     void pollOverride();
 };
 

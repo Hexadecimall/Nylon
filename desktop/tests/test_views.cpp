@@ -376,10 +376,10 @@ void TestViews::startScreenThenWorkspace()
     QVERIFY(w.isStartScreenVisible());
     QVERIFY(w.startScreen()->newButton()->isEnabled());
     QVERIFY(w.startScreen()->openButton()->isEnabled());
-    // The launcher is a compact centered card, not a canvas-wide layout.
+    // The launcher uses the available canvas instead of floating a large card.
     const QRect card = w.startScreen()->cardRect();
-    QVERIFY(card.width() <= 700);
-    QVERIFY(card.height() <= w.startScreen()->height() - 80);
+    QVERIFY(card.width() >= w.startScreen()->width() - 4);
+    QVERIFY(card.height() >= w.startScreen()->height() - 4);
     QVERIFY(qAbs(card.center().x() - w.startScreen()->width() / 2) < 4);
     QVERIFY(card.contains(w.startScreen()->newButton()->geometry().translated(card.topLeft())));
     bridge.addTrack();
@@ -584,6 +584,8 @@ void TestViews::framelessWindowWithTitleBar()
     TitleBar* bar = w.titleBar();
     QVERIFY(bar);
     QCOMPARE(bar->height(), m_themes.theme().metricInt(QStringLiteral("titlebar.height")));
+    const int border = m_themes.theme().metricInt(QStringLiteral("window.border"));
+    QCOMPARE(w.contentsMargins(), QMargins(border, border, border, border));
     QVERIFY(bar->menuBar());
     QVERIFY(bar->menuBar()->isVisibleTo(bar));
     QVERIFY(bar->menuBar()->actions().size() >= 6);

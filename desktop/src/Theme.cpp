@@ -364,19 +364,23 @@ QString Theme::styleSheet() const
     const int ctrlH = qBound(kMinStyleControlHeight, metricInt(QStringLiteral("control.height"), 20), kMaxStyleControlHeight);
     const int radius = qBound(0, metricInt(QStringLiteral("radius"), 8), 32);
     const int radiusSmall = qBound(0, metricInt(QStringLiteral("radius.small"), 4), 16);
+    const int menuPad = qMax(2, pad - 2);
+    const int menuWidth = ctrlH * 8;
     return QStringLiteral(
         "QMainWindow, QDialog, QWidget#central { background: %BG; }"
         "QWidget { color: %TEXT; background: %BG; }"
+        "QWidget#titleBar { background: %TITLEBG; }"
+        "QLabel#windowTitle { color: %SECONDARY; font-weight: 600; }"
         "QMenuBar { background: transparent; color: %TEXT; border: none; padding: 0; }"
-        "QMenuBar::item { padding: %PADpx %PAD2px; background: transparent; border-radius: %RSMALLpx; }"
+        "QMenuBar::item { padding: %MENUPADpx %PAD2px; background: transparent; border-radius: %RSMALLpx; }"
         "QMenuBar::item:selected { background: %HOVER; }"
         "QMenuBar::item:pressed { background: %PRESSED; }"
-        "QMenu { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; border-radius: %RADIUSpx; padding: %PADpx; min-width: %MENUWpx; }"
-        "QMenu::item { padding: %PAD2px %PAD3px; border-radius: %RSMALLpx; }"
+        "QMenu { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; border-radius: %RADIUSpx; padding: %MENUPADpx; min-width: %MENUWpx; }"
+        "QMenu::item { padding: %MENUPADpx %PAD2px; border-radius: %RSMALLpx; }"
         "QMenu::item:selected { background: %ACCENT; color: %ACCENTTEXT; }"
         "QMenu::item:disabled { color: %DISABLED; }"
-        "QMenu::separator { height: %SEPpx; background: %SEPC; margin: %PADpx 0; }"
-        "QPushButton, QToolButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %CTRLHI, stop:1 %CTRLBG);"
+        "QMenu::separator { height: %SEPpx; background: %SEPC; margin: %MENUPADpx 0; }"
+        "QPushButton, QToolButton { background: %CTRLBG;"
         "  color: %CTRLTEXT; border: %SEPpx solid %BORDER;"
         "  border-radius: %RSMALLpx; padding: 0 %PAD2px; min-height: %CTRLHpx; max-height: %CTRLHpx; }"
         "QPushButton:hover, QToolButton:hover { background: %HOVER; }"
@@ -414,6 +418,7 @@ QString Theme::styleSheet() const
         "  selection-color: %ACCENTTEXT; border: %SEPpx solid %BORDER; }"
         "QDialog { background: %BG; }"
         "QWidget#startCard { background: transparent; }"
+        "QWidget#startSidebar, QWidget#startRecent { background: %PANEL; border: %SEPpx solid %BORDER; border-radius: %RADIUSpx; }"
         "QLabel#startTitle { color: %TEXT; }"
         "QLabel#panelTitle { color: %TEXT; font-weight: 600; padding: %PADpx %PAD2px; }"
         "QWidget#viewBar, QWidget#lowerDockHeader { background: %PANEL; border-top: %SEPpx solid %SEPC; }"
@@ -423,7 +428,9 @@ QString Theme::styleSheet() const
         "QLabel#detailTitle { color: %TEXT; padding-left: %PADpx; }"
         "QLabel#stripName { color: palette(window-text); }"
         "QSplitter::handle { background: %SEPC; }")
-        .replace(QLatin1String("%MENUW"), QString::number(ctrlH * 11))
+        .replace(QLatin1String("%MENUW"), QString::number(menuWidth))
+        .replace(QLatin1String("%MENUPAD"), QString::number(menuPad))
+        .replace(QLatin1String("%TITLEBG"), c("titlebar.background"))
         .replace(QLatin1String("%BROWSERBG"), c("browser.background"))
         .replace(QLatin1String("%BROWSERSEL"), c("browser.selection"))
         .replace(QLatin1String("%BG"), c("background"))
@@ -443,7 +450,6 @@ QString Theme::styleSheet() const
         .replace(QLatin1String("%DISABLED"), c("text.disabled"))
         .replace(QLatin1String("%ACCENTTEXT"), c("accent.text"))
         .replace(QLatin1String("%ACCENT"), c("accent"))
-        .replace(QLatin1String("%CTRLHI"), color(QStringLiteral("control.background")).lighter(118).name(QColor::HexArgb))
         .replace(QLatin1String("%CTRLBG"), c("control.background"))
         .replace(QLatin1String("%CTRLTEXT"), c("control.text"))
         .replace(QLatin1String("%BORDER"), c("control.border"))
