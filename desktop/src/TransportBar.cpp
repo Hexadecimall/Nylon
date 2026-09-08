@@ -2,100 +2,181 @@
 
 #include "ProjectBridge.h"
 #include "Theme.h"
+#include "widgets/FlatButton.h"
+#include "widgets/ValueBox.h"
 
-#include <QDoubleSpinBox>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QPushButton>
-#include <QSpacerItem>
-#include <QToolButton>
 
 namespace nylon {
 
-TransportBar::TransportBar(ProjectBridge* bridge, QWidget* parent)
+TransportBar::TransportBar(ProjectBridge* bridge, const Theme* theme, QWidget* parent)
     : QWidget(parent)
     , m_bridge(bridge)
-    , m_tempo(new QDoubleSpinBox(this))
-    , m_addTrack(new QPushButton(tr("Add Track"), this))
-    , m_undo(new QPushButton(tr("Undo"), this))
-    , m_redo(new QPushButton(tr("Redo"), this))
-    , m_session(new QToolButton(this))
-    , m_arrangement(new QToolButton(this))
+    , m_theme(theme)
+    , m_tempo(new ValueBox(theme, this))
+    , m_tap(new FlatButton(theme, this))
+    , m_numerator(new ValueBox(theme, this))
+    , m_denominator(new ValueBox(theme, this))
+    , m_metronome(new FlatButton(theme, this))
+    , m_position(new QLabel(this))
+    , m_play(new FlatButton(theme, this))
+    , m_stop(new FlatButton(theme, this))
+    , m_record(new FlatButton(theme, this))
+    , m_loop(new FlatButton(theme, this))
     , m_trackCount(new QLabel(this))
+    , m_session(new FlatButton(theme, this))
+    , m_arrangement(new FlatButton(theme, this))
 {
     setObjectName(QStringLiteral("transport"));
+    setAutoFillBackground(true);
 
     m_tempo->setObjectName(QStringLiteral("tempo"));
+    m_tempo->setRange(20.0, 999.0);
     m_tempo->setDecimals(2);
-    m_tempo->setRange(1.0, 9999.0);
-    m_tempo->setSingleStep(1.0);
-    m_tempo->setKeyboardTracking(false);
-    m_tempo->setSuffix(tr(" BPM"));
-    m_tempo->setToolTip(tr("Tempo"));
-    m_tempo->setAlignment(Qt::AlignRight);
+    m_tempo->setDefaultValue(120.0);
+    m_tempo->setStatusTip(tr("Tempo in beats per minute. Drag, or double-click to type."));
+
+    m_tap->setText(tr("Tap"));
+    m_tap->setStatusTip(tr("Tap tempo. Needs a running transport."));
+    m_tap->setToolTip(tr("Tap tempo is not available until playback exists."));
+
+    m_numerator->setObjectName(QStringLiteral("signatureNumerator"));
+    m_numerator->setRange(1.0, 99.0);
+    m_numerator->setDecimals(0);
+    m_numerator->setDragPixels(600);
+    m_numerator->setStatusTip(tr("Time signature beats per bar."));
+    m_denominator->setObjectName(QStringLiteral("signatureDenominator"));
+    m_denominator->setRange(1.0, 64.0);
+    m_denominator->setDecimals(0);
+    m_denominator->setDragPixels(600);
+    m_denominator->setStatusTip(tr("Time signature beat unit."));
+
+    m_metronome->setGlyph(FlatButton::Glyph::Metronome);
+    m_metronome->setCheckable(true);
+    m_metronome->setActiveColorKey(QStringLiteral("state.on"));
+    m_metronome->setStatusTip(tr("Metronome."));
+
+    m_position->setText(QStringLiteral("1 . 1 . 1"));
+    m_position->setAlignment(Qt::AlignCenter);
+    m_position->setObjectName(QStringLiteral("positionDisplay"));
+    m_position->setStatusTip(tr("Arrangement position in bars, beats, and sixteenths."));
+
+    m_play->setGlyph(FlatButton::Glyph::Play);
+    m_play->setCheckable(true);
+    m_play->setActiveColorKey(QStringLiteral("state.play"));
+    m_play->setStatusTip(tr("Play."));
+    m_stop->setGlyph(FlatButton::Glyph::Stop);
+    m_stop->setStatusTip(tr("Stop."));
+    m_record->setGlyph(FlatButton::Glyph::Record);
+    m_record->setCheckable(true);
+    m_record->setActiveColorKey(QStringLiteral("state.record"));
+    m_record->setStatusTip(tr("Arrangement record."));
+    m_loop->setGlyph(FlatButton::Glyph::Loop);
+    m_loop->setCheckable(true);
+    m_loop->setActiveColorKey(QStringLiteral("state.loop"));
+    m_loop->setStatusTip(tr("Loop the arrangement loop brace."));
+
+    m_trackCount->setObjectName(QStringLiteral("secondary"));
 
     m_session->setText(tr("Session"));
     m_session->setCheckable(true);
     m_session->setChecked(true);
+    m_session->setStatusTip(tr("Show the Session View (Tab)."));
     m_arrangement->setText(tr("Arrangement"));
     m_arrangement->setCheckable(true);
-
-    m_trackCount->setObjectName(QStringLiteral("secondary"));
+    m_arrangement->setStatusTip(tr("Show the Arrangement View (Tab)."));
 
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    layout->setSpacing(2);
     layout->addWidget(m_tempo);
-    layout->addSpacerItem(m_gapA = new QSpacerItem(0, 0));
-    layout->addWidget(m_addTrack);
-    layout->addWidget(m_undo);
-    layout->addWidget(m_redo);
-    layout->addSpacerItem(m_gapB = new QSpacerItem(0, 0));
-    layout->addWidget(m_trackCount);
+    layout->addWidget(m_tap);
+    layout->addSpacing(6);
+    layout->addWidget(m_numerator);
+    auto* slash = new QLabel(QStringLiteral("/"), this);
+    slash->setObjectName(QStringLiteral("secondary"));
+    layout->addWidget(slash);
+    layout->addWidget(m_denominator);
+    layout->addWidget(m_metronome);
     layout->addStretch(1);
+    layout->addWidget(m_position);
+    layout->addSpacing(6);
+    layout->addWidget(m_play);
+    layout->addWidget(m_stop);
+    layout->addWidget(m_record);
+    layout->addSpacing(6);
+    layout->addWidget(m_loop);
+    layout->addStretch(1);
+    layout->addWidget(m_trackCount);
+    layout->addSpacing(6);
     layout->addWidget(m_session);
     layout->addWidget(m_arrangement);
 
-    connect(m_tempo, &QDoubleSpinBox::editingFinished, this, &TransportBar::commitTempo);
-    connect(m_addTrack, &QPushButton::clicked, this, [this] {
-        if (!m_bridge->addTrack()) {
-            emit message(tr("Could not add a track."));
+    connect(m_tempo, &ValueBox::committed, this, &TransportBar::commitTempo);
+    connect(m_numerator, &ValueBox::committed, this, [this](double v) {
+        if (!m_bridge->setTimeSignature(qRound(v), m_bridge->timeSignatureDenominator())) {
+            emit message(tr("%1 beats per bar is not supported.").arg(qRound(v)));
+            refresh();
         }
     });
-    connect(m_undo, &QPushButton::clicked, this, [this] {
-        if (!m_bridge->undo()) {
-            emit message(tr("Nothing to undo."));
+    connect(m_denominator, &ValueBox::committed, this, [this](double v) {
+        if (!m_bridge->setTimeSignature(m_bridge->timeSignatureNumerator(), qRound(v))) {
+            emit message(tr("A beat unit of %1 is not supported.").arg(qRound(v)));
+            refresh();
         }
     });
-    connect(m_redo, &QPushButton::clicked, this, [this] {
-        if (!m_bridge->redo()) {
-            emit message(tr("Nothing to redo."));
-        }
-    });
-    connect(m_session, &QToolButton::clicked, this, [this] {
+    connect(m_session, &FlatButton::clicked, this, [this] {
         showSessionActive(true);
         emit sessionRequested();
     });
-    connect(m_arrangement, &QToolButton::clicked, this, [this] {
+    connect(m_arrangement, &FlatButton::clicked, this, [this] {
         showSessionActive(false);
         emit arrangementRequested();
     });
     connect(m_bridge, &ProjectBridge::changed, this, &TransportBar::refresh);
 
+    setTransportAvailable(false);
+    setTheme(theme);
     refresh();
 }
 
-void TransportBar::applyTheme(const Theme& theme)
+void TransportBar::setTheme(const Theme* theme)
 {
-    const int h = theme.metricInt(QStringLiteral("transport.height"), 28);
-    setFixedHeight(h);
-    const int pad = theme.metricInt(QStringLiteral("control.padding"), 4);
-    layout()->setContentsMargins(pad, 0, pad, 0);
-    const int gap = theme.metricInt(QStringLiteral("transport.spacing"), 8);
-    m_gapA->changeSize(gap, 0);
-    m_gapB->changeSize(gap, 0);
-    layout()->invalidate();
-    m_tempo->setFixedWidth(qMax(40, theme.metricInt(QStringLiteral("transport.tempo.width"), 96)));
+    m_theme = theme;
+    for (FlatButton* b : {m_tap, m_metronome, m_play, m_stop, m_record, m_loop, m_session, m_arrangement}) {
+        b->setTheme(theme);
+    }
+    m_tempo->setTheme(theme);
+    m_numerator->setTheme(theme);
+    m_denominator->setTheme(theme);
+    const int h = theme->metricInt(QStringLiteral("transport.height"), 28);
+    setFixedHeight(h + 8);
+    const int pad = theme->metricInt(QStringLiteral("control.padding"), 4);
+    layout()->setContentsMargins(pad * 2, 4, pad * 2, 4);
+    layout()->setSpacing(qMax(1, theme->metricInt(QStringLiteral("transport.spacing"), 8) / 4));
+    const int side = theme->metricInt(QStringLiteral("transport.button.size"), 22);
+    for (FlatButton* b : {m_metronome, m_play, m_stop, m_record, m_loop}) {
+        b->setSquare(side + 6);
+    }
+    m_tempo->setFixedWidth(theme->metricInt(QStringLiteral("transport.tempo.width"), 96));
+    m_numerator->setFixedWidth(theme->metricInt(QStringLiteral("control.height"), 20) + 12);
+    m_denominator->setFixedWidth(theme->metricInt(QStringLiteral("control.height"), 20) + 12);
+    m_position->setFixedWidth(theme->metricInt(QStringLiteral("transport.tempo.width"), 96));
+    QPalette pal = palette();
+    pal.setColor(QPalette::Window, theme->color(QStringLiteral("panel")));
+    setPalette(pal);
+    update();
+}
+
+void TransportBar::setTransportAvailable(bool available)
+{
+    m_transportAvailable = available;
+    const QString why = tr("Playback is not available until an audio backend drives the transport.");
+    for (FlatButton* b : {m_tap, m_metronome, m_play, m_stop, m_record, m_loop}) {
+        b->setEnabled(available);
+        b->setToolTip(available ? QString() : why);
+    }
+    m_position->setEnabled(available);
 }
 
 void TransportBar::showSessionActive(bool session)
@@ -107,14 +188,17 @@ void TransportBar::showSessionActive(bool session)
 void TransportBar::refresh()
 {
     const QSignalBlocker block(m_tempo);
+    const QSignalBlocker blockNum(m_numerator);
+    const QSignalBlocker blockDen(m_denominator);
     m_tempo->setValue(m_bridge->tempo());
+    m_numerator->setValue(m_bridge->timeSignatureNumerator());
+    m_denominator->setValue(m_bridge->timeSignatureDenominator());
     const quint64 n = m_bridge->trackCount();
     m_trackCount->setText(n == 1 ? tr("1 track") : tr("%1 tracks").arg(n));
 }
 
-void TransportBar::commitTempo()
+void TransportBar::commitTempo(double requested)
 {
-    const double requested = m_tempo->value();
     if (qFuzzyCompare(requested, m_bridge->tempo())) {
         return;
     }

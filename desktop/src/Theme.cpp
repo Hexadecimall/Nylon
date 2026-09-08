@@ -210,6 +210,12 @@ const QStringList& Theme::requiredColors()
         for (int i = 1; i <= 16; ++i) {
             k.append(QStringLiteral("track.%1").arg(i));
         }
+        for (const char* extra : {"state.on", "state.solo", "state.arm", "state.play", "state.record",
+                 "state.loop", "browser.background", "browser.selection", "browser.header",
+                 "detail.background", "mixer.background", "fader.track", "fader.fill", "fader.handle",
+                 "knob.track", "knob.arc", "meter.background", "clip.empty.hover"}) {
+            k.append(QString::fromLatin1(extra));
+        }
         return k;
     }();
     return keys;
@@ -239,6 +245,16 @@ const QStringList& Theme::requiredMetrics()
         QStringLiteral("session.stop.size"),
         QStringLiteral("session.stop.inset"),
         QStringLiteral("arrangement.header.band"),
+        QStringLiteral("browser.width"),
+        QStringLiteral("detail.height"),
+        QStringLiteral("mixer.height"),
+        QStringLiteral("fader.width"),
+        QStringLiteral("fader.handle.height"),
+        QStringLiteral("knob.size"),
+        QStringLiteral("meter.channel.width"),
+        QStringLiteral("meter.clip.height"),
+        QStringLiteral("strip.button.height"),
+        QStringLiteral("transport.button.size"),
     };
     return keys;
 }
@@ -368,7 +384,27 @@ QString Theme::styleSheet() const
         "QScrollBar::handle:hover { background: %HOVER; }"
         "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }"
         "QScrollBar::add-page, QScrollBar::sub-page { background: none; }"
-        "QToolTip { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; padding: %PADpx; }")
+        "QToolTip { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; padding: %PADpx; }"
+        "QListWidget, QTreeView, QListView { background: %BROWSERBG; color: %TEXT; border: none; outline: none;"
+        "  selection-background-color: %BROWSERSEL; selection-color: %TEXT; show-decoration-selected: 1; }"
+        "QListWidget::item, QTreeView::item { padding: %PADpx %PAD2px; border: none; }"
+        "QListWidget::item:selected, QTreeView::item:selected { background: %BROWSERSEL; color: %TEXT; }"
+        "QListWidget::item:hover, QTreeView::item:hover { background: %HOVER; }"
+        "QTreeView::branch { background: %BROWSERBG; }"
+        "QComboBox { background: %CTRLBG; color: %CTRLTEXT; border: %SEPpx solid %BORDER; border-radius: 0;"
+        "  padding: 0 %PADpx; min-height: %CTRLHpx; }"
+        "QComboBox::drop-down { border: none; width: 16px; }"
+        "QComboBox QAbstractItemView { background: %RAISED; color: %TEXT; selection-background-color: %ACCENT;"
+        "  selection-color: %ACCENTTEXT; border: %SEPpx solid %BORDER; }"
+        "QDialog { background: %BG; }"
+        "QLabel#startTitle { color: %TEXT; }"
+        "QLabel#positionDisplay { background: %CTRLBG; border: %SEPpx solid %BORDER; padding: 0 %PADpx; }"
+        "QLabel#positionDisplay:disabled { color: %DISABLED; }"
+        "QLabel#detailTitle { color: %TEXT; padding-left: %PADpx; }"
+        "QLabel#stripName { color: %TEXT; }"
+        "QSplitter::handle { background: %SEPC; }")
+        .replace(QLatin1String("%BROWSERBG"), c("browser.background"))
+        .replace(QLatin1String("%BROWSERSEL"), c("browser.selection"))
         .replace(QLatin1String("%BG"), c("background"))
         .replace(QLatin1String("%PANEL"), c("panel"))
         .replace(QLatin1String("%RAISED"), c("raised"))

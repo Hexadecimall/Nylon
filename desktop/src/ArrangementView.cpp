@@ -178,10 +178,13 @@ void ArrangementView::paintEvent(QPaintEvent* event)
             const int y = static_cast<int>(lanesTop + t * (lh + sep) - scrollY);
             const QRect header(0, y, hw, lh);
             p.fillRect(header, panel);
-            p.fillRect(QRect(0, y, band, lh), m_theme->trackColor(static_cast<int>(t % 16)));
+            const int colorIndex = m_bridge->trackColorIndex(static_cast<quint64>(t));
+            p.fillRect(QRect(0, y, band, lh),
+                m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16)));
             p.setPen(primary);
-            p.drawText(header.adjusted(band + textInset, textInset, -textInset, 0),
-                Qt::AlignLeft | Qt::AlignTop, QString::number(t + 1));
+            p.drawText(header.adjusted(band + textInset, textInset, -textInset, 0), Qt::AlignLeft | Qt::AlignTop,
+                p.fontMetrics().elidedText(m_bridge->trackName(static_cast<quint64>(t)), Qt::ElideRight,
+                    hw - band - 2 * textInset));
             p.fillRect(QRect(hw, y, sep, lh), sepColor);
         }
     }

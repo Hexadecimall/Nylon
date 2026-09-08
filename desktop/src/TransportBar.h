@@ -2,56 +2,73 @@
 
 #include <QWidget>
 
-class QDoubleSpinBox;
-class QPushButton;
-class QToolButton;
 class QLabel;
 class QSpacerItem;
 
 namespace nylon {
 
+class FlatButton;
+class Knob;
 class ProjectBridge;
 class Theme;
+class ValueBox;
 
-// Top strip: tempo entry, track/undo/redo controls, and the view switch.
-// There is no play control because the core exposes no transport yet.
+// Top strip laid out like a hardware transport: tempo section on the
+// left, transport controls in the middle, view switch on the right.
+// Playback controls exist but stay disabled until an audio backend drives
+// the transport; they never pretend to run.
 class TransportBar : public QWidget {
     Q_OBJECT
 public:
-    explicit TransportBar(ProjectBridge* bridge, QWidget* parent = nullptr);
+    explicit TransportBar(ProjectBridge* bridge, const Theme* theme, QWidget* parent = nullptr);
 
-    void applyTheme(const Theme& theme);
+    void setTheme(const Theme* theme);
 
-    QDoubleSpinBox* tempoBox() const { return m_tempo; }
-    QPushButton* addTrackButton() const { return m_addTrack; }
-    QPushButton* undoButton() const { return m_undo; }
-    QPushButton* redoButton() const { return m_redo; }
-    QToolButton* sessionButton() const { return m_session; }
-    QToolButton* arrangementButton() const { return m_arrangement; }
+    ValueBox* tempoBox() const { return m_tempo; }
+    FlatButton* tapButton() const { return m_tap; }
+    FlatButton* metronomeButton() const { return m_metronome; }
+    FlatButton* playButton() const { return m_play; }
+    FlatButton* stopButton() const { return m_stop; }
+    FlatButton* recordButton() const { return m_record; }
+    FlatButton* loopButton() const { return m_loop; }
+    FlatButton* sessionButton() const { return m_session; }
+    FlatButton* arrangementButton() const { return m_arrangement; }
+    QLabel* positionLabel() const { return m_position; }
+    ValueBox* numeratorBox() const { return m_numerator; }
+    ValueBox* denominatorBox() const { return m_denominator; }
+    bool isTransportAvailable() const { return m_transportAvailable; }
 
 signals:
-    // Emitted after the core rejected an edit or reported nothing to do.
     void message(const QString& text);
     void sessionRequested();
     void arrangementRequested();
 
 public slots:
     void showSessionActive(bool session);
+    // Called once the core reports a running transport; enables the
+    // playback controls.
+    void setTransportAvailable(bool available);
 
 private:
     void refresh();
-    void commitTempo();
+    void commitTempo(double bpm);
 
     ProjectBridge* m_bridge;
-    QDoubleSpinBox* m_tempo;
-    QPushButton* m_addTrack;
-    QPushButton* m_undo;
-    QPushButton* m_redo;
-    QToolButton* m_session;
-    QToolButton* m_arrangement;
+    const Theme* m_theme;
+    ValueBox* m_tempo;
+    FlatButton* m_tap;
+    ValueBox* m_numerator;
+    ValueBox* m_denominator;
+    FlatButton* m_metronome;
+    QLabel* m_position;
+    FlatButton* m_play;
+    FlatButton* m_stop;
+    FlatButton* m_record;
+    FlatButton* m_loop;
     QLabel* m_trackCount;
-    QSpacerItem* m_gapA = nullptr;
-    QSpacerItem* m_gapB = nullptr;
+    FlatButton* m_session;
+    FlatButton* m_arrangement;
+    bool m_transportAvailable = false;
 };
 
 } // namespace nylon

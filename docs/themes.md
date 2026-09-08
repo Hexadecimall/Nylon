@@ -57,6 +57,24 @@ active.
 | `meter.peak` | Meter peak segment |
 | `meter.clip` | Meter clip indicator |
 | `track.1` to `track.16` | Track color palette, cycled by track index |
+| `state.on` | Track activator when on |
+| `state.solo` | Solo button when on |
+| `state.arm` | Record-arm button when on |
+| `state.play` | Play button while playing |
+| `state.record` | Record button while recording |
+| `state.loop` | Loop button when on |
+| `browser.background` | Browser and list backgrounds |
+| `browser.selection` | Selected row in lists and trees |
+| `browser.header` | Browser column header |
+| `detail.background` | Detail panel background |
+| `mixer.background` | Channel strip background |
+| `fader.track` | Fader travel |
+| `fader.fill` | Fader fill below the handle |
+| `fader.handle` | Fader handle |
+| `knob.track` | Knob background arc |
+| `knob.arc` | Knob value arc |
+| `meter.background` | Meter background |
+| `clip.empty.hover` | Hovered empty clip slot |
 
 ## Required metrics
 
@@ -83,6 +101,16 @@ active.
 | `session.stop.size` | Side length of the stop marker in a slot |
 | `session.stop.inset` | Distance from the slot edge to the stop marker |
 | `arrangement.header.band` | Width of the track color band on a lane header |
+| `browser.width` | Initial browser panel width |
+| `detail.height` | Initial detail panel height |
+| `mixer.height` | Height of the channel strip row |
+| `fader.width` | Fader travel width |
+| `fader.handle.height` | Fader handle height |
+| `knob.size` | Knob diameter |
+| `meter.channel.width` | Width of one meter channel |
+| `meter.clip.height` | Height of the clip indicator |
+| `strip.button.height` | Height of activator, solo, and arm buttons |
+| `transport.button.size` | Side of the transport glyph buttons |
 
 Metrics that reach the Qt style sheet are clamped before use: `separator`
 to 0–16, `control.padding` to 0–64, and `control.height` to 8–256. The views

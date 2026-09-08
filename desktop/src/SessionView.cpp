@@ -4,6 +4,7 @@
 #include "ProjectBridge.h"
 #include "Theme.h"
 
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QScrollBar>
@@ -20,8 +21,12 @@ SessionView::SessionView(ProjectBridge* bridge, const Theme* theme, QWidget* par
     setObjectName(QStringLiteral("session"));
     setFrameShape(QFrame::NoFrame);
     viewport()->setAutoFillBackground(false);
+    viewport()->setMouseTracking(true);
     connect(m_bridge, &ProjectBridge::changed, this, [this] {
         updateScrollRanges();
+        if (m_selected >= columnCount()) {
+            selectTrack(columnCount() - 1);
+        }
         viewport()->update();
     });
     updateScrollRanges();
@@ -89,6 +94,87 @@ QRect SessionView::slotRect(int track, int scene) const
     return QRect(static_cast<int>(x), static_cast<int>(y), slotWidth(), slotHeight());
 }
 
+int SessionView::columnAt(int x) const
+{
+    const qint64 pitch = slotWidth() + separator();
+    const qint64 content = qint64(x) + horizontalScrollBar()->value();
+    if (content < 0) {
+        return -1;
+    }
+    const qint64 index = content / pitch;
+    if (index >= columnCount() || content - index * pitch >= slotWidth()) {
+        return -1;
+    }
+    return static_cast<int>(index);
+}
+
+int SessionView::sceneAt(int y) const
+{
+    const qint64 pitch = slotHeight() + separator();
+    const qint64 content = qint64(y) + verticalScrollBar()->value() - headerHeight() - separator();
+    if (content < 0) {
+        return -1;
+    }
+    const qint64 index = content / pitch;
+    if (index >= sceneCount() || content - index * pitch >= slotHeight()) {
+        return -1;
+    }
+    return static_cast<int>(index);
+}
+
+void SessionView::selectTrack(int index)
+{
+    if (index >= columnCount()) {
+        index = columnCount() - 1;
+    }
+    if (index < -1) {
+        index = -1;
+    }
+    if (m_selected == index) {
+        return;
+    }
+    m_selected = index;
+    viewport()->update();
+    emit trackSelected(index);
+}
+
+void SessionView::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() != Qt::LeftButton) {
+        QAbstractScrollArea::mousePressEvent(event);
+        return;
+    }
+    const int track = columnAt(event->pos().x());
+    if (track >= 0) {
+        selectTrack(track);
+        const int scene = sceneAt(event->pos().y());
+        if (scene >= 0) {
+            emit slotClicked(track, scene);
+        }
+    }
+    event->accept();
+}
+
+void SessionView::mouseMoveEvent(QMouseEvent* event)
+{
+    const int track = columnAt(event->pos().x());
+    const int scene = track >= 0 ? sceneAt(event->pos().y()) : -1;
+    if (track != m_hoverTrack || scene != m_hoverScene) {
+        m_hoverTrack = track;
+        m_hoverScene = scene;
+        viewport()->update();
+    }
+    QAbstractScrollArea::mouseMoveEvent(event);
+}
+
+void SessionView::leaveEvent(QEvent* event)
+{
+    m_hoverTrack = -1;
+    m_hoverScene = -1;
+    viewport()->update();
+    QAbstractScrollArea::leaveEvent(event);
+}
+
 void SessionView::updateScrollRanges()
 {
     const qint64 sep = separator();
@@ -115,6 +201,8 @@ void SessionView::paintEvent(QPaintEvent* event)
     const int sep = separator();
     const QColor sepColor = m_theme->color(QStringLiteral("separator"));
     const QColor slotColor = m_theme->color(QStringLiteral("session.slot"));
+    const QColor slotHover = m_theme->color(QStringLiteral("clip.empty.hover"));
+    const QColor selection = m_theme->color(QStringLiteral("selection"));
     const QColor stopColor = m_theme->color(QStringLiteral("session.stop_button"));
     const QColor panel = m_theme->color(QStringLiteral("panel"));
     const QColor primary = m_theme->color(QStringLiteral("text.primary"));
@@ -153,13 +241,19 @@ void SessionView::paintEvent(QPaintEvent* event)
             const int x = static_cast<int>(t * (sw + sep) - scrollX);
             const QRect header(x, headerY, sw, hh);
             p.fillRect(header, panel);
-            p.fillRect(QRect(x, headerY, sw, band), m_theme->trackColor(static_cast<int>(t % 16)));
+            if (t == m_selected) {
+                p.fillRect(header, selection);
+            }
+            const int colorIndex = m_bridge->trackColorIndex(static_cast<quint64>(t));
+            p.fillRect(QRect(x, headerY, sw, band),
+                m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16)));
             p.setPen(primary);
             p.drawText(header.adjusted(textInset, band, -textInset, 0), Qt::AlignLeft | Qt::AlignVCenter,
-                QString::number(t + 1));
+                p.fontMetrics().elidedText(m_bridge->trackName(static_cast<quint64>(t)), Qt::ElideRight, sw - 2 * textInset));
             for (qint64 s = firstScene; s <= lastScene; ++s) {
                 const int y = static_cast<int>(gridTop + s * (sh + sep) - scrollY);
-                p.fillRect(QRect(x, y, sw, sh), slotColor);
+                const bool hovered = t == m_hoverTrack && s == m_hoverScene;
+                p.fillRect(QRect(x, y, sw, sh), hovered ? slotHover : slotColor);
                 p.fillRect(QRect(x + stopInset, y + (sh - stopSize) / 2, stopSize, stopSize), stopColor);
             }
             const int columnBottom = static_cast<int>(qMin<qint64>(gridTop + gridHeight - scrollY, viewH));

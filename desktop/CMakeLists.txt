@@ -25,36 +25,39 @@ elseif(MSVC)
     add_compile_options("/pathmap:${NYLON_REPO_ROOT}=.")
 endif()
 
-# Location of the Rust core static library. The default is the release
-# build of the root crate; override with -DNYLON_CORE_LIBRARY=<path>.
-if(WIN32 AND MSVC)
-    set(_nylon_core_default "${NYLON_REPO_ROOT}/target/release/nylon.lib")
-else()
-    set(_nylon_core_default "${NYLON_REPO_ROOT}/target/release/libnylon.a")
-endif()
-set(NYLON_CORE_LIBRARY "${_nylon_core_default}" CACHE FILEPATH
-    "Path to the Rust core static library (libnylon.a or nylon.lib)")
-
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test)
 
-add_library(nylon_core STATIC IMPORTED)
-set_target_properties(nylon_core PROPERTIES IMPORTED_LOCATION "${NYLON_CORE_LIBRARY}")
-# System libraries the Rust standard library links against.
-if(APPLE)
-    set_property(TARGET nylon_core PROPERTY INTERFACE_LINK_LIBRARIES
-        "-framework CoreFoundation" "-framework Security" "-liconv")
-elseif(WIN32)
-    set_property(TARGET nylon_core PROPERTY INTERFACE_LINK_LIBRARIES
-        ws2_32 userenv bcrypt ntdll advapi32 kernel32)
-else()
-    set_property(TARGET nylon_core PROPERTY INTERFACE_LINK_LIBRARIES
-        pthread dl m gcc_s util rt)
-endif()
+# The core library and its C++ binding.
+add_subdirectory("${NYLON_REPO_ROOT}/bindings/cpp" bindings_cpp)
 
 # Everything except main.cpp lives in a static library so the tests link the
 # same objects as the application.
 add_library(nylon_desktop STATIC
     src/LayoutMath.h
+    src/widgets/ControlWidget.cpp
+    src/widgets/ControlWidget.h
+    src/widgets/Knob.cpp
+    src/widgets/Knob.h
+    src/widgets/Fader.cpp
+    src/widgets/Fader.h
+    src/widgets/LevelMeter.cpp
+    src/widgets/LevelMeter.h
+    src/widgets/FlatButton.cpp
+    src/widgets/FlatButton.h
+    src/widgets/ValueBox.cpp
+    src/widgets/ValueBox.h
+    src/BrowserPanel.cpp
+    src/BrowserPanel.h
+    src/DetailPanel.cpp
+    src/DetailPanel.h
+    src/MixerStrip.cpp
+    src/MixerStrip.h
+    src/MixerSection.cpp
+    src/MixerSection.h
+    src/StartScreen.cpp
+    src/StartScreen.h
+    src/PreferencesDialog.cpp
+    src/PreferencesDialog.h
     src/Theme.cpp
     src/Theme.h
     src/ThemeManager.cpp
@@ -71,8 +74,8 @@ add_library(nylon_desktop STATIC
     src/MainWindow.h
     themes.qrc
 )
-target_include_directories(nylon_desktop PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(nylon_desktop PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets nylon_core)
+target_include_directories(nylon_desktop PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(nylon_desktop PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets nyloncpp)
 target_compile_definitions(nylon_desktop PUBLIC NYLON_VERSION_STRING="${PROJECT_VERSION}")
 if(MSVC)
     target_compile_options(nylon_desktop PUBLIC /W4 /permissive-)
@@ -91,7 +94,7 @@ set_target_properties(nylon PROPERTIES
     MACOSX_BUNDLE_COPYRIGHT "Copyright (c) Nylon Contributors")
 
 enable_testing()
-foreach(_test layout theme bridge views)
+foreach(_test layout theme bridge widgets views)
     add_executable(test_${_test} tests/test_${_test}.cpp)
     target_link_libraries(test_${_test} PRIVATE nylon_desktop Qt6::Test)
     add_test(NAME ${_test} COMMAND test_${_test})

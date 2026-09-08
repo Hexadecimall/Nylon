@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QMessageBox>
+#include <QSettings>
 #include <QTimer>
 
 #include <cstdio>
@@ -22,7 +23,9 @@ int main(int argc, char** argv)
     parser.addHelpOption();
     parser.addVersionOption();
     const QCommandLineOption themeOption(QStringLiteral("theme"),
-        QStringLiteral("Theme to load at startup."), QStringLiteral("name"), QStringLiteral("nylon"));
+        QStringLiteral("Theme to load at startup (default: the last one chosen)."), QStringLiteral("name"));
+    const QCommandLineOption workspaceOption(QStringLiteral("workspace"),
+        QStringLiteral("Skip the start screen and open an empty project."));
     const QCommandLineOption tracksOption(QStringLiteral("tracks"),
         QStringLiteral("Add this many tracks to the new project."), QStringLiteral("count"), QStringLiteral("0"));
     const QCommandLineOption screenshotOption(QStringLiteral("screenshot"),
@@ -30,13 +33,18 @@ int main(int argc, char** argv)
     const QCommandLineOption viewOption(QStringLiteral("view"),
         QStringLiteral("Initial view: session or arrangement."), QStringLiteral("name"), QStringLiteral("session"));
     parser.addOption(themeOption);
+    parser.addOption(workspaceOption);
     parser.addOption(tracksOption);
     parser.addOption(viewOption);
     parser.addOption(screenshotOption);
     parser.process(app);
 
     nylon::ThemeManager themes;
-    if (!themes.load(parser.value(themeOption))) {
+    QString themeName = parser.value(themeOption);
+    if (themeName.isEmpty()) {
+        themeName = QSettings().value(QStringLiteral("look/theme"), QStringLiteral("nylon")).toString();
+    }
+    if (!themes.load(themeName) && !themes.load(QStringLiteral("nylon"))) {
         QMessageBox::critical(nullptr, QStringLiteral("Nylon"),
             QStringLiteral("The default theme failed to load:\n%1")
                 .arg(themes.lastErrors().join(QStringLiteral("\n"))));
@@ -56,14 +64,16 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "--tracks expects a non-negative integer\n");
         return 2;
     }
-    for (int i = 0; i < tracks; ++i) {
-        if (!bridge.addTrack()) {
-            std::fprintf(stderr, "the core rejected adding track %d\n", i + 1);
-            return 1;
+    nylon::MainWindow window(&bridge, &themes);
+    if (parser.isSet(workspaceOption) || parser.isSet(screenshotOption) || tracks > 0) {
+        window.newProject();
+        for (int i = 0; i < tracks; ++i) {
+            if (!bridge.addTrack()) {
+                std::fprintf(stderr, "the core rejected adding track %d\n", i + 1);
+                return 1;
+            }
         }
     }
-
-    nylon::MainWindow window(&bridge, &themes);
     const QString view = parser.value(viewOption).toLower();
     if (view == QLatin1String("arrangement")) {
         window.showArrangement();

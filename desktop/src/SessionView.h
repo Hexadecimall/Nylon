@@ -25,10 +25,24 @@ public:
     // indices are out of range.
     QRect slotRect(int track, int scene) const;
     bool isShowingEmptyState() const;
+    int selectedTrack() const { return m_selected; }
+    // Column index under an x coordinate in viewport space, or -1.
+    int columnAt(int x) const;
+    int sceneAt(int y) const;
+
+public slots:
+    void selectTrack(int index);
+
+signals:
+    void trackSelected(int index);
+    void slotClicked(int track, int scene);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     void updateScrollRanges();
@@ -40,6 +54,9 @@ private:
 
     ProjectBridge* m_bridge;
     const Theme* m_theme;
+    int m_selected = -1;
+    int m_hoverTrack = -1;
+    int m_hoverScene = -1;
 };
 
 } // namespace nylon

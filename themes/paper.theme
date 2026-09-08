@@ -73,3 +73,34 @@ metric.session.header.band = 2
 metric.session.stop.size = 5
 metric.session.stop.inset = 3
 metric.arrangement.header.band = 3
+
+# Panels and controls
+color.state.on = #C9A227
+color.state.solo = #2E8FA6
+color.state.arm = #C64A4A
+color.state.play = #3E8F51
+color.state.record = #C64A4A
+color.state.loop = #2F6FD1
+color.browser.background = #ECEBE7
+color.browser.selection = #D6D9DE
+color.browser.header = #E8E7E3
+color.detail.background = #ECEBE7
+color.mixer.background = #E8E7E3
+color.fader.track = #D3D2CD
+color.fader.fill = #B4B8BC
+color.fader.handle = #3A3F44
+color.knob.track = #CFCEC8
+color.knob.arc = #2B2F33
+color.meter.background = #DEDDD8
+color.clip.empty.hover = #DCDBD6
+
+metric.browser.width = 230
+metric.detail.height = 190
+metric.mixer.height = 170
+metric.fader.width = 12
+metric.fader.handle.height = 8
+metric.knob.size = 22
+metric.meter.channel.width = 4
+metric.meter.clip.height = 4
+metric.strip.button.height = 16
+metric.transport.button.size = 22

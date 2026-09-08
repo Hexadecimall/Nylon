@@ -1,20 +1,32 @@
 #include "ArrangementView.h"
+#include "BrowserPanel.h"
+#include "DetailPanel.h"
 #include "MainWindow.h"
+#include "MixerSection.h"
+#include "MixerStrip.h"
+#include "StartScreen.h"
+#include "widgets/Fader.h"
+#include "widgets/FlatButton.h"
+#include "widgets/Knob.h"
+#include "widgets/ValueBox.h"
 #include "ProjectBridge.h"
 #include "SessionView.h"
 #include "ThemeManager.h"
 #include "TransportBar.h"
 
 #include <QAction>
-#include <QDoubleSpinBox>
-#include <QPushButton>
+#include <QAction>
+#include <QMenuBar>
 #include <QStatusBar>
-#include <QToolButton>
 #include <QDir>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QFile>
 #include <QScrollBar>
 #include <QStandardPaths>
 #include <QtTest>
+
+#include <cmath>
 
 #include "LayoutMath.h"
 
@@ -33,6 +45,10 @@ private slots:
     void slotAndLaneGeometryFollowMetrics();
     void extremeMetricsStayWithinIntRange();
     void transportSpacingFollowsTokens();
+    void startScreenThenWorkspace();
+    void menusAreInWindowAndComplete();
+    void selectionFlowsBetweenGridMixerAndDetail();
+    void browserShowsLibraryCategories();
 
 private:
     ThemeManager m_themes;
@@ -49,6 +65,7 @@ void TestViews::emptyStateWhenNoTracks()
     MainWindow w(&bridge, &m_themes);
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
     QVERIFY(w.sessionView()->isShowingEmptyState());
     QVERIFY(w.arrangementView()->isShowingEmptyState());
     QCOMPARE(w.sessionView()->columnCount(), 0);
@@ -67,9 +84,10 @@ void TestViews::addTrackButtonGrowsBothViews()
     MainWindow w(&bridge, &m_themes);
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
-    QTest::mouseClick(w.transport()->addTrackButton(), Qt::LeftButton);
-    QTest::mouseClick(w.transport()->addTrackButton(), Qt::LeftButton);
-    QTest::mouseClick(w.transport()->addTrackButton(), Qt::LeftButton);
+    w.newProject();
+    w.action(QStringLiteral("actionAddTrack"))->trigger();
+    w.action(QStringLiteral("actionAddTrack"))->trigger();
+    w.action(QStringLiteral("actionAddTrack"))->trigger();
     QCOMPARE(bridge.trackCount(), 3ull);
     QCOMPARE(w.sessionView()->columnCount(), 3);
     QCOMPARE(w.arrangementView()->laneCount(), 3);
@@ -90,8 +108,11 @@ void TestViews::undoRedoFromButtonsAndActions()
     MainWindow w(&bridge, &m_themes);
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
-    QTest::mouseClick(w.transport()->undoButton(), Qt::LeftButton);
-    QCOMPARE(w.statusBar()->currentMessage(), QStringLiteral("Nothing to undo."));
+    w.newProject();
+    // With nothing to undo the action is disabled rather than reporting.
+    QVERIFY(!w.action(QStringLiteral("actionUndo"))->isEnabled());
+    w.action(QStringLiteral("actionUndo"))->trigger();
+    QCOMPARE(bridge.trackCount(), 0ull);
 
     w.findChild<QAction*>(QStringLiteral("actionAddTrack"))->trigger();
     QCOMPARE(bridge.trackCount(), 1ull);
@@ -100,12 +121,13 @@ void TestViews::undoRedoFromButtonsAndActions()
     QCOMPARE(w.sessionView()->columnCount(), 0);
     w.findChild<QAction*>(QStringLiteral("actionRedo"))->trigger();
     QCOMPARE(bridge.trackCount(), 1ull);
-    QTest::mouseClick(w.transport()->undoButton(), Qt::LeftButton);
+    w.action(QStringLiteral("actionUndo"))->trigger();
     QCOMPARE(bridge.trackCount(), 0ull);
-    QTest::mouseClick(w.transport()->redoButton(), Qt::LeftButton);
+    w.action(QStringLiteral("actionRedo"))->trigger();
     QCOMPARE(bridge.trackCount(), 1ull);
-    QTest::mouseClick(w.transport()->redoButton(), Qt::LeftButton);
-    QCOMPARE(w.statusBar()->currentMessage(), QStringLiteral("Nothing to redo."));
+    QVERIFY(!w.action(QStringLiteral("actionRedo"))->isEnabled());
+    w.action(QStringLiteral("actionRedo"))->trigger();
+    QCOMPARE(bridge.trackCount(), 1ull);
 }
 
 void TestViews::tempoBoxCommitsAndRevertsOnRejection()
@@ -114,15 +136,15 @@ void TestViews::tempoBoxCommitsAndRevertsOnRejection()
     MainWindow w(&bridge, &m_themes);
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
-    QDoubleSpinBox* box = w.transport()->tempoBox();
+    w.newProject();
+    ValueBox* box = w.transport()->tempoBox();
     QCOMPARE(box->value(), bridge.tempo());
 
-    box->setValue(140.25);
-    emit box->editingFinished();
+    emit box->committed(140.25);
     QCOMPARE(bridge.tempo(), 140.25);
+    QCOMPARE(box->value(), 140.25);
 
-    box->setValue(5000.0);
-    emit box->editingFinished();
+    emit box->committed(5000.0);
     QCOMPARE(bridge.tempo(), 140.25);
     QCOMPARE(box->value(), 140.25);
     QVERIFY(w.statusBar()->currentMessage().contains(QStringLiteral("outside")));
@@ -138,9 +160,10 @@ void TestViews::viewSwitchButtonsAndToggle()
     MainWindow w(&bridge, &m_themes);
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
     QVERIFY(w.isSessionVisible());
     QVERIFY(w.transport()->sessionButton()->isChecked());
-    QTest::mouseClick(w.transport()->arrangementButton(), Qt::LeftButton);
+    w.transport()->arrangementButton()->click();
     QVERIFY(!w.isSessionVisible());
     QVERIFY(w.transport()->arrangementButton()->isChecked());
     QVERIFY(!w.transport()->sessionButton()->isChecked());
@@ -159,6 +182,7 @@ void TestViews::themeSwitchRepaintsWithNewTokens()
     MainWindow w(&bridge, &m_themes);
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
     bridge.addTrack();
     w.showArrangement();
     QVERIFY(m_themes.load(QStringLiteral("paper")));
@@ -176,6 +200,7 @@ void TestViews::slotAndLaneGeometryFollowMetrics()
     MainWindow w(&bridge, &m_themes);
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
     bridge.addTrack();
     bridge.addTrack();
     const nylon::Theme& t = m_themes.theme();
@@ -232,6 +257,7 @@ void TestViews::extremeMetricsStayWithinIntRange()
     MainWindow w(&bridge, &themes);
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
     for (int i = 0; i < 40; ++i) {
         QVERIFY(bridge.addTrack());
     }
@@ -298,11 +324,198 @@ void TestViews::transportSpacingFollowsTokens()
     MainWindow w(&bridge, &m_themes);
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
     const nylon::Theme& t = m_themes.theme();
-    QCOMPARE(w.transport()->height(), t.metricInt(QStringLiteral("transport.height")));
+    QCOMPARE(w.transport()->height(), t.metricInt(QStringLiteral("transport.height")) + 8);
     QCOMPARE(w.transport()->tempoBox()->width(), t.metricInt(QStringLiteral("transport.tempo.width")));
-    const int gap = t.metricInt(QStringLiteral("transport.spacing"));
-    QCOMPARE(w.transport()->addTrackButton()->x() - (w.transport()->tempoBox()->x() + w.transport()->tempoBox()->width()), gap);
+    const int side = t.metricInt(QStringLiteral("transport.button.size")) + 6;
+    QCOMPARE(w.transport()->playButton()->width(), side);
+    QVERIFY(!w.transport()->playButton()->isEnabled());
+    QVERIFY(!w.transport()->isTransportAvailable());
+
+    // The time signature boxes read and write the core.
+    QCOMPARE(w.transport()->numeratorBox()->value(), 4.0);
+    emit w.transport()->numeratorBox()->committed(3.0);
+    QCOMPARE(bridge.timeSignatureNumerator(), 3);
+    emit w.transport()->denominatorBox()->committed(5.0);
+    QCOMPARE(bridge.timeSignatureDenominator(), 4);
+    QCOMPARE(w.transport()->denominatorBox()->value(), 4.0);
+    QVERIFY(w.statusBar()->currentMessage().contains(QStringLiteral("not supported")));
+}
+
+void TestViews::startScreenThenWorkspace()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    QVERIFY(w.isStartScreenVisible());
+    QVERIFY(w.startScreen()->newButton()->isEnabled());
+    QVERIFY(!w.startScreen()->openButton()->isEnabled());
+    bridge.addTrack();
+    QCOMPARE(bridge.trackCount(), 1ull);
+    w.startScreen()->newButton()->click();
+    QVERIFY(!w.isStartScreenVisible());
+    // New Project starts from an empty core project.
+    QCOMPARE(bridge.trackCount(), 0ull);
+    QVERIFY(!bridge.undo());
+    w.action(QStringLiteral("actionClose"))->trigger();
+    QVERIFY(w.isStartScreenVisible());
+}
+
+void TestViews::menusAreInWindowAndComplete()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    QVERIFY(!w.menuBar()->isNativeMenuBar());
+    QStringList titles;
+    for (QAction* a : w.menuBar()->actions()) {
+        titles.append(a->text().remove(QLatin1Char('&')));
+    }
+    QCOMPARE(titles, (QStringList{QStringLiteral("File"), QStringLiteral("Edit"), QStringLiteral("Create"),
+        QStringLiteral("View"), QStringLiteral("Transport"), QStringLiteral("Help")}));
+    for (const char* name : {"actionNew", "actionOpen", "actionSave", "actionPreferences", "actionQuit", "actionUndo",
+             "actionRedo", "actionAddTrack", "actionAddMidiTrack", "actionToggleBrowser", "actionToggleDetail",
+             "actionToggleMixer", "actionSession", "actionArrangement", "actionFullScreen", "actionPlay",
+             "actionStop", "actionRecord", "actionLoop", "actionAbout"}) {
+        QVERIFY2(w.action(QLatin1String(name)), name);
+    }
+    // Everything the core cannot do yet is disabled and says why.
+    for (const char* name : {"actionOpen", "actionSave", "actionPlay", "actionCut"}) {
+        QAction* a = w.action(QLatin1String(name));
+        QVERIFY2(!a->isEnabled(), name);
+        QVERIFY2(!a->statusTip().isEmpty(), name);
+    }
+    QVERIFY(w.action(QStringLiteral("actionNew"))->isEnabled());
+    QVERIFY(w.action(QStringLiteral("actionAddTrack"))->isEnabled());
+    QVERIFY(w.action(QStringLiteral("actionAddMidiTrack"))->isEnabled());
+    QVERIFY(!w.action(QStringLiteral("actionUndo"))->isEnabled());
+    w.newProject();
+    w.action(QStringLiteral("actionAddMidiTrack"))->trigger();
+    QCOMPARE(bridge.trackKind(0), ProjectBridge::TrackKind::Midi);
+    QVERIFY(w.action(QStringLiteral("actionUndo"))->isEnabled());
+    QVERIFY(!w.action(QStringLiteral("actionRedo"))->isEnabled());
+}
+
+void TestViews::selectionFlowsBetweenGridMixerAndDetail()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    QCOMPARE(w.detail()->selectedTrack(), -1);
+    QCOMPARE(w.mixer()->stripCount(), 0);
+    w.action(QStringLiteral("actionAddTrack"))->trigger();
+    w.action(QStringLiteral("actionAddTrack"))->trigger();
+    w.action(QStringLiteral("actionAddTrack"))->trigger();
+    QCOMPARE(w.mixer()->stripCount(), 3);
+    // Inserting selects the new track everywhere.
+    QCOMPARE(w.sessionView()->selectedTrack(), 2);
+    QCOMPARE(w.mixer()->selectedTrack(), 2);
+    QCOMPARE(w.detail()->selectedTrack(), 2);
+    QCOMPARE(w.detail()->headerText(), bridge.trackName(2));
+    QCOMPARE(w.mixer()->strip(2)->name(), bridge.trackName(2));
+    QVERIFY(!bridge.trackName(2).isEmpty());
+
+    // Clicking a slot in the grid selects that column and shows the clip page.
+    const QRect slot = w.sessionView()->slotRect(0, 1);
+    QTest::mouseClick(w.sessionView()->viewport(), Qt::LeftButton, Qt::NoModifier, slot.center());
+    QCOMPARE(w.sessionView()->selectedTrack(), 0);
+    QCOMPARE(w.mixer()->selectedTrack(), 0);
+    QCOMPARE(w.detail()->selectedTrack(), 0);
+    QCOMPARE(w.detail()->page(), DetailPanel::Page::Clip);
+    QVERIFY(w.mixer()->strip(0)->isSelected());
+    QVERIFY(!w.mixer()->strip(2)->isSelected());
+
+    // Clicking a strip selects it.
+    QTest::mouseClick(w.mixer()->strip(1), Qt::LeftButton, Qt::NoModifier, QPoint(4, 4));
+    QCOMPARE(w.sessionView()->selectedTrack(), 1);
+    QCOMPARE(w.detail()->selectedTrack(), 1);
+
+    // Undoing the last insert drops the selection to a live track.
+    w.selectTrack(2);
+    w.action(QStringLiteral("actionUndo"))->trigger();
+    QCOMPARE(w.mixer()->stripCount(), 2);
+    QVERIFY(w.detail()->selectedTrack() < 2);
+
+    // Mixer controls write to the core and one gesture is one undo step.
+    MixerStrip* strip = w.mixer()->strip(0);
+    QVERIFY(strip->isInteractive());
+    QVERIFY(strip->fader()->isEnabled());
+    QVERIFY(w.mixer()->masterStrip());
+    strip->soloButton()->click();
+    QVERIFY(bridge.trackSolo(0));
+    strip->armButton()->click();
+    QVERIFY(bridge.trackArmed(0));
+    strip->activator()->click();
+    QVERIFY(bridge.trackMuted(0));
+    strip->activator()->click();
+    QVERIFY(!bridge.trackMuted(0));
+    emit strip->fader()->dragStarted();
+    strip->fader()->setValue(-12.0);
+    strip->fader()->setValue(-9.0);
+    emit strip->fader()->dragFinished();
+    QCOMPARE(bridge.trackVolumeDb(0), -9.0);
+    w.action(QStringLiteral("actionUndo"))->trigger();
+    QCOMPARE(bridge.trackVolumeDb(0), 0.0);
+    QCOMPARE(strip->fader()->value(), 0.0);
+    strip->fader()->setValue(strip->fader()->minimum());
+    emit strip->fader()->dragFinished();
+    QVERIFY(std::isinf(bridge.trackVolumeDb(0)));
+    emit strip->pan()->dragStarted();
+    strip->pan()->setValue(0.5);
+    emit strip->pan()->dragFinished();
+    QCOMPARE(bridge.trackPan(0), 0.5);
+
+    // Renaming through the core shows up in the strip, grid header, and detail.
+    QVERIFY(bridge.setTrackName(0, QStringLiteral("Bass")));
+    QCOMPARE(strip->name(), QStringLiteral("Bass"));
+    w.selectTrack(0);
+    QCOMPARE(w.detail()->headerText(), QStringLiteral("Bass"));
+    w.action(QStringLiteral("actionDelete"))->trigger();
+    QCOMPARE(bridge.trackCount(), 1ull);
+    QCOMPARE(w.mixer()->stripCount(), 1);
+    QVERIFY(w.action(QStringLiteral("actionUndo"))->isEnabled());
+    w.action(QStringLiteral("actionUndo"))->trigger();
+    QCOMPARE(bridge.trackCount(), 2ull);
+    QVERIFY(w.action(QStringLiteral("actionRedo"))->isEnabled());
+}
+
+void TestViews::browserShowsLibraryCategories()
+{
+    QStandardPaths::setTestModeEnabled(true);
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    BrowserPanel* b = w.browser();
+    QCOMPARE(b->categoryList()->count(), BrowserPanel::categories().size());
+    QCOMPARE(b->currentCategory(), QStringLiteral("Sounds"));
+    QVERIFY(QDir(b->currentFolder()).exists());
+    b->selectCategory(QStringLiteral("Samples"));
+    QCOMPARE(b->currentCategory(), QStringLiteral("Samples"));
+    QVERIFY(b->currentFolder().endsWith(QStringLiteral("/Samples")));
+    QVERIFY(QDir(b->currentFolder()).exists());
+    // A file dropped into the folder shows up; searching filters it.
+    QFile probe(b->currentFolder() + QStringLiteral("/kick.wav"));
+    QVERIFY(probe.open(QIODevice::WriteOnly));
+    probe.write("RIFF");
+    probe.close();
+    b->reload();
+    QTRY_COMPARE_WITH_TIMEOUT(b->visibleEntryCount(), 1, 3000);
+    QVERIFY(!b->isShowingEmptyState());
+    b->searchField()->setText(QStringLiteral("snare"));
+    QTRY_VERIFY_WITH_TIMEOUT(b->isShowingEmptyState(), 3000);
+    b->searchField()->clear();
+    QTRY_VERIFY_WITH_TIMEOUT(!b->isShowingEmptyState(), 3000);
+    QVERIFY(QFile::remove(probe.fileName()));
+    w.action(QStringLiteral("actionToggleBrowser"))->toggle();
+    QVERIFY(!b->isVisible());
+    w.action(QStringLiteral("actionToggleBrowser"))->toggle();
+    QVERIFY(b->isVisible());
+    QStandardPaths::setTestModeEnabled(false);
 }
 
 QTEST_MAIN(TestViews)
