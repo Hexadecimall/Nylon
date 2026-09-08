@@ -21,6 +21,21 @@ def main():
                 capture_output=True, text=True, timeout=6,
             )
 
+        def reply(*arguments):
+            """Runs a command that is expected to succeed and returns its
+            reply. A failure names the command, the exit code and whatever
+            the client wrote, which is what a bare parse error hid."""
+            result = call(*arguments)
+            if result.returncode != 0 or not result.stdout.strip():
+                raise AssertionError(
+                    "{} exited {} with stdout {!r} and stderr {!r}".format(
+                        " ".join(arguments), result.returncode, result.stdout, result.stderr))
+            try:
+                return json.loads(result.stdout)
+            except json.JSONDecodeError as error:
+                raise AssertionError("{} replied {!r}: {}".format(
+                    " ".join(arguments), result.stdout, error)) from None
+
         for _ in range(30):
             result = call("info")
             if result.returncode == 0:
@@ -29,17 +44,17 @@ def main():
                 raise RuntimeError(process.stderr.read().decode())
             time.sleep(0.1)
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout)["tracks"] == 0
-        assert call("add-track").returncode == 0
-        assert call("set-tempo", "137").returncode == 0
-        state = json.loads(call("info").stdout)
+        assert reply("info")["tracks"] == 0
+        reply("add-track")
+        reply("set-tempo", "137")
+        state = reply("info")
         assert state["tempo"] == 137 and state["tracks"] == 1, state
-        assert call("undo").returncode == 0
-        assert json.loads(call("info").stdout)["tempo"] == 120
-        assert call("view", "arrangement").returncode == 0
-        assert json.loads(call("info").stdout)["view"] == "arrangement"
+        reply("undo")
+        assert reply("info")["tempo"] == 120
+        reply("view", "arrangement")
+        assert reply("info")["view"] == "arrangement"
         for mode in ("maximize", "minimize", "restore"):
-            assert call("window", mode).returncode == 0
+            reply("window", mode)
         assert call("set-tempo", "invalid").returncode != 0
         assert call("unsupported").returncode != 0
         print("Qt process control: pass")

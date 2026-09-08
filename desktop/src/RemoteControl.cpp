@@ -48,7 +48,17 @@ QJsonObject RemoteControl::execute(const QJsonObject& request)
     if (command == "info" && args.isEmpty()) {
         return {{"ok", true}, {"tempo", bridge->tempo()},
             {"tracks", static_cast<double>(bridge->trackCount())},
+            {"audio", bridge->isAudioOpen()},
+            {"playing", bridge->isPlaying()},
+            {"position", bridge->positionBeats()},
             {"view", m_window->isStartScreenVisible() ? "start" : m_window->isSessionVisible() ? "session" : "arrangement"}};
+    }
+    if (command == "play" && args.isEmpty()) return reply(bridge->play());
+    if (command == "stop" && args.isEmpty()) return reply(bridge->stop());
+    if (command == "locate" && args.size() == 1 && args[0].isString()) {
+        bool ok = false;
+        const double beats = args[0].toString().toDouble(&ok);
+        return reply(ok && std::isfinite(beats) && bridge->locate(beats));
     }
     if (command == "undo" && args.isEmpty()) return reply(bridge->undo());
     if (command == "redo" && args.isEmpty()) return reply(bridge->redo());

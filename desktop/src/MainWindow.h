@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QTimer>
 #include <QSize>
 
 class QAction;
@@ -79,6 +80,12 @@ protected:
 
 private:
     void enterWorkspace();
+    // Opens the audio device the first time a project is shown, and keeps
+    // the transport controls in step with what the engine reports.
+    void openAudio();
+    void startPlayback();
+    void stopPlayback();
+    void pollAudio();
     void buildMenus();
     void buildWorkspace();
     void applyTheme(const Theme& theme);
@@ -120,6 +127,8 @@ private:
     QActionGroup* m_themeActions = nullptr;
     QMenu* m_recentMenu = nullptr;
     QSize m_workspaceSize{1440, 900};
+    // Drives the position readout and the meters while audio is open.
+    QTimer* m_audioPoll = nullptr;
 
     Qt::Edges edgesAt(const QPoint& pos) const;
     void updateResizeCursor(const QPoint& pos);

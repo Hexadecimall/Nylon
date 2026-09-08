@@ -2,6 +2,7 @@
 
 #include "nylon.hpp"
 
+#include <QList>
 #include <QObject>
 
 namespace nylon {
@@ -61,12 +62,35 @@ public:
     // Bundle directory of the last successful save or open; empty for an
     // unsaved project.
     QString bundlePath() const { return m_bundlePath; }
-    // True once the core drives a transport from an audio backend.
-    static bool isTransportAvailable() { return false; }
+    // True once an output is open and the core is driving a transport.
+    bool isTransportAvailable() const { return m_audio.isOpen(); }
+    // Output devices the core found, and the one currently open.
+    static QList<AudioDevice> audioDevices();
+    // True when the machine has an output the engine could open. This asks
+    // the core about devices; it does not start a stream.
+    static bool hasAudioOutput();
+    bool isAudioOpen() const { return m_audio.isOpen(); }
+    QString audioDeviceName() const { return m_deviceName; }
+    // Frames the device asked for that arrived late enough to be dropped.
+    quint64 audioDropouts() const;
+    bool isPlaying() const;
+    double positionBeats() const;
+    // Peak and RMS for one track, or for the master when the index is past
+    // the last track. False when nothing is playing.
+    bool trackLevels(quint64 index, Levels& levels) const;
+    bool masterLevels(Levels& levels) const;
     // True once the core exposes per-track mixer state.
     static bool isMixerAvailable() { return true; }
 
 public slots:
+    // Opens the default output, or the named device when one is given.
+    // The project is handed to the engine as it stands.
+    bool openAudio(quint64 deviceId = 0, unsigned int sampleRate = 0, unsigned int blockFrames = 0);
+    bool closeAudio();
+    bool play();
+    bool stop();
+    bool locate(double beats);
+
     // Discards the current project and starts an empty one.
     bool reset();
     // Bundle directory persistence. Both update bundlePath() on success.
@@ -104,10 +128,18 @@ public slots:
 
 signals:
     void changed();
+    // The engine opened, closed, started or stopped.
+    void audioStateChanged();
 
 private:
+    // Hands the current project to a running engine. Called after every
+    // accepted edit so playback follows what is on screen.
+    void syncAudio();
+
     Project m_project;
     QString m_bundlePath;
+    mutable AudioEngine m_audio;
+    QString m_deviceName;
 };
 
 } // namespace nylon

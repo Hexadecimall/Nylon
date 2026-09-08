@@ -46,9 +46,13 @@ signals:
     void message(const QString& text);
     void sessionRequested();
     void arrangementRequested();
+    void playRequested();
+    void stopRequested();
 
 public slots:
     void showSessionActive(bool session);
+    // Shows the playhead in bars, beats and sixteenths.
+    void showPosition(double beats);
     // Called once the core reports a running transport; enables the
     // playback controls.
     void setTransportAvailable(bool available);

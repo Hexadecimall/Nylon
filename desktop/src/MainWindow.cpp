@@ -32,6 +32,8 @@
 #include <QMessageBox>
 #include <QScrollBar>
 #include <QSettings>
+
+#include <cmath>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -337,6 +339,12 @@ void MainWindow::buildWorkspace()
     connect(m_transport, &TransportBar::message, this, &MainWindow::showStatus);
     connect(m_transport, &TransportBar::sessionRequested, this, &MainWindow::showSession);
     connect(m_transport, &TransportBar::arrangementRequested, this, &MainWindow::showArrangement);
+    connect(m_transport, &TransportBar::playRequested, this, &MainWindow::startPlayback);
+    connect(m_transport, &TransportBar::stopRequested, this, &MainWindow::stopPlayback);
+    connect(m_arrangement, &ArrangementView::locateRequested, this, [this](double beats) {
+        m_bridge->locate(beats);
+        m_transport->showPosition(beats);
+    });
     connect(m_mixerTab, &FlatButton::clicked, this, [this] { showLowerWidget(m_mixer); });
     connect(m_detailTab, &FlatButton::clicked, this, [this] { showLowerWidget(m_detail); });
     connect(m_lowerClose, &FlatButton::clicked, this, [this] {
@@ -648,6 +656,69 @@ void MainWindow::newProjectFromTemplate(int audioTracks, int midiTracks)
     showArrangement();
 }
 
+void MainWindow::openAudio()
+{
+    if (m_bridge->isAudioOpen()) {
+        return;
+    }
+    if (!m_bridge->openAudio()) {
+        showStatus(tr("No audio output was available, so playback is off."));
+        return;
+    }
+    showStatus(tr("Audio output: %1.").arg(m_bridge->audioDeviceName()));
+    if (!m_audioPoll) {
+        m_audioPoll = new QTimer(this);
+        // Fast enough that the playhead reads as motion rather than as a
+        // series of jumps, slow enough to leave the audio thread alone.
+        m_audioPoll->setInterval(33);
+        connect(m_audioPoll, &QTimer::timeout, this, &MainWindow::pollAudio);
+    }
+    m_audioPoll->start();
+}
+
+void MainWindow::startPlayback()
+{
+    // The device is opened on the first request rather than when a project
+    // opens, so a window that is never played leaves the output alone.
+    openAudio();
+    if (!m_bridge->play()) {
+        showStatus(tr("The engine would not start."));
+    }
+}
+
+void MainWindow::stopPlayback()
+{
+    m_bridge->stop();
+}
+
+void MainWindow::pollAudio()
+{
+    if (!m_bridge->isAudioOpen()) {
+        return;
+    }
+    const double beats = m_bridge->positionBeats();
+    m_arrangement->setPlayheadBeats(beats);
+    m_transport->showPosition(beats);
+    m_transport->playButton()->setChecked(m_bridge->isPlaying());
+
+    // Levels arrive as amplitudes; the meters read decibels.
+    const auto decibels = [](float amplitude) {
+        return amplitude > 0.0f ? 20.0 * std::log10(static_cast<double>(amplitude)) : -120.0;
+    };
+    for (int index = 0; index < m_mixer->stripCount(); ++index) {
+        Levels levels {};
+        if (m_bridge->trackLevels(static_cast<quint64>(index), levels)) {
+            m_mixer->setTrackLevels(index, decibels(levels.peakLeft), decibels(levels.peakRight),
+                decibels(levels.rmsLeft), decibels(levels.rmsRight));
+        }
+    }
+    Levels master {};
+    if (m_bridge->masterLevels(master)) {
+        m_mixer->setMasterLevels(decibels(master.peakLeft), decibels(master.peakRight),
+            decibels(master.rmsLeft), decibels(master.rmsRight));
+    }
+}
+
 void MainWindow::enterWorkspace()
 {
     if (m_root->currentWidget() == m_workspace) {
@@ -662,6 +733,16 @@ void MainWindow::enterWorkspace()
         resize(m_workspaceSize.expandedTo(floor));
     }
     m_root->setCurrentWidget(m_workspace);
+    // The controls come alive when the machine has an output to play to;
+    // the stream itself waits for the first play.
+    const bool available = ProjectBridge::hasAudioOutput();
+    m_transport->setTransportAvailable(available);
+    for (const char* name : {"actionPlay", "actionStop"}) {
+        if (QAction* item = action(QLatin1String(name))) {
+            item->setEnabled(available);
+            item->setToolTip(available ? QString() : item->toolTip());
+        }
+    }
 }
 
 void MainWindow::showSession()
@@ -911,17 +992,20 @@ void MainWindow::buildMenus()
     });
 
     QMenu* transport = roundMenu(bar->addMenu(tr("&Transport")));
-    add(transport, QStringLiteral("actionPlay"), tr("&Play"), QKeySequence(Qt::Key_Space), nullptr,
-        ProjectBridge::isTransportAvailable(), noTransport);
-    add(transport, QStringLiteral("actionStop"), tr("&Stop"), QKeySequence(Qt::SHIFT | Qt::Key_Space), nullptr,
-        ProjectBridge::isTransportAvailable(), noTransport);
+    // Playback is offered when the machine has an output to play to; the
+    // stream itself opens on the first play.
+    const bool driven = ProjectBridge::hasAudioOutput();
+    add(transport, QStringLiteral("actionPlay"), tr("&Play"), QKeySequence(Qt::Key_Space),
+        [this] { startPlayback(); }, driven, noTransport);
+    add(transport, QStringLiteral("actionStop"), tr("&Stop"), QKeySequence(Qt::SHIFT | Qt::Key_Space),
+        [this] { stopPlayback(); }, driven, noTransport);
     add(transport, QStringLiteral("actionRecord"), tr("&Record"), QKeySequence(Qt::Key_F9), nullptr,
-        ProjectBridge::isTransportAvailable(), noTransport);
+        false, noTransport);
     transport->addSeparator();
     add(transport, QStringLiteral("actionLoop"), tr("&Loop"), QKeySequence(Qt::CTRL | Qt::Key_L), nullptr,
-        ProjectBridge::isTransportAvailable(), noTransport);
+        false, noTransport);
     add(transport, QStringLiteral("actionMetronome"), tr("&Metronome"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K), nullptr,
-        ProjectBridge::isTransportAvailable(), noTransport);
+        false, noTransport);
 
     view->addSeparator();
     QAction* paletteAction = add(view, QStringLiteral("actionCommandPalette"), tr("&Command Palette..."),

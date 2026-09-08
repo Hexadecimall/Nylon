@@ -13,6 +13,8 @@
 #include <QPaintEvent>
 #include <QPainter>
 
+#include <cmath>
+
 namespace nylon {
 
 TransportBar::TransportBar(ProjectBridge* bridge, const Theme* theme, QWidget* parent)
@@ -135,6 +137,8 @@ TransportBar::TransportBar(ProjectBridge* bridge, const Theme* theme, QWidget* p
         showSessionActive(false);
         emit arrangementRequested();
     });
+    connect(m_play, &FlatButton::clicked, this, &TransportBar::playRequested);
+    connect(m_stop, &FlatButton::clicked, this, &TransportBar::stopRequested);
     connect(m_bridge, &ProjectBridge::changed, this, &TransportBar::refresh);
 
     setTransportAvailable(false);
@@ -183,6 +187,19 @@ void TransportBar::setTransportAvailable(bool available)
         b->setToolTip(available ? QString() : why);
     }
     m_lcd->setEnabled(available);
+}
+
+void TransportBar::showPosition(double beats)
+{
+    const int perBar = qBound(1, m_bridge->timeSignatureNumerator(), 64);
+    const double safe = std::isfinite(beats) && beats > 0.0 ? beats : 0.0;
+    const int whole = static_cast<int>(safe);
+    const int bar = whole / perBar + 1;
+    const int beat = whole % perBar + 1;
+    // Sixteenths inside the beat, counted from one the way a position
+    // readout is written.
+    const int sixteenth = static_cast<int>((safe - whole) * 4.0) + 1;
+    m_lcd->setPosition(QStringLiteral("%1 . %2 . %3").arg(bar).arg(beat).arg(sixteenth));
 }
 
 void TransportBar::showSessionActive(bool session)

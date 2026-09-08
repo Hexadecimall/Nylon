@@ -10,6 +10,7 @@
 #include "widgets/Fader.h"
 #include "widgets/FlatButton.h"
 #include "widgets/Knob.h"
+#include "widgets/LcdDisplay.h"
 #include "widgets/LevelMeter.h"
 #include "widgets/ValueBox.h"
 #include "ProjectBridge.h"
@@ -77,6 +78,7 @@ private slots:
     void arrangementGridFollowsTimeSignature();
     void trackHeaderCarriesStateAndVolume();
     void theWorkspaceHoldsItsLayoutAtTheSmallestWindow();
+    void theTransportFollowsTheAudioEngine();
     void detailClipPageHostsThePianoRoll();
 
 private:
@@ -381,8 +383,10 @@ void TestViews::transportSpacingFollowsTokens()
     QCOMPARE(w.transport()->tempoBox()->width(), t.metricInt(QStringLiteral("transport.tempo.width")));
     const int side = t.metricInt(QStringLiteral("transport.button.size")) + 6;
     QCOMPARE(w.transport()->playButton()->width(), side);
-    QVERIFY(!w.transport()->playButton()->isEnabled());
-    QVERIFY(!w.transport()->isTransportAvailable());
+    // Playback is offered when the machine has an output at all, which is
+    // what decides this on the machine the test runs on.
+    QCOMPARE(w.transport()->playButton()->isEnabled(), ProjectBridge::hasAudioOutput());
+    QCOMPARE(w.transport()->isTransportAvailable(), ProjectBridge::hasAudioOutput());
 
     // The time signature boxes read and write the core.
     QCOMPARE(w.transport()->numeratorBox()->value(), 4.0);
@@ -451,11 +455,13 @@ void TestViews::menusAreInWindowAndComplete()
     }
     QVERIFY(w.action(QStringLiteral("actionNew"))->isShortcutVisibleInContextMenu());
     // Everything the core cannot do yet is disabled and says why.
-    for (const char* name : {"actionPlay", "actionCut"}) {
+    for (const char* name : {"actionRecord", "actionCut"}) {
         QAction* a = w.action(QLatin1String(name));
         QVERIFY2(!a->isEnabled(), name);
         QVERIFY2(!a->statusTip().isEmpty(), name);
     }
+    // Play follows the audio device rather than being disabled outright.
+    QCOMPARE(w.action(QStringLiteral("actionPlay"))->isEnabled(), ProjectBridge::hasAudioOutput());
     QVERIFY(w.action(QStringLiteral("actionNew"))->isEnabled());
     QVERIFY(w.action(QStringLiteral("actionOpen"))->isEnabled());
     QVERIFY(w.action(QStringLiteral("actionSave"))->isEnabled());
@@ -861,6 +867,59 @@ void TestViews::theWorkspaceHoldsItsLayoutAtTheSmallestWindow()
     w.showStartScreen();
     QCoreApplication::processEvents();
     QVERIFY(w.minimumSize().width() < floor.width());
+}
+
+void TestViews::theTransportFollowsTheAudioEngine()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    bridge.addTrack();
+    QCoreApplication::processEvents();
+
+    // Nothing is opened until playback is asked for.
+    QVERIFY(!bridge.isAudioOpen());
+    const bool available = ProjectBridge::hasAudioOutput();
+    QCOMPARE(w.transport()->playButton()->isEnabled(), available);
+    if (!available) {
+        // A machine with no output device still has to reach this point
+        // with the controls off rather than half enabled.
+        QVERIFY(!bridge.play());
+        QVERIFY(!bridge.isPlaying());
+        return;
+    }
+
+    QVERIFY(bridge.openAudio());
+    QVERIFY(bridge.isAudioOpen());
+    QVERIFY(w.transport()->isTransportAvailable());
+    QVERIFY(!bridge.isPlaying());
+
+    // The engine takes up settings at a block boundary, so playing turns
+    // true a few milliseconds after the call returns.
+    QVERIFY(bridge.play());
+    QTRY_VERIFY_WITH_TIMEOUT(bridge.isPlaying(), 2000);
+    // The playhead has to be somewhere other than where it started, and
+    // the readout has to follow it.
+    // A quarter of a beat is the first step the readout can show.
+    QTRY_VERIFY_WITH_TIMEOUT(bridge.positionBeats() > 0.25, 3000);
+    // The window follows the engine through its own poll, which only runs
+    // for a device the window opened itself.
+    w.transport()->showPosition(bridge.positionBeats());
+    QVERIFY(w.transport()->lcd()->position() != QStringLiteral("1 . 1 . 1"));
+
+    QVERIFY(bridge.stop());
+    QTRY_VERIFY_WITH_TIMEOUT(!bridge.isPlaying(), 2000);
+    QTest::qWait(60);
+    const double stopped = bridge.positionBeats();
+    QTest::qWait(120);
+    QCOMPARE(bridge.positionBeats(), stopped);
+
+    QVERIFY(bridge.locate(0.0));
+    QTRY_COMPARE_WITH_TIMEOUT(bridge.positionBeats(), 0.0, 2000);
+    QVERIFY(bridge.closeAudio());
+    QVERIFY(!bridge.isTransportAvailable());
 }
 
 void TestViews::detailClipPageHostsThePianoRoll()

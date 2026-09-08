@@ -15,14 +15,139 @@ bool commit(ProjectBridge* bridge, F&& call)
     return ok;
 }
 
+// What the engine opens with when the caller names nothing.
+constexpr unsigned int kDefaultSampleRate = 48000;
+constexpr unsigned int kDefaultBlockFrames = 512;
+
 } // namespace
 
 ProjectBridge::ProjectBridge(QObject* parent)
     : QObject(parent)
 {
+    // Playback follows the project, so every accepted edit is handed to a
+    // running engine before the next block is rendered.
+    connect(this, &ProjectBridge::changed, this, &ProjectBridge::syncAudio);
 }
 
 ProjectBridge::~ProjectBridge() = default;
+
+QList<AudioDevice> ProjectBridge::audioDevices()
+{
+    QList<AudioDevice> devices;
+    for (const AudioDevice& device : AudioEngine::devices()) {
+        devices.append(device);
+    }
+    return devices;
+}
+
+bool ProjectBridge::hasAudioOutput()
+{
+    std::uint64_t id = 0;
+    return AudioEngine::defaultOutput(id);
+}
+
+bool ProjectBridge::openAudio(quint64 deviceId, unsigned int sampleRate, unsigned int blockFrames)
+{
+    if (!m_audio.valid() || !m_project.valid()) {
+        return false;
+    }
+    if (m_audio.isOpen()) {
+        m_audio.close();
+    }
+    std::uint64_t id = deviceId;
+    if (id == 0 && !AudioEngine::defaultOutput(id)) {
+        return false;
+    }
+    const unsigned int rate = sampleRate != 0 ? sampleRate : kDefaultSampleRate;
+    const unsigned int frames = blockFrames != 0 ? blockFrames : kDefaultBlockFrames;
+    if (!m_audio.open(m_project, id, rate, frames)) {
+        return false;
+    }
+    m_deviceName.clear();
+    for (const AudioDevice& device : AudioEngine::devices()) {
+        if (device.id == id) {
+            m_deviceName = QString::fromStdString(device.name);
+            break;
+        }
+    }
+    emit audioStateChanged();
+    return true;
+}
+
+bool ProjectBridge::closeAudio()
+{
+    if (!m_audio.isOpen()) {
+        return false;
+    }
+    const bool closed = m_audio.close();
+    if (closed) {
+        m_deviceName.clear();
+        emit audioStateChanged();
+    }
+    return closed;
+}
+
+bool ProjectBridge::play()
+{
+    if (!m_audio.isOpen()) {
+        return false;
+    }
+    syncAudio();
+    const bool started = m_audio.play();
+    if (started) {
+        emit audioStateChanged();
+    }
+    return started;
+}
+
+bool ProjectBridge::stop()
+{
+    if (!m_audio.isOpen()) {
+        return false;
+    }
+    const bool stopped = m_audio.stop();
+    if (stopped) {
+        emit audioStateChanged();
+    }
+    return stopped;
+}
+
+bool ProjectBridge::locate(double beats)
+{
+    return m_audio.isOpen() && m_audio.locate(beats);
+}
+
+bool ProjectBridge::isPlaying() const
+{
+    return m_audio.isOpen() && m_audio.isPlaying();
+}
+
+double ProjectBridge::positionBeats() const
+{
+    return m_audio.isOpen() ? m_audio.positionBeats() : 0.0;
+}
+
+quint64 ProjectBridge::audioDropouts() const
+{
+    return m_audio.isOpen() ? m_audio.dropouts() : 0;
+}
+
+bool ProjectBridge::trackLevels(quint64 index, Levels& levels) const
+{
+    return m_audio.isOpen() && m_audio.trackLevels(index, levels);
+}
+
+bool ProjectBridge::masterLevels(Levels& levels) const
+{
+    return m_audio.isOpen() && m_audio.masterLevels(levels);
+}
+
+void ProjectBridge::syncAudio()
+{
+    if (m_audio.isOpen()) {
+        m_audio.sync(m_project);
+    }
+}
 
 bool ProjectBridge::save(const QString& bundleDirectory)
 {
