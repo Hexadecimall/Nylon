@@ -78,13 +78,13 @@ fn processing_a_block_performs_no_allocator_operations() {
     ramp.ramp_to(1.0, BLOCK as u32);
 
     let operations = measure(|| {
-        for index in 0..BLOCK {
+        for sample in block.iter_mut().take(BLOCK) {
             let level = envelope.process() * smoother.process() * ramp.process();
             let gains = pan::constant_power(0.25);
             let dry = oscillator.process() * level * gains.left;
             let wet = line.tick(&mut delay_buffer, dry, 1_000.5);
             let mixed = filter.process(dry + wet * 0.4);
-            block[index] = mixed;
+            *sample = mixed;
         }
         meter.push_block(&block);
         filter.process_block(&mut block);
