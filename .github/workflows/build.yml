@@ -135,24 +135,24 @@ jobs:
           echo "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64/bin" >> "$GITHUB_PATH"
       - run: cargo build --locked --release
       - name: Locate the target kit's qtpaths
-        # A cross-compiled kit is deployed with the host kit's windeployqt,
-        # which needs the target kit's qtpaths. A native kit needs neither.
+        # windeployqt resolves the kit through qtpaths and looks for a
+        # qtpaths.bat beside itself, which an aqt-installed kit does not
+        # have, so the real one is located and passed explicitly.
         run: |
+          bin="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin"
           qtpaths=""
-          if [ "${{ matrix.qt_dir }}" != "msvc2022_64" ]; then
-            for candidate in qtpaths.bat qtpaths6.bat qtpaths.exe qtpaths6.exe; do
-              path="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin/$candidate"
-              if [ -f "$path" ]; then
-                qtpaths="$path"
-                break
-              fi
-            done
-            if [ -z "$qtpaths" ]; then
-              echo "no qtpaths found in the target kit" >&2
-              ls "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin" >&2
-              exit 1
+          for candidate in qtpaths.bat qtpaths6.bat qtpaths.exe qtpaths6.exe; do
+            if [ -f "$bin/$candidate" ]; then
+              qtpaths="$bin/$candidate"
+              break
             fi
+          done
+          if [ -z "$qtpaths" ]; then
+            echo "no qtpaths found in $bin" >&2
+            ls "$bin" >&2
+            exit 1
           fi
+          echo "using $qtpaths"
           echo "NYLON_QTPATHS=$qtpaths" >> "$GITHUB_ENV"
       - name: Configure
         run: >
