@@ -229,4 +229,107 @@ bool Project::setArrangementClipRange(
         != 0;
 }
 
+AudioEngine::AudioEngine()
+    : m_handle(nylon_audio_new())
+{
+}
+
+AudioEngine::~AudioEngine()
+{
+    nylon_audio_free(m_handle);
+}
+
+AudioEngine::AudioEngine(AudioEngine&& other) noexcept
+    : m_handle(std::exchange(other.m_handle, nullptr))
+{
+}
+
+AudioEngine& AudioEngine::operator=(AudioEngine&& other) noexcept
+{
+    if (this != &other) {
+        nylon_audio_free(m_handle);
+        m_handle = std::exchange(other.m_handle, nullptr);
+    }
+    return *this;
+}
+
+std::vector<AudioDevice> AudioEngine::devices()
+{
+    const auto count = nylon_audio_device_list(nullptr, 0);
+    std::vector<NylonAudioDevice> native(static_cast<std::size_t>(count));
+    const auto written = nylon_audio_device_list(native.data(), count);
+    std::vector<AudioDevice> result;
+    result.reserve(static_cast<std::size_t>(written));
+    for (std::uint64_t index = 0; index < written; ++index) {
+        const auto& device = native[static_cast<std::size_t>(index)];
+        AudioDevice converted;
+        converted.id = device.id;
+        converted.name = device.name;
+        converted.channels = device.channels;
+        converted.isDefault = device.is_default != 0;
+        converted.sampleRates.assign(device.sample_rates,
+            device.sample_rates + device.sample_rate_count);
+        result.push_back(std::move(converted));
+    }
+    return result;
+}
+
+bool AudioEngine::defaultOutput(std::uint64_t& deviceId)
+{
+    return nylon_audio_default_output(&deviceId) != 0;
+}
+
+bool AudioEngine::open(const Project& project, std::uint64_t deviceId,
+    std::uint32_t sampleRate, std::uint32_t blockFrames)
+{
+    return nylon_audio_open(m_handle, project.raw(), deviceId, sampleRate, blockFrames) != 0;
+}
+
+bool AudioEngine::close() { return nylon_audio_close(m_handle) != 0; }
+bool AudioEngine::isOpen() const { return nylon_audio_is_open(m_handle) != 0; }
+
+bool AudioEngine::config(AudioConfig& config) const
+{
+    NylonAudioConfig native{};
+    if (nylon_audio_config(m_handle, &native) == 0) return false;
+    config = {native.device_id, native.sample_rate, native.block_frames, native.channels};
+    return true;
+}
+
+bool AudioEngine::sync(const Project& project)
+{
+    return nylon_audio_sync(m_handle, project.raw()) != 0;
+}
+
+std::uint64_t AudioEngine::dropouts() const { return nylon_audio_dropouts(m_handle); }
+bool AudioEngine::play() { return nylon_transport_play(m_handle) != 0; }
+bool AudioEngine::stop() { return nylon_transport_stop(m_handle) != 0; }
+bool AudioEngine::locate(double beats) { return nylon_transport_locate(m_handle, beats) != 0; }
+double AudioEngine::positionBeats() { return nylon_transport_position_beats(m_handle); }
+bool AudioEngine::isPlaying() { return nylon_transport_is_playing(m_handle) != 0; }
+
+namespace {
+void copyLevels(const NylonLevels& native, Levels& levels)
+{
+    levels = {native.peak_left, native.peak_right, native.rms_left, native.rms_right,
+        native.clipped != 0};
+}
+} // namespace
+
+bool AudioEngine::trackLevels(std::uint64_t index, Levels& levels)
+{
+    NylonLevels native{};
+    if (nylon_track_levels(m_handle, index, &native) == 0) return false;
+    copyLevels(native, levels);
+    return true;
+}
+
+bool AudioEngine::masterLevels(Levels& levels)
+{
+    NylonLevels native{};
+    if (nylon_master_levels(m_handle, &native) == 0) return false;
+    copyLevels(native, levels);
+    return true;
+}
+
 } // namespace nylon

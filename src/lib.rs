@@ -9,6 +9,7 @@ pub mod latest;
 pub mod mixer;
 pub mod persistence;
 pub mod project;
+pub mod runtime;
 pub mod spsc;
 pub mod transport;
 pub mod wave;

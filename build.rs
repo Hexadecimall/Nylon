@@ -7,5 +7,9 @@ fn main() {
         println!("cargo::rustc-link-lib=framework=AudioToolbox");
         println!("cargo::rustc-link-lib=framework=CoreAudio");
         println!("cargo::rustc-link-lib=framework=CoreFoundation");
+        // Cargo otherwise records the build directory as the dynamic
+        // library identity. Consumers resolve the shipped core beside
+        // the application through their runtime search path.
+        println!("cargo::rustc-cdylib-link-arg=-Wl,-install_name,@rpath/libnylon.dylib");
     }
 }

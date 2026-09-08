@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace nylon {
 
@@ -20,6 +21,29 @@ struct MidiNote {
 struct BeatRange {
     double startBeats;
     double lengthBeats;
+};
+
+struct AudioDevice {
+    std::uint64_t id;
+    std::string name;
+    std::uint32_t channels;
+    bool isDefault;
+    std::vector<std::uint32_t> sampleRates;
+};
+
+struct AudioConfig {
+    std::uint64_t deviceId;
+    std::uint32_t sampleRate;
+    std::uint32_t blockFrames;
+    std::uint32_t channels;
+};
+
+struct Levels {
+    float peakLeft;
+    float peakRight;
+    float rmsLeft;
+    float rmsRight;
+    bool clipped;
 };
 
 // Owning handle to a core project. Move-only.
@@ -107,6 +131,42 @@ public:
     int arrangementClipColorIndex(std::uint64_t track, std::uint64_t index) const;
     bool removeArrangementClip(std::uint64_t track, std::uint64_t index);
     bool setArrangementClipRange(std::uint64_t track, std::uint64_t index, BeatRange range);
+
+private:
+    void* m_handle;
+};
+
+// Owning control-thread handle for the platform audio stream.
+class AudioEngine {
+public:
+    AudioEngine();
+    ~AudioEngine();
+    AudioEngine(const AudioEngine&) = delete;
+    AudioEngine& operator=(const AudioEngine&) = delete;
+    AudioEngine(AudioEngine&& other) noexcept;
+    AudioEngine& operator=(AudioEngine&& other) noexcept;
+
+    bool valid() const { return m_handle != nullptr; }
+    explicit operator bool() const { return valid(); }
+
+    static std::vector<AudioDevice> devices();
+    static bool defaultOutput(std::uint64_t& deviceId);
+
+    bool open(const Project& project, std::uint64_t deviceId, std::uint32_t sampleRate,
+        std::uint32_t blockFrames);
+    bool close();
+    bool isOpen() const;
+    bool config(AudioConfig& config) const;
+    bool sync(const Project& project);
+    std::uint64_t dropouts() const;
+
+    bool play();
+    bool stop();
+    bool locate(double beats);
+    double positionBeats();
+    bool isPlaying();
+    bool trackLevels(std::uint64_t index, Levels& levels);
+    bool masterLevels(Levels& levels);
 
 private:
     void* m_handle;

@@ -1,8 +1,55 @@
 //! Native control interface. Handles belong to one control thread and must
 //! not be accessed concurrently or used after release.
 
+use crate::audio::{DeviceId, DeviceInfo, Direction, Name, Rates};
+use crate::mixer::Levels;
 use crate::project::{ClipId, Command, MidiNote, Project, SceneId, TrackId, TrackKind};
+use crate::runtime::{AudioRuntime, MAX_DEVICES, default_output, output_devices};
 use std::ffi::{CStr, c_char};
+
+/// Fixed-size audio-device record for the C interface.
+#[repr(C)]
+pub struct NylonAudioDevice {
+    pub id: u64,
+    pub name: [c_char; crate::audio::MAX_NAME + 1],
+    pub channels: u32,
+    pub is_default: i32,
+    pub sample_rates: [u32; crate::audio::MAX_RATES],
+    pub sample_rate_count: u32,
+}
+
+/// Stream configuration granted by the host.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NylonAudioConfig {
+    pub device_id: u64,
+    pub sample_rate: u32,
+    pub block_frames: u32,
+    pub channels: u32,
+}
+
+/// One stereo meter reading from the live mixer.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NylonLevels {
+    pub peak_left: f32,
+    pub peak_right: f32,
+    pub rms_left: f32,
+    pub rms_right: f32,
+    pub clipped: i32,
+}
+
+impl From<Levels> for NylonLevels {
+    fn from(levels: Levels) -> Self {
+        Self {
+            peak_left: levels.peak_left,
+            peak_right: levels.peak_right,
+            rms_left: levels.rms_left,
+            rms_right: levels.rms_right,
+            clipped: i32::from(levels.clipped),
+        }
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn nylon_project_new() -> *mut Project {
@@ -1058,4 +1105,275 @@ pub unsafe extern "C" fn nylon_arrangement_clip_set_range(
             }
         })
     }
+}
+
+fn native_device(info: DeviceInfo) -> NylonAudioDevice {
+    let mut device = NylonAudioDevice {
+        id: info.id.0,
+        name: [0; crate::audio::MAX_NAME + 1],
+        channels: u32::from(info.channels),
+        is_default: i32::from(info.is_default),
+        sample_rates: [0; crate::audio::MAX_RATES],
+        sample_rate_count: info.rates.len() as u32,
+    };
+    for (destination, source) in device.name.iter_mut().zip(info.name.as_str().bytes()) {
+        *destination = source as c_char;
+    }
+    for (destination, source) in device.sample_rates.iter_mut().zip(info.rates.as_slice()) {
+        *destination = *source;
+    }
+    device
+}
+
+/// Creates a closed live-audio controller.
+#[unsafe(no_mangle)]
+pub extern "C" fn nylon_audio_new() -> *mut AudioRuntime {
+    Box::into_raw(Box::new(AudioRuntime::new()))
+}
+
+/// # Safety
+/// A non-null handle must originate from `nylon_audio_new`, remain live,
+/// and be released exactly once with no outstanding references.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_free(handle: *mut AudioRuntime) {
+    if !handle.is_null() {
+        // SAFETY: Ownership of the original allocation is transferred back.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+/// # Safety
+/// When `out` is non-null it must hold `capacity` writable records. Passing
+/// null queries the available count without copying records.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_device_list(out: *mut NylonAudioDevice, capacity: u64) -> u64 {
+    let empty = DeviceInfo {
+        id: DeviceId(0),
+        name: Name::new(),
+        direction: Direction::Output,
+        channels: 0,
+        rates: Rates::new(),
+        is_default: false,
+    };
+    let mut devices = [empty; MAX_DEVICES];
+    let Ok(count) = output_devices(&mut devices) else {
+        return 0;
+    };
+    if !out.is_null() {
+        let capacity = usize::try_from(capacity).unwrap_or(usize::MAX);
+        for (index, info) in devices[..count.min(capacity)].iter().enumerate() {
+            // SAFETY: The caller guarantees writable storage for `capacity`
+            // records and the loop never exceeds it.
+            unsafe { out.add(index).write(native_device(*info)) };
+        }
+    }
+    count as u64
+}
+
+/// # Safety
+/// `device_id` must point to one writable integer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_default_output(device_id: *mut u64) -> i32 {
+    if device_id.is_null() {
+        return 0;
+    }
+    let Ok(device) = default_output() else {
+        return 0;
+    };
+    // SAFETY: The caller provides one writable integer.
+    unsafe { device_id.write(device.0) };
+    1
+}
+
+/// # Safety
+/// Both handles must be live, belong to the calling control thread, and
+/// the project must have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_open(
+    audio: *mut AudioRuntime,
+    project: *const Project,
+    device_id: u64,
+    sample_rate: u32,
+    block_frames: u32,
+) -> i32 {
+    // SAFETY: The interface contract makes the audio handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract keeps the project live and immutable.
+    let project = unsafe { project.as_ref() };
+    let (Some(audio), Some(project)) = (audio, project) else {
+        return 0;
+    };
+    i32::from(
+        audio
+            .open(
+                project,
+                DeviceId(device_id),
+                sample_rate,
+                block_frames as usize,
+            )
+            .is_ok(),
+    )
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_close(audio: *mut AudioRuntime) -> i32 {
+    // SAFETY: The interface contract makes the handle exclusive.
+    let Some(audio) = (unsafe { audio.as_mut() }) else {
+        return 0;
+    };
+    audio.close();
+    1
+}
+
+/// # Safety
+/// The handle must be live with no concurrent access.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_is_open(audio: *const AudioRuntime) -> i32 {
+    // SAFETY: The interface contract keeps the handle live and immutable.
+    unsafe { audio.as_ref() }.map_or(0, |audio| i32::from(audio.is_open()))
+}
+
+/// # Safety
+/// The handle must be live with no concurrent access. `out` must point to
+/// one writable configuration.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_config(
+    audio: *const AudioRuntime,
+    out: *mut NylonAudioConfig,
+) -> i32 {
+    // SAFETY: The interface contract keeps the handle live and immutable.
+    let audio = unsafe { audio.as_ref() };
+    // SAFETY: The interface contract provides one writable record.
+    let out = unsafe { out.as_mut() };
+    let (Some(audio), Some(out)) = (audio, out) else {
+        return 0;
+    };
+    let Some(config) = audio.config() else {
+        return 0;
+    };
+    let Ok(block_frames) = u32::try_from(config.block_frames) else {
+        return 0;
+    };
+    *out = NylonAudioConfig {
+        device_id: config.device.0,
+        sample_rate: config.sample_rate,
+        block_frames,
+        channels: u32::from(config.channels),
+    };
+    1
+}
+
+/// # Safety
+/// Both handles must be live, belong to the calling control thread, and
+/// the project must have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_sync(
+    audio: *mut AudioRuntime,
+    project: *const Project,
+) -> i32 {
+    // SAFETY: The interface contract makes the audio handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract keeps the project live and immutable.
+    let project = unsafe { project.as_ref() };
+    let (Some(audio), Some(project)) = (audio, project) else {
+        return 0;
+    };
+    i32::from(audio.sync_project(project))
+}
+
+/// # Safety
+/// The handle must be live with no concurrent access.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_dropouts(audio: *const AudioRuntime) -> u64 {
+    // SAFETY: The interface contract keeps the handle live and immutable.
+    unsafe { audio.as_ref() }.map_or(0, AudioRuntime::dropouts)
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_transport_play(audio: *mut AudioRuntime) -> i32 {
+    // SAFETY: The interface contract makes the handle exclusive.
+    unsafe { audio.as_mut() }.map_or(0, |audio| i32::from(audio.play()))
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_transport_stop(audio: *mut AudioRuntime) -> i32 {
+    // SAFETY: The interface contract makes the handle exclusive.
+    unsafe { audio.as_mut() }.map_or(0, |audio| i32::from(audio.stop()))
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_transport_locate(audio: *mut AudioRuntime, beats: f64) -> i32 {
+    // SAFETY: The interface contract makes the handle exclusive.
+    unsafe { audio.as_mut() }.map_or(0, |audio| i32::from(audio.locate(beats)))
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_transport_position_beats(audio: *mut AudioRuntime) -> f64 {
+    // SAFETY: The interface contract makes the handle exclusive.
+    unsafe { audio.as_mut() }.map_or(0.0, |audio| audio.state().position_beats)
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_transport_is_playing(audio: *mut AudioRuntime) -> i32 {
+    // SAFETY: The interface contract makes the handle exclusive.
+    unsafe { audio.as_mut() }.map_or(0, |audio| i32::from(audio.state().playing))
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call. `out`
+/// must point to one writable level record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_levels(
+    audio: *mut AudioRuntime,
+    index: u64,
+    out: *mut NylonLevels,
+) -> i32 {
+    // SAFETY: The interface contract makes the handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract provides one writable record.
+    let out = unsafe { out.as_mut() };
+    let (Some(audio), Some(out)) = (audio, out) else {
+        return 0;
+    };
+    let state = audio.state();
+    let Ok(index) = usize::try_from(index) else {
+        return 0;
+    };
+    if index >= state.track_count {
+        return 0;
+    }
+    *out = state.levels[index].into();
+    1
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call. `out`
+/// must point to one writable level record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_master_levels(
+    audio: *mut AudioRuntime,
+    out: *mut NylonLevels,
+) -> i32 {
+    // SAFETY: The interface contract makes the handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract provides one writable record.
+    let out = unsafe { out.as_mut() };
+    let (Some(audio), Some(out)) = (audio, out) else {
+        return 0;
+    };
+    let state = audio.state();
+    *out = state.levels[state.track_count].into();
+    1
 }

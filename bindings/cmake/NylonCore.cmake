@@ -1,15 +1,17 @@
 # Defines the imported nylon_core target for the Rust core library.
-# NYLON_CORE_LIBRARY selects the file; the default is the release static
+# NYLON_CORE_LIBRARY selects the file; the default is the release shared
 # library built by cargo at the repository root.
 if(TARGET nylon_core)
     return()
 endif()
 
 get_filename_component(_nylon_root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
-if(WIN32 AND MSVC)
-    set(_nylon_core_default "${_nylon_root}/target/release/nylon.lib")
+if(WIN32)
+    set(_nylon_core_default "${_nylon_root}/target/release/nylon.dll")
+elseif(APPLE)
+    set(_nylon_core_default "${_nylon_root}/target/release/libnylon.dylib")
 else()
-    set(_nylon_core_default "${_nylon_root}/target/release/libnylon.a")
+    set(_nylon_core_default "${_nylon_root}/target/release/libnylon.so")
 endif()
 set(NYLON_CORE_LIBRARY "${_nylon_core_default}" CACHE FILEPATH
     "Path to the Rust core library (static or shared)")

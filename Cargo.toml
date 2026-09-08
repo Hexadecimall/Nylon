@@ -8,7 +8,7 @@ authors = ["Nylon Contributors"]
 description = "Native digital audio workstation"
 
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

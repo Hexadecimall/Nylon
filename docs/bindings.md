@@ -7,7 +7,8 @@ Nothing here may be called from the audio thread.
 ## C
 
 Header: `bindings/c/nylon.h`. Link against the core library
-(`target/release/libnylon.a`, `libnylon.so`, or `nylon.lib`).
+(`libnylon.dylib`, `libnylon.so`, or `nylon.dll`). Static archives are
+also built for embedding.
 
 Conventions:
 
@@ -35,6 +36,9 @@ Groups of functions:
 | `nylon_scene_*` | scene count, creation, deletion, names |
 | `nylon_clip_*` | slot state, MIDI clip creation, name, color, loop, notes |
 | `nylon_arrangement_*` | clips placed on the timeline |
+| `nylon_audio_*` | output devices, stream lifecycle, granted configuration, dropouts, project publication |
+| `nylon_transport_*` | play, stop, locate, position |
+| `nylon_track_levels`, `nylon_master_levels` | live linear peak and RMS readings |
 
 Track kinds: 0 audio, 1 MIDI, 2 return, 3 master, 4 group, 5 cue.
 
@@ -43,8 +47,10 @@ Track kinds: 0 audio, 1 MIDI, 2 return, 3 master, 4 group, 5 cue.
 Header: `bindings/cpp/nylon.hpp`, library `nyloncpp` (built by
 `bindings/cpp/CMakeLists.txt`; link it with `-lnyloncpp` plus the core).
 `nylon::Project` is a move-only owner of a project handle with one method
-per C function, `std::string` for names, and `nylon::MidiNote` /
-`nylon::BeatRange` value types. Consumers include the directory with
+per project C function, `std::string` for names, and `nylon::MidiNote` /
+`nylon::BeatRange` value types. `nylon::AudioEngine` owns the platform
+stream and provides device enumeration, transport control, synchronization,
+configuration, dropout, and meter access. Consumers include the directory with
 `add_subdirectory(bindings/cpp)` and link the `nyloncpp` target, which
 carries the core library and the C header directory.
 

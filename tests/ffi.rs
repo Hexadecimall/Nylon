@@ -31,6 +31,78 @@ fn null_handles_are_rejected() {
         assert_eq!(nylon_project_track_count(std::ptr::null()), 0);
         assert_eq!(nylon_project_tempo(std::ptr::null()), 0.0);
         nylon_project_free(std::ptr::null_mut());
+        assert_eq!(nylon_audio_close(std::ptr::null_mut()), 0);
+        assert_eq!(nylon_audio_is_open(std::ptr::null()), 0);
+        assert_eq!(nylon_transport_play(std::ptr::null_mut()), 0);
+        assert_eq!(nylon_transport_stop(std::ptr::null_mut()), 0);
+        assert_eq!(nylon_transport_locate(std::ptr::null_mut(), 1.0), 0);
+        assert_eq!(nylon_transport_position_beats(std::ptr::null_mut()), 0.0);
+        assert_eq!(nylon_audio_default_output(std::ptr::null_mut()), 0);
+        nylon_audio_free(std::ptr::null_mut());
+    }
+}
+
+#[test]
+fn native_audio_handle_reports_closed_state() {
+    let project = nylon_project_new();
+    let audio = nylon_audio_new();
+    assert!(!project.is_null());
+    assert!(!audio.is_null());
+    // SAFETY: This thread owns both handles and every output record.
+    unsafe {
+        assert_eq!(nylon_audio_is_open(audio), 0);
+        assert_eq!(nylon_transport_play(audio), 0);
+        assert_eq!(nylon_transport_stop(audio), 0);
+        assert_eq!(nylon_transport_locate(audio, 4.0), 0);
+        assert_eq!(nylon_transport_locate(audio, f64::NAN), 0);
+        assert_eq!(nylon_transport_position_beats(audio), 0.0);
+        assert_eq!(nylon_transport_is_playing(audio), 0);
+        assert_eq!(nylon_audio_dropouts(audio), 0);
+        let mut config = NylonAudioConfig::default();
+        assert_eq!(nylon_audio_config(audio, &mut config), 0);
+        let mut master = NylonLevels::default();
+        assert_eq!(nylon_master_levels(audio, &mut master), 1);
+        assert_eq!(master, NylonLevels::default());
+        assert_eq!(nylon_track_levels(audio, 0, &mut master), 0);
+        assert_eq!(nylon_audio_sync(audio, project), 0);
+        let count = nylon_audio_device_list(std::ptr::null_mut(), 0);
+        assert!(count <= nylon::runtime::MAX_DEVICES as u64);
+        nylon_audio_free(audio);
+        nylon_project_free(project);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "needs a real audio output device"]
+fn native_audio_interface_drives_the_platform_stream() {
+    let project = nylon_project_new();
+    let audio = nylon_audio_new();
+    // SAFETY: This thread owns both handles and the output configuration.
+    unsafe {
+        let mut device = 0;
+        assert_eq!(nylon_audio_default_output(&mut device), 1);
+        assert_eq!(nylon_audio_open(audio, project, device, 48_000, 256), 1);
+        assert_eq!(nylon_audio_is_open(audio), 1);
+        let mut config = NylonAudioConfig::default();
+        assert_eq!(nylon_audio_config(audio, &mut config), 1);
+        assert_eq!(config.channels, 2);
+        assert_eq!(nylon_transport_play(audio), 1);
+        let mut position = 0.0;
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            position = nylon_transport_position_beats(audio);
+            if position > 0.0 {
+                break;
+            }
+        }
+        assert!(position > 0.0, "{position}");
+        assert_eq!(nylon_transport_locate(audio, 8.0), 1);
+        assert_eq!(nylon_transport_stop(audio), 1);
+        assert_eq!(nylon_audio_close(audio), 1);
+        assert_eq!(nylon_audio_is_open(audio), 0);
+        nylon_audio_free(audio);
+        nylon_project_free(project);
     }
 }
 

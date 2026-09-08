@@ -19,7 +19,7 @@ ctest --test-dir target/desktop --output-on-failure
 
 Set `CMAKE_PREFIX_PATH` to the Qt installation prefix when CMake cannot find
 it. `NYLON_CORE_LIBRARY` overrides the core library location; the default is
-`target/release/libnylon.a` (`target/release/nylon.lib` with MSVC).
+the platform shared library under `target/release/`.
 
 Source paths are remapped to `.` in debug info and `__FILE__` with
 `-ffile-prefix-map` (Clang, GCC) or `/pathmap` (MSVC) so binaries do not
@@ -120,4 +120,3 @@ deploying a cross-compiled kit with the host kit's `windeployqt`.
 The build workflow installs this layout on every target, launches the
 installed executable from a different directory as a smoke test, and
 uploads the directory as the artifact.
-

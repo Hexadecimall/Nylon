@@ -13,6 +13,33 @@
 extern "C" {
 #endif
 
+#define NYLON_AUDIO_MAX_NAME 128
+#define NYLON_AUDIO_MAX_RATES 8
+
+typedef struct NylonAudioDevice {
+    unsigned long long id;
+    char name[NYLON_AUDIO_MAX_NAME + 1];
+    unsigned int channels;
+    int is_default;
+    unsigned int sample_rates[NYLON_AUDIO_MAX_RATES];
+    unsigned int sample_rate_count;
+} NylonAudioDevice;
+
+typedef struct NylonAudioConfig {
+    unsigned long long device_id;
+    unsigned int sample_rate;
+    unsigned int block_frames;
+    unsigned int channels;
+} NylonAudioConfig;
+
+typedef struct NylonLevels {
+    float peak_left;
+    float peak_right;
+    float rms_left;
+    float rms_right;
+    int clipped;
+} NylonLevels;
+
 /* Allocates a new, empty project. Returns null on allocation failure. */
 void* nylon_project_new(void);
 
@@ -153,6 +180,39 @@ int nylon_arrangement_clip_remove(
     void* project, unsigned long long track, unsigned long long index);
 int nylon_arrangement_clip_set_range(void* project, unsigned long long track,
     unsigned long long index, double start_beats, double length_beats);
+
+/* Live audio is owned by a separate control-thread handle. The platform
+ * stream remains open while the musical transport is stopped, allowing
+ * meters and edits to continue crossing block boundaries. */
+void* nylon_audio_new(void);
+void nylon_audio_free(void* audio);
+
+/* Returns the number of output devices found. Passing a null output pointer
+ * queries the count. A non-null output receives up to capacity records. */
+unsigned long long nylon_audio_device_list(NylonAudioDevice* out, unsigned long long capacity);
+int nylon_audio_default_output(unsigned long long* device_id);
+
+/* Opens and starts an output callback with the musical transport stopped.
+ * Device zero selects the current system default where the backend supports
+ * it. Project state is copied before the first callback. */
+int nylon_audio_open(void* audio, const void* project, unsigned long long device_id,
+    unsigned int sample_rate, unsigned int block_frames);
+int nylon_audio_close(void* audio);
+int nylon_audio_is_open(const void* audio);
+int nylon_audio_config(const void* audio, NylonAudioConfig* out);
+int nylon_audio_sync(void* audio, const void* project);
+unsigned long long nylon_audio_dropouts(const void* audio);
+
+int nylon_transport_play(void* audio);
+int nylon_transport_stop(void* audio);
+int nylon_transport_locate(void* audio, double beats);
+double nylon_transport_position_beats(void* audio);
+int nylon_transport_is_playing(void* audio);
+
+/* Levels are linear amplitudes. The master follows the active track entries
+ * in the engine state but has a dedicated accessor here. */
+int nylon_track_levels(void* audio, unsigned long long index, NylonLevels* out);
+int nylon_master_levels(void* audio, NylonLevels* out);
 
 #ifdef __cplusplus
 }
