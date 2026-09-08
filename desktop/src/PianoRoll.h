@@ -40,6 +40,12 @@ public:
     int selectedNote() const { return m_selected; }
     int keyboardWidth() const { return m_keyboardWidth; }
     int rulerHeight() const { return m_rulerHeight; }
+    // Height of the velocity lane along the bottom edge.
+    int velocityLaneHeight() const { return m_velocityHeight; }
+    // Grip at the right edge of a note used to change its length.
+    QRect noteResizeGrip(const MidiNote& note) const;
+    // Velocity bar of a note in the lane, in viewport coordinates.
+    QRect velocityBar(const MidiNote& note) const;
 
 public slots:
     void selectNote(int index);
@@ -57,6 +63,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     void updateScrollRanges();
@@ -73,8 +80,11 @@ private:
     int m_rulerHeight = 18;
     double m_gridBeats = 0.25;
     int m_selected = -1;
+    enum class Drag { None, Move, Resize, Velocity };
     // Drag state.
+    Drag m_drag = Drag::None;
     bool m_dragging = false;
+    int m_velocityHeight = 48;
     QPoint m_dragStart;
     MidiNote m_dragOrigin{};
     MidiNote m_dragPreview{};

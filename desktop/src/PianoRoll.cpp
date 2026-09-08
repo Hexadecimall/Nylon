@@ -97,10 +97,11 @@ void PianoRoll::updateScrollRanges()
 {
     const int contentW = m_keyboardWidth + static_cast<int>(std::ceil((loopBeats() + 4.0) * m_pixelsPerBeat));
     const int contentH = m_rulerHeight + kPitchCount * m_rowHeight;
+    const int noteArea = qMax(1, viewport()->height() - m_velocityHeight);
     horizontalScrollBar()->setRange(0, qMax(0, contentW - viewport()->width()));
     horizontalScrollBar()->setPageStep(viewport()->width());
-    verticalScrollBar()->setRange(0, qMax(0, contentH - viewport()->height()));
-    verticalScrollBar()->setPageStep(viewport()->height());
+    verticalScrollBar()->setRange(0, qMax(0, contentH - noteArea));
+    verticalScrollBar()->setPageStep(noteArea);
 }
 
 QRect PianoRoll::noteRect(const MidiNote& note) const
@@ -110,6 +111,21 @@ QRect PianoRoll::noteRect(const MidiNote& note) const
     const int row = (kPitchCount - 1) - note.pitch;
     const int y = m_rulerHeight + row * m_rowHeight - verticalScrollBar()->value();
     return QRect(x, y + 1, w, m_rowHeight - 2);
+}
+
+QRect PianoRoll::noteResizeGrip(const MidiNote& note) const
+{
+    const QRect r = noteRect(note);
+    const int grip = qMin(8, qMax(3, r.width() / 3));
+    return QRect(r.right() - grip + 1, r.y(), grip, r.height());
+}
+
+QRect PianoRoll::velocityBar(const MidiNote& note) const
+{
+    const QRect r = noteRect(note);
+    const int laneTop = viewport()->height() - m_velocityHeight;
+    const int h = qMax(1, (m_velocityHeight - 6) * note.velocity / 127);
+    return QRect(r.x(), laneTop + m_velocityHeight - 3 - h, qMax(3, qMin(r.width(), 6)), h);
 }
 
 QPointF PianoRoll::cellAt(const QPoint& pos) const
@@ -171,11 +187,30 @@ void PianoRoll::mousePressEvent(QMouseEvent* event)
     if (event->button() != Qt::LeftButton || !hasClip()) {
         return;
     }
+    // Velocity lane: press on a note's bar starts a velocity drag.
+    if (event->pos().y() >= viewport()->height() - m_velocityHeight) {
+        const quint64 n = m_bridge->clipNoteCount(static_cast<quint64>(m_track), static_cast<quint64>(m_scene));
+        for (quint64 i = n; i > 0; --i) {
+            MidiNote note{};
+            if (m_bridge->clipNote(static_cast<quint64>(m_track), static_cast<quint64>(m_scene), i - 1, note)
+                && velocityBar(note).adjusted(-2, -6, 2, 0).contains(event->pos())) {
+                selectNote(static_cast<int>(i - 1));
+                m_drag = Drag::Velocity;
+                m_dragging = true;
+                m_dragStart = event->pos();
+                m_dragOrigin = note;
+                m_dragPreview = note;
+                return;
+            }
+        }
+        return;
+    }
     const int index = noteIndexAt(event->pos());
     selectNote(index);
     if (index >= 0) {
         MidiNote note{};
         m_bridge->clipNote(static_cast<quint64>(m_track), static_cast<quint64>(m_scene), static_cast<quint64>(index), note);
+        m_drag = noteResizeGrip(note).contains(event->pos()) ? Drag::Resize : Drag::Move;
         m_dragging = true;
         m_dragStart = event->pos();
         m_dragOrigin = note;
@@ -186,13 +221,36 @@ void PianoRoll::mousePressEvent(QMouseEvent* event)
 void PianoRoll::mouseMoveEvent(QMouseEvent* event)
 {
     if (!m_dragging) {
+        // Cursor hints: resize grip on hover.
+        const int index = noteIndexAt(event->pos());
+        if (index >= 0) {
+            MidiNote note{};
+            m_bridge->clipNote(static_cast<quint64>(m_track), static_cast<quint64>(m_scene), static_cast<quint64>(index), note);
+            viewport()->setCursor(noteResizeGrip(note).contains(event->pos()) ? Qt::SizeHorCursor : Qt::ArrowCursor);
+        } else {
+            viewport()->setCursor(Qt::ArrowCursor);
+        }
         return;
     }
     const double dBeats = static_cast<double>(event->pos().x() - m_dragStart.x()) / m_pixelsPerBeat;
     const int dRows = static_cast<int>(std::lround(static_cast<double>(event->pos().y() - m_dragStart.y()) / m_rowHeight));
     m_dragPreview = m_dragOrigin;
-    m_dragPreview.startBeats = qMax(0.0, quantize(m_dragOrigin.startBeats + dBeats));
-    m_dragPreview.pitch = static_cast<std::uint8_t>(qBound(0, static_cast<int>(m_dragOrigin.pitch) - dRows, kPitchCount - 1));
+    switch (m_drag) {
+    case Drag::Move:
+        m_dragPreview.startBeats = qMax(0.0, quantize(m_dragOrigin.startBeats + dBeats));
+        m_dragPreview.pitch = static_cast<std::uint8_t>(qBound(0, static_cast<int>(m_dragOrigin.pitch) - dRows, kPitchCount - 1));
+        break;
+    case Drag::Resize:
+        m_dragPreview.lengthBeats = qMax(m_gridBeats, quantize(m_dragOrigin.lengthBeats + dBeats));
+        break;
+    case Drag::Velocity: {
+        const int delta = m_dragStart.y() - event->pos().y();
+        m_dragPreview.velocity = static_cast<std::uint8_t>(qBound(1, static_cast<int>(m_dragOrigin.velocity) + delta, 127));
+        break;
+    }
+    case Drag::None:
+        break;
+    }
     viewport()->update();
 }
 
@@ -202,10 +260,13 @@ void PianoRoll::mouseReleaseEvent(QMouseEvent* event)
         return;
     }
     m_dragging = false;
-    if (m_dragPreview.startBeats != m_dragOrigin.startBeats || m_dragPreview.pitch != m_dragOrigin.pitch) {
+    m_drag = Drag::None;
+    const bool changed = m_dragPreview.startBeats != m_dragOrigin.startBeats || m_dragPreview.pitch != m_dragOrigin.pitch
+        || m_dragPreview.lengthBeats != m_dragOrigin.lengthBeats || m_dragPreview.velocity != m_dragOrigin.velocity;
+    if (changed) {
         if (!m_bridge->moveClipNote(static_cast<quint64>(m_track), static_cast<quint64>(m_scene),
                 static_cast<quint64>(m_selected), m_dragPreview)) {
-            emit message(tr("The core rejected that note position."));
+            emit message(tr("The core rejected that edit."));
         }
     }
     viewport()->update();
@@ -223,7 +284,8 @@ void PianoRoll::mouseDoubleClickEvent(QMouseEvent* event)
         }
         return;
     }
-    if (event->pos().x() < m_keyboardWidth || event->pos().y() < m_rulerHeight) {
+    if (event->pos().x() < m_keyboardWidth || event->pos().y() < m_rulerHeight
+        || event->pos().y() >= viewport()->height() - m_velocityHeight) {
         return;
     }
     const QPointF cell = cellAt(event->pos());
@@ -249,6 +311,19 @@ void PianoRoll::mouseDoubleClickEvent(QMouseEvent* event)
     } else {
         emit message(tr("The core rejected that note."));
     }
+}
+
+void PianoRoll::wheelEvent(QWheelEvent* event)
+{
+    if (event->modifiers() & Qt::ControlModifier) {
+        const int steps = event->angleDelta().y() / 120;
+        if (steps != 0) {
+            setZoom(m_pixelsPerBeat + steps * 8);
+        }
+        event->accept();
+        return;
+    }
+    QAbstractScrollArea::wheelEvent(event);
 }
 
 void PianoRoll::keyPressEvent(QKeyEvent* event)
@@ -286,6 +361,9 @@ void PianoRoll::paintEvent(QPaintEvent*)
     const int scrollX = horizontalScrollBar()->value();
     const int scrollY = verticalScrollBar()->value();
     const int beatsPerBar = qBound(1, m_bridge->timeSignatureNumerator(), 64);
+    const int laneTop = view.height() - m_velocityHeight;
+    p.save();
+    p.setClipRect(QRect(0, 0, view.width(), laneTop));
     const double loopEnd = loopBeats();
     const int gridLeft = m_keyboardWidth;
 
@@ -340,10 +418,13 @@ void PianoRoll::paintEvent(QPaintEvent*)
             p.setPen(QPen(primary, 1.5));
             p.setBrush(Qt::NoBrush);
             p.drawPath(paint::rounded(*m_theme, QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5)));
+            const QRect grip = noteResizeGrip(note);
+            p.fillRect(QRect(grip.x(), grip.y() + 2, 1, grip.height() - 4), primary);
         }
     }
     p.setRenderHint(QPainter::Antialiasing, false);
 
+    p.restore();
     // Keyboard, pinned at the left.
     for (int row = firstRow; row <= lastRow; ++row) {
         const int pitch = (kPitchCount - 1) - row;
@@ -379,6 +460,27 @@ void PianoRoll::paintEvent(QPaintEvent*)
     p.setPen(secondary);
     p.drawText(QRect(4, 0, m_keyboardWidth - 4, m_rulerHeight), Qt::AlignLeft | Qt::AlignVCenter,
         m_bridge->clipName(static_cast<quint64>(m_track), static_cast<quint64>(m_scene)).left(6));
+
+    // Velocity lane along the bottom: one bar per note, aligned to its start.
+    p.fillRect(QRect(0, laneTop, view.width(), m_velocityHeight), m_theme->color(QStringLiteral("arrangement.ruler")));
+    p.fillRect(QRect(0, laneTop, view.width(), 1), gridBar);
+    p.setPen(secondary);
+    p.drawText(QRect(4, laneTop, m_keyboardWidth - 4, m_velocityHeight), Qt::AlignLeft | Qt::AlignVCenter, tr("Vel"));
+    for (quint64 i = 0; i < count; ++i) {
+        MidiNote note{};
+        if (!m_bridge->clipNote(static_cast<quint64>(m_track), static_cast<quint64>(m_scene), i, note)) {
+            continue;
+        }
+        const bool selected = static_cast<int>(i) == m_selected;
+        if (selected && m_dragging) {
+            note = m_dragPreview;
+        }
+        const QRect bar = velocityBar(note);
+        if (bar.x() < m_keyboardWidth) {
+            continue;
+        }
+        p.fillRect(bar, selected ? primary : clipColor);
+    }
 }
 
 } // namespace nylon

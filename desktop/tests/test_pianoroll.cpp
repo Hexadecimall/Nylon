@@ -3,6 +3,7 @@
 #include "ThemeManager.h"
 
 #include <QScrollBar>
+#include <QWheelEvent>
 #include <QtTest>
 
 using namespace nylon;
@@ -17,6 +18,9 @@ private slots:
     void dragMovesNoteQuantized();
     void deleteKeyRemovesSelection();
     void refreshDropsStaleSelection();
+    void resizeGripChangesLength();
+    void velocityLaneDragChangesVelocity();
+    void controlWheelZooms();
 
 private:
     ThemeManager m_themes;
@@ -183,6 +187,95 @@ void TestPianoRoll::refreshDropsStaleSelection()
     QCOMPARE(roll.selectedNote(), -1);
     QVERIFY(bridge.deleteClip(0, 0));
     QVERIFY(!roll.hasClip());
+}
+
+void TestPianoRoll::resizeGripChangesLength()
+{
+    ProjectBridge bridge;
+    prepare(bridge);
+    MidiNote n{};
+    n.pitch = 120;
+    n.velocity = 90;
+    n.startBeats = 1.0;
+    n.lengthBeats = 1.0;
+    QVERIFY(bridge.addClipNote(0, 0, n));
+    PianoRoll roll(&bridge, &m_themes.theme());
+    roll.resize(600, 320);
+    roll.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&roll));
+    roll.setClip(0, 0);
+    roll.verticalScrollBar()->setValue(0);
+    roll.horizontalScrollBar()->setValue(0);
+    const QPoint grip = roll.noteResizeGrip(n).center();
+    QVERIFY(roll.noteRect(n).contains(grip));
+    QTest::mousePress(roll.viewport(), Qt::LeftButton, Qt::NoModifier, grip);
+    QTest::mouseMove(roll.viewport(), grip + QPoint(roll.pixelsPerBeat(), 0));
+    QTest::mouseRelease(roll.viewport(), Qt::LeftButton, Qt::NoModifier, grip + QPoint(roll.pixelsPerBeat(), 0));
+    MidiNote after{};
+    QVERIFY(bridge.clipNote(0, 0, 0, after));
+    QCOMPARE(after.lengthBeats, 2.0);
+    QCOMPARE(after.startBeats, 1.0);
+    QCOMPARE(static_cast<int>(after.pitch), 120);
+    // Shrinking never goes below one grid step.
+    const QPoint grip2 = roll.noteResizeGrip(after).center();
+    QTest::mousePress(roll.viewport(), Qt::LeftButton, Qt::NoModifier, grip2);
+    QTest::mouseMove(roll.viewport(), grip2 - QPoint(10 * roll.pixelsPerBeat(), 0));
+    QTest::mouseRelease(roll.viewport(), Qt::LeftButton, Qt::NoModifier, grip2 - QPoint(10 * roll.pixelsPerBeat(), 0));
+    QVERIFY(bridge.clipNote(0, 0, 0, after));
+    QCOMPARE(after.lengthBeats, roll.gridBeats());
+}
+
+void TestPianoRoll::velocityLaneDragChangesVelocity()
+{
+    ProjectBridge bridge;
+    prepare(bridge);
+    MidiNote n{};
+    n.pitch = 60;
+    n.velocity = 64;
+    n.startBeats = 0.5;
+    n.lengthBeats = 1.0;
+    QVERIFY(bridge.addClipNote(0, 0, n));
+    PianoRoll roll(&bridge, &m_themes.theme());
+    roll.resize(600, 320);
+    roll.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&roll));
+    roll.setClip(0, 0);
+    roll.horizontalScrollBar()->setValue(0);
+    const QRect bar = roll.velocityBar(n);
+    QVERIFY(bar.y() >= roll.viewport()->height() - roll.velocityLaneHeight());
+    const QPoint top(bar.center().x(), bar.y() + 1);
+    QTest::mousePress(roll.viewport(), Qt::LeftButton, Qt::NoModifier, top);
+    QCOMPARE(roll.selectedNote(), 0);
+    QTest::mouseMove(roll.viewport(), top - QPoint(0, 20));
+    QTest::mouseRelease(roll.viewport(), Qt::LeftButton, Qt::NoModifier, top - QPoint(0, 20));
+    MidiNote after{};
+    QVERIFY(bridge.clipNote(0, 0, 0, after));
+    QCOMPARE(static_cast<int>(after.velocity), 84);
+    QCOMPARE(after.startBeats, 0.5);
+    // Double-clicking in the lane creates nothing.
+    QTest::mouseDClick(roll.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(300, roll.viewport()->height() - 10));
+    QCOMPARE(bridge.clipNoteCount(0, 0), 1ull);
+}
+
+void TestPianoRoll::controlWheelZooms()
+{
+    ProjectBridge bridge;
+    prepare(bridge);
+    PianoRoll roll(&bridge, &m_themes.theme());
+    roll.setClip(0, 0);
+    const int before = roll.pixelsPerBeat();
+    QWheelEvent in(QPointF(200, 100), QPointF(200, 100), QPoint(), QPoint(0, 240), Qt::NoButton, Qt::ControlModifier,
+        Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(roll.viewport(), &in);
+    QCOMPARE(roll.pixelsPerBeat(), before + 16);
+    QWheelEvent out(QPointF(200, 100), QPointF(200, 100), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::ControlModifier,
+        Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(roll.viewport(), &out);
+    QCOMPARE(roll.pixelsPerBeat(), before + 8);
+    roll.setZoom(1);
+    QCOMPARE(roll.pixelsPerBeat(), 8);
+    roll.setZoom(9999);
+    QCOMPARE(roll.pixelsPerBeat(), 400);
 }
 
 QTEST_MAIN(TestPianoRoll)
