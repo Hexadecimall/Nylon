@@ -46,6 +46,12 @@ struct Levels {
     bool clipped;
 };
 
+struct BounceReport {
+    std::uint64_t frames;
+    float peakLeft;
+    float peakRight;
+};
+
 // Owning handle to a core project. Move-only.
 class Project {
 public:
@@ -67,6 +73,8 @@ public:
     // Bundle directory persistence; paths are UTF-8.
     bool save(const std::string& bundleDirectory) const;
     bool open(const std::string& bundleDirectory);
+    bool bounceWave(const std::string& path, double startBeats, double endBeats,
+        std::uint32_t sampleRate, BounceReport& report) const;
 
     double tempo() const;
     bool setTempo(double bpm);

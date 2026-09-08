@@ -39,6 +39,7 @@ Groups of functions:
 | `nylon_audio_*` | output devices, stream lifecycle, granted configuration, dropouts, project publication |
 | `nylon_transport_*` | play, stop, locate, position |
 | `nylon_track_levels`, `nylon_master_levels` | live linear peak and RMS readings |
+| `nylon_render_*` | deterministic offline file rendering |
 
 Track kinds: 0 audio, 1 MIDI, 2 return, 3 master, 4 group, 5 cue.
 
@@ -48,7 +49,9 @@ Header: `bindings/cpp/nylon.hpp`, library `nyloncpp` (built by
 `bindings/cpp/CMakeLists.txt`; link it with `-lnyloncpp` plus the core).
 `nylon::Project` is a move-only owner of a project handle with one method
 per project C function, `std::string` for names, and `nylon::MidiNote` /
-`nylon::BeatRange` value types. `nylon::AudioEngine` owns the platform
+`nylon::BeatRange` value types. `Project::bounceWave` writes a selected beat
+range as stereo 24-bit WAVE and returns its frame count and peaks.
+`nylon::AudioEngine` owns the platform
 stream and provides device enumeration, transport control, synchronization,
 configuration, dropout, and meter access. Consumers include the directory with
 `add_subdirectory(bindings/cpp)` and link the `nyloncpp` target, which

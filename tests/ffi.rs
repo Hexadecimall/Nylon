@@ -38,8 +38,52 @@ fn null_handles_are_rejected() {
         assert_eq!(nylon_transport_locate(std::ptr::null_mut(), 1.0), 0);
         assert_eq!(nylon_transport_position_beats(std::ptr::null_mut()), 0.0);
         assert_eq!(nylon_audio_default_output(std::ptr::null_mut()), 0);
+        let mut report = NylonBounceReport::default();
+        assert_eq!(
+            nylon_render_bounce_wave(
+                std::ptr::null(),
+                c"target/null.wav".as_ptr(),
+                0.0,
+                1.0,
+                48_000,
+                &mut report,
+            ),
+            0
+        );
         nylon_audio_free(std::ptr::null_mut());
     }
+}
+
+#[test]
+fn native_bounce_writes_the_selected_range() {
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::path::PathBuf::from("target").join(format!("native-bounce-{tick}.wav"));
+    let native_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+    let handle = nylon_project_new();
+    let mut report = NylonBounceReport::default();
+    // SAFETY: This thread owns the handle, path string, and report.
+    unsafe {
+        assert_eq!(
+            nylon_render_bounce_wave(handle, native_path.as_ptr(), 2.0, 3.0, 48_000, &mut report,),
+            1
+        );
+        assert_eq!(report.frames, 24_000);
+        assert_eq!(report.peak_left, 0.0);
+        assert_eq!(report.peak_right, 0.0);
+        assert_eq!(
+            nylon_render_bounce_wave(handle, native_path.as_ptr(), 3.0, 2.0, 48_000, &mut report,),
+            0
+        );
+        nylon_project_free(handle);
+    }
+    let bytes = std::fs::read(&path).unwrap();
+    let decoded = nylon::wave::read(std::io::Cursor::new(bytes)).unwrap();
+    assert_eq!(decoded.format.sample_rate, 48_000);
+    assert_eq!(decoded.frames(), 24_000);
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

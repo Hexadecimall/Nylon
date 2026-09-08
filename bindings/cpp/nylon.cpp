@@ -39,6 +39,18 @@ bool Project::open(const std::string& bundleDirectory)
 {
     return nylon_project_open(m_handle, bundleDirectory.c_str()) != 0;
 }
+bool Project::bounceWave(const std::string& path, double startBeats, double endBeats,
+    std::uint32_t sampleRate, BounceReport& report) const
+{
+    NylonBounceReport native{};
+    if (nylon_render_bounce_wave(
+            m_handle, path.c_str(), startBeats, endBeats, sampleRate, &native)
+        == 0) {
+        return false;
+    }
+    report = {native.frames, native.peak_left, native.peak_right};
+    return true;
+}
 
 double Project::tempo() const { return nylon_project_tempo(m_handle); }
 bool Project::setTempo(double bpm) { return nylon_project_set_tempo(m_handle, bpm) != 0; }

@@ -2,10 +2,13 @@
 //! not be accessed concurrently or used after release.
 
 use crate::audio::{DeviceId, DeviceInfo, Direction, Name, Rates};
+use crate::bounce::{Options as BounceOptions, render_wave};
 use crate::mixer::Levels;
 use crate::project::{ClipId, Command, MidiNote, Project, SceneId, TrackId, TrackKind};
 use crate::runtime::{AudioRuntime, MAX_DEVICES, default_output, output_devices};
+use crate::wave::Format;
 use std::ffi::{CStr, c_char};
+use std::fs::File;
 
 /// Fixed-size audio-device record for the C interface.
 #[repr(C)]
@@ -39,6 +42,15 @@ pub struct NylonLevels {
     pub clipped: i32,
 }
 
+/// Measurements from a completed offline render.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NylonBounceReport {
+    pub frames: u64,
+    pub peak_left: f32,
+    pub peak_right: f32,
+}
+
 impl From<Levels> for NylonLevels {
     fn from(levels: Levels) -> Self {
         Self {
@@ -47,6 +59,16 @@ impl From<Levels> for NylonLevels {
             rms_left: levels.rms_left,
             rms_right: levels.rms_right,
             clipped: i32::from(levels.clipped),
+        }
+    }
+}
+
+impl From<crate::bounce::Report> for NylonBounceReport {
+    fn from(report: crate::bounce::Report) -> Self {
+        Self {
+            frames: report.frames,
+            peak_left: report.peak_left,
+            peak_right: report.peak_right,
         }
     }
 }
@@ -466,6 +488,58 @@ pub unsafe extern "C" fn nylon_project_open(handle: *mut Project, directory: *co
         return 0;
     };
     *project = loaded;
+    1
+}
+
+/// Renders a beat range to a stereo 24-bit WAVE file.
+///
+/// # Safety
+/// The project must be live with no concurrent mutation. `path` must point
+/// to a readable NUL-terminated UTF-8 string. `out` must point to one writable
+/// report. This performs control-thread I/O and offline rendering.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_render_bounce_wave(
+    handle: *const Project,
+    path: *const c_char,
+    start_beats: f64,
+    end_beats: f64,
+    sample_rate: u32,
+    out: *mut NylonBounceReport,
+) -> i32 {
+    // SAFETY: The caller keeps the project live and immutable for this call.
+    let Some(project) = (unsafe { handle.as_ref() }) else {
+        return 0;
+    };
+    // SAFETY: The caller supplies one writable report record.
+    let Some(out) = (unsafe { out.as_mut() }) else {
+        return 0;
+    };
+    if path.is_null() {
+        return 0;
+    }
+    // SAFETY: The caller supplies a terminated readable path string.
+    let Ok(path) = (unsafe { CStr::from_ptr(path) }).to_str() else {
+        return 0;
+    };
+    if path.is_empty() {
+        return 0;
+    }
+    let options = BounceOptions {
+        start_beats,
+        end_beats,
+        block_frames: 512,
+        format: Format::stereo(sample_rate),
+    };
+    if options.validate().is_err() {
+        return 0;
+    }
+    let Ok(file) = File::create(path) else {
+        return 0;
+    };
+    let Ok((_, report)) = render_wave(project, file, options) else {
+        return 0;
+    };
+    *out = report.into();
     1
 }
 

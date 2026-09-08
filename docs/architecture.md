@@ -119,6 +119,11 @@ costs no allocation. `src/audio/offline` renders on demand rather than
 against a clock, which is what a bounce needs and what lets a test step a
 render one block at a time.
 
+`src/bounce` maps an immutable project snapshot into the playback engine,
+locates to the requested beat, and streams stereo blocks into a WAVE writer.
+Notes crossing the range start are retriggered with their remaining duration.
+The same project, range, rate, and seed produce identical bytes.
+
 `src/audio/coreaudio` drives a hardware output unit on macOS. The device
 decides its own buffer size, so the requested block is a request and the
 granted size is reported back; the maximum slice is set to the largest

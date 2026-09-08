@@ -285,7 +285,7 @@ pub fn default_output() -> Result<DeviceId, AudioError> {
     }
 }
 
-fn state_from_snapshot(snapshot: &Snapshot, playing: bool) -> (MixSettings, Box<Score>) {
+pub(crate) fn state_from_snapshot(snapshot: &Snapshot, playing: bool) -> (MixSettings, Box<Score>) {
     let mut settings = MixSettings::new();
     settings.set_track_count(snapshot.tracks().len());
     settings.set_tempo(snapshot.tempo());

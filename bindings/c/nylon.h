@@ -40,6 +40,12 @@ typedef struct NylonLevels {
     int clipped;
 } NylonLevels;
 
+typedef struct NylonBounceReport {
+    unsigned long long frames;
+    float peak_left;
+    float peak_right;
+} NylonBounceReport;
+
 /* Allocates a new, empty project. Returns null on allocation failure. */
 void* nylon_project_new(void);
 
@@ -80,6 +86,11 @@ int nylon_project_new_in_place(void* project);
  * bundle's. Both return 0 on any I/O or format error. */
 int nylon_project_save(const void* project, const char* bundle_directory);
 int nylon_project_open(void* project, const char* bundle_directory);
+
+/* Renders a beat range to a stereo 24-bit WAVE file at the selected sample
+ * rate. The report is written only after the file is complete. */
+int nylon_render_bounce_wave(const void* project, const char* path, double start_beats,
+    double end_beats, unsigned int sample_rate, NylonBounceReport* out);
 
 /* Track kinds: 0 audio, 1 MIDI, 2 return, 3 master, 4 group, 5 cue. */
 int nylon_project_add_track_kind(void* project, int kind);
