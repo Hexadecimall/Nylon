@@ -85,8 +85,31 @@ behind then keeps the oldest entries and drops the newest. The triple
 buffer writer never waits and the reader always sees the most recently
 completed value.
 
-No sound sources exist yet, so the engine mixes silence. The transport,
-the metering, and sample-accurate automation are real.
+Instrument tracks sound their notes: the engine schedules each block's
+notes onto the frames they were written for, renders every instrument
+into its own buffer, and the mixer sums those through the strips. The
+settings carry whether to play and where to move the playhead, since once
+the engine is handed to a stream the transport cannot be reached
+directly. Moving the playhead abandons anything sounding, and stopping
+releases notes rather than cutting them dead.
+
+## Instruments and notes
+
+`src/engine/voice` is a polyphonic instrument: an oscillator through a
+filter with an amplitude envelope, one per voice. A repeated pitch
+restarts a single voice rather than doubling it, and when every voice is
+busy the quietest is taken, which a listener notices least.
+
+`src/engine/schedule` converts notes written in beats into note events
+carrying the frame they land on. A note contained in one block gets both
+its start and its end; a note crossing the edge gets its end in a later
+block; a note shorter than a frame still starts before it ends. A full
+event buffer reports what it dropped rather than losing it quietly.
+
+The engine publishes these together as a score: per instrument track, the
+notes, the patch, and whether the track sounds. Notes sit at absolute
+beats on the timeline, which is how an arrangement reads; session clip
+looping is not represented yet.
 
 ## Audio devices
 
@@ -94,8 +117,17 @@ the metering, and sample-accurate automation are real.
 names and rate lists are fixed-capacity values, so enumerating devices
 costs no allocation. `src/audio/offline` renders on demand rather than
 against a clock, which is what a bounce needs and what lets a test step a
-render one block at a time. Platform backends render in real time against
-a device clock.
+render one block at a time.
+
+`src/audio/coreaudio` drives a hardware output unit on macOS. The device
+decides its own buffer size, so the requested block is a request and the
+granted size is reported back; the maximum slice is set to the largest
+block the engine can fill, because a device asking for more than the
+requested size otherwise renders nothing. A static core carries no record
+of the frameworks it calls into, so anything linking it names them; the
+imported target in `bindings/cmake/NylonCore.cmake` does that.
+
+Tests that need a real device are marked ignored and run deliberately.
 
 ## Benchmarks
 
