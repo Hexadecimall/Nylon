@@ -67,3 +67,30 @@ Three Qt Test executables build alongside the application and run under
   tempo range, undo/redo, and signal emission.
 - `test_views`: the assembled main window driven through its real controls,
   with pixel checks against theme tokens.
+
+## Portable layout
+
+`cmake --install target/desktop --prefix <dir>` produces a self-contained
+directory:
+
+```
+Nylon/
+  Bin/         Nylon executable, nylon-control, qt.conf
+  Frameworks/  the core library and the Qt runtime
+  Resources/   themes/, icons/, font/
+  Plugins/     Qt platform, image, style plugins; nylon/ for feature plugins
+```
+
+On macOS the Qt runtime is deployed with `macdeployqt` and everything is
+signed ad hoc; sign with a distribution identity before shipping. On
+Linux the executable carries `DT_RPATH` of `$ORIGIN/../Frameworks`, so the
+libraries the plugins load are found without an environment variable. On
+Windows the loader searches only the executable's directory, so the Qt
+DLLs sit in `Bin/` next to the executables while `Plugins/` keeps the
+layout; `windeployqt` places them. Pass `NYLON_WINDEPLOYQT_QTPATHS` when
+deploying a cross-compiled kit with the host kit's `windeployqt`.
+
+The build workflow installs this layout on every target, launches the
+installed executable from a different directory as a smoke test, and
+uploads the directory as the artifact.
+

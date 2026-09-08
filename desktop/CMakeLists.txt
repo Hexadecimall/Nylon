@@ -97,6 +97,170 @@ set_target_properties(nylon PROPERTIES
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
     MACOSX_BUNDLE_COPYRIGHT "Copyright (c) Nylon Contributors")
 
+# Portable install layout, the same on every platform:
+#   <prefix>/Nylon/Bin         executables and qt.conf
+#   <prefix>/Nylon/Frameworks  the core library and Qt runtime
+#   <prefix>/Nylon/Resources   themes, icons, fonts
+#   <prefix>/Nylon/Plugins     Qt platform/image plugins and nylon plugins
+# On Windows the loader only searches the executable's directory, so the
+# Qt runtime DLLs are installed beside the executables instead.
+set(NYLON_INSTALL_ROOT "Nylon")
+set(NYLON_BIN "${NYLON_INSTALL_ROOT}/Bin")
+set(NYLON_FRAMEWORKS "${NYLON_INSTALL_ROOT}/Frameworks")
+set(NYLON_RESOURCES "${NYLON_INSTALL_ROOT}/Resources")
+set(NYLON_PLUGINS "${NYLON_INSTALL_ROOT}/Plugins")
+if(APPLE)
+    set_target_properties(nylon PROPERTIES INSTALL_RPATH "@executable_path/../Frameworks")
+elseif(UNIX)
+    # DT_RPATH (not RUNPATH) so the search path also covers libraries the
+    # Qt plugins pull in after dlopen.
+    set_target_properties(nylon PROPERTIES INSTALL_RPATH "$ORIGIN/../Frameworks")
+    target_link_options(nylon PRIVATE "-Wl,--disable-new-dtags")
+endif()
+
+install(DIRECTORY "${NYLON_REPO_ROOT}/themes" DESTINATION "${NYLON_RESOURCES}")
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons" DESTINATION "${NYLON_RESOURCES}")
+install(DIRECTORY DESTINATION "${NYLON_RESOURCES}/font")
+install(DIRECTORY DESTINATION "${NYLON_PLUGINS}/nylon")
+if(WIN32)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" "[Paths]\nPrefix = ..\nPlugins = Plugins\nLibraries = Bin\n")
+else()
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" "[Paths]\nPrefix = ..\nPlugins = Plugins\nLibraries = Frameworks\n")
+endif()
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" DESTINATION "${NYLON_BIN}")
+
+get_target_property(_qt_core_location Qt6::Core LOCATION)
+get_filename_component(_qt_lib_dir "${_qt_core_location}" DIRECTORY)
+if(APPLE)
+    get_filename_component(_qt_lib_dir "${_qt_lib_dir}/../.." ABSOLUTE)
+endif()
+if(NOT DEFINED QT6_INSTALL_PLUGINS)
+    set(QT6_INSTALL_PLUGINS "plugins")
+endif()
+if(IS_ABSOLUTE "${QT6_INSTALL_PLUGINS}")
+    set(_qt_plugin_dir "${QT6_INSTALL_PLUGINS}")
+else()
+    set(_qt_plugin_dir "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}")
+endif()
+if(NOT DEFINED QT6_INSTALL_BINS)
+    set(QT6_INSTALL_BINS "bin")
+endif()
+set(_qt_bin_dir "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_BINS}")
+
+if(APPLE)
+    # macdeployqt rewrites install names relative to the executable; the
+    # bundle it produces is then rearranged into the portable layout, which
+    # keeps Bin/../Frameworks and Bin/../Plugins in the same places.
+    find_program(NYLON_MACDEPLOYQT macdeployqt HINTS "${_qt_bin_dir}" "${QT6_INSTALL_PREFIX}/bin"
+        "${QT6_INSTALL_PREFIX}/../qtbase/bin" "${QT6_INSTALL_PREFIX}/opt/qtbase/bin")
+    if(NOT NYLON_MACDEPLOYQT)
+        message(FATAL_ERROR "macdeployqt not found; set NYLON_MACDEPLOYQT")
+    endif()
+    install(CODE "
+        set(_root \"\${CMAKE_INSTALL_PREFIX}/${NYLON_INSTALL_ROOT}\")
+        set(_stage \"\${_root}/.deploy/Nylon.app\")
+        file(REMOVE_RECURSE \"\${_root}/.deploy\")
+        file(COPY \"$<TARGET_BUNDLE_DIR:nylon>\" DESTINATION \"\${_root}/.deploy\")
+        execute_process(COMMAND \"${NYLON_MACDEPLOYQT}\" \"\${_stage}\" -always-overwrite
+            RESULT_VARIABLE _deploy_result OUTPUT_QUIET ERROR_VARIABLE _deploy_err)
+        if(NOT _deploy_result EQUAL 0)
+            message(FATAL_ERROR \"macdeployqt failed: \${_deploy_err}\")
+        endif()
+        file(MAKE_DIRECTORY \"\${_root}/Bin\" \"\${_root}/Frameworks\" \"\${_root}/Plugins\")
+        file(RENAME \"\${_stage}/Contents/MacOS/$<TARGET_FILE_NAME:nylon>\" \"\${_root}/Bin/$<TARGET_FILE_NAME:nylon>\")
+        file(GLOB _frameworks \"\${_stage}/Contents/Frameworks/*\")
+        foreach(_f IN LISTS _frameworks)
+            get_filename_component(_n \"\${_f}\" NAME)
+            file(REMOVE_RECURSE \"\${_root}/Frameworks/\${_n}\")
+            file(RENAME \"\${_f}\" \"\${_root}/Frameworks/\${_n}\")
+        endforeach()
+        file(GLOB _plugin_dirs \"\${_stage}/Contents/PlugIns/*\")
+        foreach(_d IN LISTS _plugin_dirs)
+            get_filename_component(_n \"\${_d}\" NAME)
+            file(REMOVE_RECURSE \"\${_root}/Plugins/\${_n}\")
+            file(RENAME \"\${_d}\" \"\${_root}/Plugins/\${_n}\")
+        endforeach()
+        file(REMOVE_RECURSE \"\${_root}/.deploy\")
+        # Rewriting install names invalidates the code signatures, and the
+        # loader refuses unsigned code on Apple silicon; sign everything
+        # ad hoc. A distribution signs with a real identity afterwards.
+        file(GLOB _to_sign \"\${_root}/Frameworks/*.framework\" \"\${_root}/Frameworks/*.dylib\")
+        file(GLOB_RECURSE _plugin_libs \"\${_root}/Plugins/*.dylib\")
+        list(APPEND _to_sign \${_plugin_libs} \"\${_root}/Bin/$<TARGET_FILE_NAME:nylon>\")
+        foreach(_item IN LISTS _to_sign)
+            execute_process(COMMAND codesign --force --sign - --timestamp=none \"\${_item}\"
+                RESULT_VARIABLE _sign_result ERROR_VARIABLE _sign_err OUTPUT_QUIET)
+            if(NOT _sign_result EQUAL 0)
+                message(FATAL_ERROR \"codesign failed for \${_item}: \${_sign_err}\")
+            endif()
+        endforeach()
+    ")
+elseif(WIN32)
+    find_program(NYLON_WINDEPLOYQT windeployqt HINTS "${_qt_bin_dir}" "${QT6_INSTALL_PREFIX}/bin")
+    # For a cross-compiled kit, windeployqt from the host kit needs the
+    # target kit's qtpaths to find the right libraries.
+    set(NYLON_WINDEPLOYQT_QTPATHS "" CACHE FILEPATH "qtpaths of the target Qt kit, when deploying with a host windeployqt")
+    if(NOT NYLON_WINDEPLOYQT)
+        message(FATAL_ERROR "windeployqt not found; set NYLON_WINDEPLOYQT")
+    endif()
+    install(PROGRAMS "$<TARGET_FILE:nylon>" DESTINATION "${NYLON_BIN}")
+    install(CODE "
+        set(_root \"\${CMAKE_INSTALL_PREFIX}/${NYLON_INSTALL_ROOT}\")
+        set(_qtpaths_arg)
+        if(NOT \"${NYLON_WINDEPLOYQT_QTPATHS}\" STREQUAL \"\")
+            set(_qtpaths_arg --qtpaths \"${NYLON_WINDEPLOYQT_QTPATHS}\")
+        endif()
+        execute_process(COMMAND \"${NYLON_WINDEPLOYQT}\" \${_qtpaths_arg} --release --no-translations
+            --no-system-d3d-compiler --no-opengl-sw --no-compiler-runtime
+            --dir \"\${_root}/Bin\" --plugindir \"\${_root}/Plugins\"
+            \"\${_root}/Bin/$<TARGET_FILE_NAME:nylon>\"
+            RESULT_VARIABLE _deploy_result OUTPUT_QUIET ERROR_VARIABLE _deploy_err)
+        if(NOT _deploy_result EQUAL 0)
+            message(FATAL_ERROR \"windeployqt failed: \${_deploy_err}\")
+        endif()
+    ")
+else()
+    install(PROGRAMS "$<TARGET_FILE:nylon>" DESTINATION "${NYLON_BIN}")
+    # Plugin directories may be symlink trees, so each file is resolved to
+    # its real path before copying.
+    install(CODE "
+        foreach(_plugin_dir platforms imageformats iconengines styles xcbglintegrations wayland-shell-integration wayland-decoration-client platformthemes)
+            file(REAL_PATH \"${_qt_plugin_dir}/\${_plugin_dir}\" _real_dir)
+            if(NOT IS_DIRECTORY \"\${_real_dir}\")
+                continue()
+            endif()
+            file(GLOB _entries \"\${_real_dir}/*.so\")
+            foreach(_entry IN LISTS _entries)
+                get_filename_component(_name \"\${_entry}\" NAME)
+                if(_name MATCHES \"minimal|offscreen|vnc|linuxfb|eglfs|vkkhr\")
+                    continue()
+                endif()
+                file(REAL_PATH \"\${_entry}\" _real)
+                file(COPY \"\${_real}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${NYLON_PLUGINS}/\${_plugin_dir}\")
+            endforeach()
+        endforeach()
+        set(_exe \"\${CMAKE_INSTALL_PREFIX}/${NYLON_BIN}/$<TARGET_FILE_NAME:nylon>\")
+        file(GLOB_RECURSE _plugins LIST_DIRECTORIES false \"\${CMAKE_INSTALL_PREFIX}/${NYLON_PLUGINS}/*.so\")
+        # Qt and the libraries only Qt needs travel with the application;
+        # everything else comes from the system.
+        file(GET_RUNTIME_DEPENDENCIES
+            EXECUTABLES \"\${_exe}\"
+            MODULES \${_plugins}
+            RESOLVED_DEPENDENCIES_VAR _resolved
+            UNRESOLVED_DEPENDENCIES_VAR _unresolved
+            CONFLICTING_DEPENDENCIES_PREFIX _conflicts
+            DIRECTORIES \"${_qt_lib_dir}\"
+            POST_INCLUDE_REGEXES \"libQt6\" \"libicu\" \"libdouble-conversion\" \"libmd4c\" \"libb2\" \"libpcre2-16\" \"libxkbcommon\"
+            POST_EXCLUDE_REGEXES \".*\")
+        foreach(_dep IN LISTS _resolved)
+            file(COPY \"\${_dep}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${NYLON_FRAMEWORKS}\" FOLLOW_SYMLINK_CHAIN)
+        endforeach()
+        if(_unresolved)
+            message(WARNING \"Unresolved runtime dependencies: \${_unresolved}\")
+        endif()
+    ")
+endif()
+
 enable_testing()
 foreach(_test layout theme bridge widgets views control)
     add_executable(test_${_test} tests/test_${_test}.cpp)
@@ -109,6 +273,7 @@ endforeach()
 add_executable(nylon_control ../cli/main.cpp)
 target_link_libraries(nylon_control PRIVATE Qt6::Core Qt6::Network)
 set_target_properties(nylon_control PROPERTIES OUTPUT_NAME "nylon-control")
+install(TARGETS nylon_control RUNTIME DESTINATION "${NYLON_BIN}")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME control_process COMMAND "${Python3_EXECUTABLE}"
     "${NYLON_REPO_ROOT}/scripts/test_control_process.py"

@@ -42,10 +42,15 @@ jobs:
       - name: Verify both architectures are present
         run: |
           lipo -info target/desktop/Nylon.app/Contents/MacOS/Nylon | tee /dev/stderr | grep -q 'x86_64 arm64\|arm64 x86_64'
-      - name: Bundle Qt frameworks
-        run: macdeployqt target/desktop/Nylon.app -verbose=1
+      - name: Install portable layout
+        run: cmake --install target/desktop --prefix target/package
+      - name: Verify the installed application starts
+        run: |
+          cd "${{ runner.temp }}"
+          "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon" --tracks 2 --screenshot "${{ runner.temp }}/installed.png"
+          lipo -info "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon"
       - name: Package
-        run: ditto -c -k --keepParent target/desktop/Nylon.app target/nylon-macos-universal.zip
+        run: ditto -c -k --keepParent target/package/Nylon target/nylon-macos-universal.zip
       - uses: actions/upload-artifact@v4
         with:
           name: nylon-macos-universal
@@ -71,11 +76,16 @@ jobs:
       - run: cmake -S desktop -B target/desktop -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build target/desktop --parallel 2
       - run: ctest --test-dir target/desktop --output-on-failure --timeout 600
-      - name: Package
+      - name: Install portable layout
+        run: cmake --install target/desktop --prefix target/package
+      - name: Verify the installed application starts
         run: |
-          mkdir -p target/package
-          cp target/desktop/Nylon target/package/nylon
-          tar -C target/package -czf target/nylon-linux-${{ matrix.arch }}.tar.gz nylon
+          cd "${{ runner.temp }}"
+          QT_QPA_PLATFORM=offscreen "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon" --tracks 2 --screenshot "${{ runner.temp }}/installed.png"
+        env:
+          QT_PLUGIN_PATH: /usr/lib/${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}-linux-gnu/qt6/plugins
+      - name: Package
+        run: tar -C target/package -czf target/nylon-linux-${{ matrix.arch }}.tar.gz Nylon
       - uses: actions/upload-artifact@v4
         with:
           name: nylon-linux-${{ matrix.arch }}
@@ -121,17 +131,19 @@ jobs:
           cmake -S desktop -B target/desktop -A ${{ matrix.cmake_platform }}
           -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}"
           -DQT_HOST_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64"
+          -DNYLON_WINDEPLOYQT="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64/bin/windeployqt.exe"
+          -DNYLON_WINDEPLOYQT_QTPATHS="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin/qtpaths.bat"
       - run: cmake --build target/desktop --config Release --parallel 2
       - run: ctest --test-dir target/desktop -C Release --output-on-failure --timeout 600
-      - name: Deploy Qt runtime
+      - name: Install portable layout
+        run: cmake --install target/desktop --config Release --prefix target/package
+      - name: Verify the installed application starts
         run: |
-          mkdir -p target/package
-          cp target/desktop/Release/Nylon.exe target/package/
-          "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64/bin/windeployqt.exe" \
-            --qtpaths "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin/qtpaths.bat" \
-            --release --no-translations --no-system-d3d-compiler --no-opengl-sw \
-            target/package/Nylon.exe
+          cd "${{ runner.temp }}"
+          "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon.exe" --tracks 2 --screenshot "${{ runner.temp }}/installed.png"
+        env:
+          QT_QPA_PLATFORM: offscreen
       - uses: actions/upload-artifact@v4
         with:
           name: nylon-windows-${{ matrix.arch }}
-          path: target/package
+          path: target/package/Nylon
