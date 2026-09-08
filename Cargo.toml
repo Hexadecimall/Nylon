@@ -20,6 +20,10 @@ undocumented_unsafe_blocks = "deny"
 name = "render"
 harness = false
 
+[[bench]]
+name = "mixer"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
