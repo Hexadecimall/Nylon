@@ -46,7 +46,7 @@ MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* par
     , m_start(new StartScreen(&themes->theme(), this))
 {
     setWindowTitle(QStringLiteral("Nylon"));
-    resize(1440, 900);
+    resize(m_workspaceSize);
     // Frameless with a painted rounded outline; the title bar below carries
     // the menus and window controls on every platform.
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -65,6 +65,9 @@ MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* par
     buildWorkspace();
     m_root->addWidget(m_start);
     m_root->addWidget(m_workspace);
+    // The hidden workstation must not force the compact launcher to its
+    // larger minimum size.
+    m_root->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     setCentralWidget(m_root);
     statusBar()->setSizeGripEnabled(false);
     statusBar()->hide();
@@ -85,6 +88,7 @@ MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* par
     buildMenus();
     applyTheme(m_themes->theme());
     restoreLayout();
+    m_workspaceSize = QSize(qMax(width(), 1280), qMax(height(), 800));
     updateEditActions();
     showStartScreen();
 }
@@ -220,26 +224,19 @@ void MainWindow::buildWorkspace()
     m_session = new SessionView(m_bridge, theme, m_workspace);
     m_mixer = new MixerSection(m_bridge, theme, m_workspace);
     m_arrangement = new ArrangementView(m_bridge, theme, m_workspace);
-    m_detail = new DetailPanel(theme, m_workspace);
+    m_detail = new DetailPanel(m_bridge, theme, m_workspace);
 
-    auto* sessionPage = new QWidget(m_workspace);
-    sessionPage->setObjectName(QStringLiteral("sessionPage"));
-    auto* sessionLayout = new QVBoxLayout(sessionPage);
-    sessionLayout->setContentsMargins(0, 0, 0, 0);
-    sessionLayout->setSpacing(0);
-    sessionLayout->addWidget(m_session, 1);
-    sessionLayout->addWidget(m_mixer);
     m_mixer->followScrollBar(m_session->horizontalScrollBar());
 
     m_views = new QStackedWidget(m_workspace);
-    m_views->addWidget(sessionPage);
+    m_views->addWidget(m_session);
     m_views->addWidget(m_arrangement);
 
     m_vertical = new QSplitter(Qt::Vertical, m_workspace);
     m_vertical->setObjectName(QStringLiteral("verticalSplit"));
     m_vertical->setChildrenCollapsible(false);
     m_vertical->addWidget(m_views);
-    m_vertical->addWidget(m_detail);
+    m_vertical->addWidget(m_mixer);
     m_vertical->setStretchFactor(0, 1);
     m_vertical->setStretchFactor(1, 0);
 
@@ -248,8 +245,10 @@ void MainWindow::buildWorkspace()
     m_horizontal->setChildrenCollapsible(false);
     m_horizontal->addWidget(m_browser);
     m_horizontal->addWidget(m_vertical);
+    m_horizontal->addWidget(m_detail);
     m_horizontal->setStretchFactor(0, 0);
     m_horizontal->setStretchFactor(1, 1);
+    m_horizontal->setStretchFactor(2, 0);
 
     auto* layout = new QVBoxLayout(m_workspace);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -350,6 +349,12 @@ QAction* MainWindow::action(const QString& objectName) const
 
 void MainWindow::showStartScreen()
 {
+    if (!isMaximized() && !isFullScreen()) {
+        if (m_root->currentWidget() != m_start) {
+            m_workspaceSize = size();
+        }
+        resize(840, 480);
+    }
     statusBar()->clearMessage();
     m_start->reloadRecent();
     rebuildRecentMenu();
@@ -412,6 +417,9 @@ bool MainWindow::openProjectAt(const QString& bundleDirectory)
     StartScreen::addRecentProject(bundleDirectory);
     rebuildRecentMenu();
     selectTrack(-1);
+    if (!isMaximized() && !isFullScreen() && m_root->currentWidget() == m_start) {
+        resize(m_workspaceSize);
+    }
     m_root->setCurrentWidget(m_workspace);
     updateWindowTitle();
     showSession();
@@ -460,6 +468,9 @@ void MainWindow::newProject()
     if (!m_bridge->reset()) {
         showStatus(tr("The core could not create a project."));
         return;
+    }
+    if (!isMaximized() && !isFullScreen() && m_root->currentWidget() == m_start) {
+        resize(m_workspaceSize);
     }
     selectTrack(-1);
     m_root->setCurrentWidget(m_workspace);
@@ -731,18 +742,15 @@ void MainWindow::restoreLayout()
     if (!geometry.isEmpty()) {
         restoreGeometry(geometry);
     }
-    const QByteArray horizontal = settings.value(QStringLiteral("horizontal")).toByteArray();
-    if (!horizontal.isEmpty()) {
-        m_horizontal->restoreState(horizontal);
-    } else {
+    const QByteArray horizontal = settings.value(QStringLiteral("horizontalV2")).toByteArray();
+    if (horizontal.isEmpty() || !m_horizontal->restoreState(horizontal)) {
         const int w = m_themes->theme().metricInt(QStringLiteral("browser.width"), 230);
-        m_horizontal->setSizes({w, qMax(400, width() - w)});
+        const int detail = m_themes->theme().metricInt(QStringLiteral("detail.width"), 260);
+        m_horizontal->setSizes({w, qMax(400, width() - w - detail), detail});
     }
-    const QByteArray vertical = settings.value(QStringLiteral("vertical")).toByteArray();
-    if (!vertical.isEmpty()) {
-        m_vertical->restoreState(vertical);
-    } else {
-        const int h = m_themes->theme().metricInt(QStringLiteral("detail.height"), 190);
+    const QByteArray vertical = settings.value(QStringLiteral("verticalV2")).toByteArray();
+    if (vertical.isEmpty() || !m_vertical->restoreState(vertical)) {
+        const int h = m_themes->theme().metricInt(QStringLiteral("mixer.height"), 170);
         m_vertical->setSizes({qMax(300, height() - h), h});
     }
     for (const char* name : {"actionToggleBrowser", "actionToggleDetail", "actionToggleMixer"}) {
@@ -758,8 +766,8 @@ void MainWindow::saveLayout()
     QSettings settings;
     settings.beginGroup(QStringLiteral("layout"));
     settings.setValue(QStringLiteral("geometry"), saveGeometry());
-    settings.setValue(QStringLiteral("horizontal"), m_horizontal->saveState());
-    settings.setValue(QStringLiteral("vertical"), m_vertical->saveState());
+    settings.setValue(QStringLiteral("horizontalV2"), m_horizontal->saveState());
+    settings.setValue(QStringLiteral("verticalV2"), m_vertical->saveState());
     for (const char* name : {"actionToggleBrowser", "actionToggleDetail", "actionToggleMixer"}) {
         if (QAction* a = action(QLatin1String(name))) {
             settings.setValue(QLatin1String(name), a->isChecked());

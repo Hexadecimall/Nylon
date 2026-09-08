@@ -249,6 +249,7 @@ const QStringList& Theme::requiredMetrics()
         QStringLiteral("arrangement.header.band"),
         QStringLiteral("browser.width"),
         QStringLiteral("detail.height"),
+        QStringLiteral("detail.width"),
         QStringLiteral("mixer.height"),
         QStringLiteral("fader.width"),
         QStringLiteral("fader.handle.height"),
@@ -409,6 +410,7 @@ QString Theme::styleSheet() const
         "QComboBox QAbstractItemView { background: %RAISED; color: %TEXT; selection-background-color: %ACCENT;"
         "  selection-color: %ACCENTTEXT; border: %SEPpx solid %BORDER; }"
         "QDialog { background: %BG; }"
+        "QWidget#startCard { background: transparent; }"
         "QLabel#startTitle { color: %TEXT; }"
         "QLabel#positionDisplay { background: %CTRLBG; border: %SEPpx solid %BORDER; border-radius: %RSMALLpx; padding: 0 %PADpx; }"
         "QLabel#positionDisplay:disabled { color: %DISABLED; }"

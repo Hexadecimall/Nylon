@@ -19,6 +19,7 @@
 #include <QAction>
 #include <QMenuBar>
 #include <QStatusBar>
+#include <QSplitter>
 #include <QDir>
 #include <QLineEdit>
 #include <QMenu>
@@ -354,6 +355,7 @@ void TestViews::startScreenThenWorkspace()
 {
     ProjectBridge bridge;
     MainWindow w(&bridge, &m_themes);
+    QCOMPARE(w.size(), QSize(840, 480));
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
     QVERIFY(w.isStartScreenVisible());
@@ -362,13 +364,15 @@ void TestViews::startScreenThenWorkspace()
     // The launcher is a compact centered card, not a canvas-wide layout.
     const QRect card = w.startScreen()->cardRect();
     QVERIFY(card.width() <= 700);
-    QVERIFY(card.height() < w.startScreen()->height() / 2);
+    QVERIFY(card.height() <= w.startScreen()->height() - 80);
     QVERIFY(qAbs(card.center().x() - w.startScreen()->width() / 2) < 4);
     QVERIFY(card.contains(w.startScreen()->newButton()->geometry().translated(card.topLeft())));
     bridge.addTrack();
     QCOMPARE(bridge.trackCount(), 1ull);
     w.startScreen()->newButton()->click();
     QVERIFY(!w.isStartScreenVisible());
+    QVERIFY(w.width() > 900);
+    QVERIFY(w.height() > 540);
     // New Project starts from an empty core project.
     QCOMPARE(bridge.trackCount(), 0ull);
     QVERIFY(!bridge.undo());
@@ -420,6 +424,23 @@ void TestViews::selectionFlowsBetweenGridMixerAndDetail()
     w.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w));
     w.newProject();
+    QCoreApplication::processEvents();
+    const auto windowRect = [&w](QWidget* widget) {
+        return QRect(w.mapFromGlobal(widget->mapToGlobal(QPoint())), widget->size());
+    };
+    const QRect sessionRect = windowRect(w.sessionView());
+    const QRect mixerRect = windowRect(w.mixer());
+    const QRect detailRect = windowRect(w.detail());
+    const QRect browserRect = windowRect(w.browser());
+    QVERIFY(browserRect.right() < sessionRect.left());
+    QVERIFY(detailRect.left() > sessionRect.right());
+    QVERIFY(mixerRect.top() > sessionRect.bottom());
+    QVERIFY(mixerRect.left() >= sessionRect.left());
+    QVERIFY(mixerRect.right() <= sessionRect.right());
+    w.showArrangement();
+    QCoreApplication::processEvents();
+    QVERIFY(w.mixer()->isVisibleTo(&w));
+    w.showSession();
     QCOMPARE(w.detail()->selectedTrack(), -1);
     QCOMPARE(w.mixer()->stripCount(), 0);
     w.action(QStringLiteral("actionAddTrack"))->trigger();

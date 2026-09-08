@@ -57,7 +57,11 @@ QJsonObject RemoteControl::execute(const QJsonObject& request)
         const double tempo = args[0].toString().toDouble(&ok);
         return reply(ok && std::isfinite(tempo) && bridge->setTempo(tempo));
     }
-    if (command == "add-track" && args.isEmpty()) return reply(bridge->addTrack());
+    if (command == "add-track" && args.isEmpty()) {
+        const bool added = bridge->addTrack();
+        if (added) m_window->selectTrack(static_cast<int>(bridge->trackCount()) - 1);
+        return reply(added);
+    }
     if (command == "view" && args.size() == 1) {
         const auto view = args[0].toString();
         if (view == "session") m_window->showSession();

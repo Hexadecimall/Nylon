@@ -1,4 +1,5 @@
 #include "RemoteControl.h"
+#include "DetailPanel.h"
 #include "MainWindow.h"
 #include "ProjectBridge.h"
 #include "ThemeManager.h"
@@ -66,6 +67,7 @@ private slots:
         nylon::RemoteControl control(&window);
         QVERIFY(control.execute({{"command", "add-track"}})["ok"].toBool());
         QCOMPARE(bridge.trackCount(), quint64(1));
+        QCOMPARE(window.detail()->selectedTrack(), 0);
         QVERIFY(control.execute({{"command", "undo"}})["ok"].toBool());
         QCOMPARE(bridge.trackCount(), quint64(0));
         QVERIFY(control.execute({{"command", "redo"}})["ok"].toBool());

@@ -8,17 +8,16 @@ class QStackedWidget;
 namespace nylon {
 
 class FlatButton;
+class ProjectBridge;
 class Theme;
 
-// Bottom panel: clip view or device chain for the selected track. The core
-// exposes neither clips nor devices yet, so each page shows what it will
-// hold and why it is empty.
+// Track inspector with clip and device pages.
 class DetailPanel : public QWidget {
     Q_OBJECT
 public:
     enum class Page { Clip, Device };
 
-    explicit DetailPanel(const Theme* theme, QWidget* parent = nullptr);
+    DetailPanel(ProjectBridge* bridge, const Theme* theme, QWidget* parent = nullptr);
 
     void setTheme(const Theme* theme);
     void setSelectedTrack(int index, const QString& name);
@@ -38,7 +37,14 @@ private:
     void refresh();
 
     const Theme* m_theme;
+    ProjectBridge* m_bridge;
     QLabel* m_title;
+    QWidget* m_summary;
+    QLabel* m_kind;
+    QLabel* m_volume;
+    QLabel* m_pan;
+    QLabel* m_state;
+    QLabel* m_color;
     FlatButton* m_clipTab;
     FlatButton* m_deviceTab;
     QStackedWidget* m_stack;

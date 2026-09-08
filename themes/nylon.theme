@@ -96,6 +96,7 @@ color.clip.empty.hover = #2A2F35
 
 metric.browser.width = 230
 metric.detail.height = 190
+metric.detail.width = 260
 metric.mixer.height = 170
 metric.fader.width = 12
 metric.fader.handle.height = 8

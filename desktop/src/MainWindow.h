@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QSize>
 
 class QAction;
 class QActionGroup;
@@ -98,6 +99,7 @@ private:
     DetailPanel* m_detail = nullptr;
     QActionGroup* m_themeActions = nullptr;
     QMenu* m_recentMenu = nullptr;
+    QSize m_workspaceSize{1440, 900};
 
     Qt::Edges edgesAt(const QPoint& pos) const;
     void updateResizeCursor(const QPoint& pos);

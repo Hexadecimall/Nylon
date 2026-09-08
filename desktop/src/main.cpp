@@ -95,6 +95,9 @@ int main(int argc, char** argv)
         return 1;
     }
     window.show();
+    if (tracks > 0) {
+        window.selectTrack(0);
+    }
 
     if (parser.isSet(screenshotOption)) {
         const QString file = parser.value(screenshotOption);
