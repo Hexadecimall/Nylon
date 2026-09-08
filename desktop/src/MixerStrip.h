@@ -60,6 +60,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
 
 private:
+    QString volumeText() const;
     const Theme* m_theme;
     Kind m_kind;
     int m_index = -1;

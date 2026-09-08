@@ -28,6 +28,9 @@ constexpr int kHeaderBandWidth = 12;
 constexpr int kHeaderBadgeWidth = 52;
 constexpr int kHeaderReadoutWidth = 54;
 constexpr int kHeaderSliderMinimum = 24;
+// Alpha of the wash over the selected lane and over every other bar.
+constexpr int kSelectedLaneWash = 12;
+constexpr int kAlternateBarWash = 60;
 // The volume slider spans the same range a mixer fader does.
 constexpr double kHeaderMinimumDb = -70.0;
 constexpr double kHeaderMaximumDb = 6.0;
@@ -343,12 +346,39 @@ void ArrangementView::paintEvent(QPaintEvent* event)
     // Beat subdivisions follow the project's time signature.
     const int beatsPerBar = qBound(1, m_bridge->timeSignatureNumerator(), 64);
 
-    // Lane bodies.
+    // Lane bodies. The selected lane takes a wash of its own track colour
+    // so the row being edited is obvious without a border around it.
     if (anyLane) {
         for (qint64 t = firstLane; t <= lastLane; ++t) {
             const int y = static_cast<int>(lanesTop + t * (lh + sep) - scrollY);
-            p.fillRect(QRect(timelineX, y, viewW - timelineX, lh), (t % 2 == 0) ? lane : laneAlt);
+            const QRect body(timelineX, y, viewW - timelineX, lh);
+            p.fillRect(body, (t % 2 == 0) ? lane : laneAlt);
+            if (static_cast<int>(t) == m_selected) {
+                const int colorIndex = m_bridge->trackColorIndex(static_cast<quint64>(t));
+                QColor wash = m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16));
+                wash.setAlpha(kSelectedLaneWash);
+                p.fillRect(body, wash);
+            }
             p.fillRect(QRect(0, y + lh, viewW, sep), sepColor);
+        }
+    }
+
+    // Every other bar carries a faint wash, which gives the timeline a
+    // sense of distance that plain grid lines do not.
+    if (anyLane && anyBar) {
+        QColor shade = m_theme->color(QStringLiteral("background"));
+        shade.setAlpha(kAlternateBarWash);
+        const int top = static_cast<int>(qMax<qint64>(lanesTop - scrollY, lanesTop));
+        for (qint64 b = firstBar; b <= lastBar && b < bars; ++b) {
+            if (b % 2 == 0) {
+                continue;
+            }
+            const int x = static_cast<int>(timelineX + b * ppb - scrollX);
+            const int left = qMax(x, timelineX);
+            const int right = qMin(x + ppb, viewW);
+            if (right > left) {
+                p.fillRect(QRect(left, top, right - left, viewH - top), shade);
+            }
         }
     }
 
@@ -495,12 +525,22 @@ void ArrangementView::paintEvent(QPaintEvent* event)
     // Ruler with bar numbers, pinned to the top.
     p.fillRect(QRect(0, 0, viewW, rh), ruler);
     p.fillRect(QRect(0, rh, viewW, sep), sepColor);
-    p.setPen(secondary);
     if (anyBar) {
+        // Bars carry a full tick and a number; beats carry a short tick,
+        // which is what makes a ruler readable while zoomed out.
+        const int barTick = qMax(4, rh / 3);
+        const int beatTick = qMax(2, rh / 6);
         for (qint64 b = firstBar; b <= lastBar; ++b) {
             const int x = static_cast<int>(timelineX + b * ppb - scrollX);
-            p.fillRect(QRect(x, 0, sep, rh), sepColor);
-            p.drawText(QRect(x + textInset, 0, ppb - textInset, rh), Qt::AlignLeft | Qt::AlignVCenter,
+            p.fillRect(QRect(x, rh - barTick, sep, barTick), gridBar);
+            for (int beat = 1; beat < beatsPerBar; ++beat) {
+                const int bx = x + (beat * ppb) / beatsPerBar;
+                if (bx >= timelineX && bx <= viewW) {
+                    p.fillRect(QRect(bx, rh - beatTick, sep, beatTick), grid);
+                }
+            }
+            p.setPen(secondary);
+            p.drawText(QRect(x + textInset, 0, ppb - textInset, rh - beatTick), Qt::AlignLeft | Qt::AlignVCenter,
                 QString::number(b + 1));
         }
     }

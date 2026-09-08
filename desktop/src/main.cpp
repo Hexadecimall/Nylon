@@ -5,6 +5,7 @@
 
 #include <QApplication>
 #include <QAction>
+#include <QMap>
 #include <QCommandLineParser>
 #include <QMessageBox>
 #include <QSettings>
@@ -34,12 +35,15 @@ int main(int argc, char** argv)
         QStringLiteral("Add this many tracks to the new project."), QStringLiteral("count"), QStringLiteral("0"));
     const QCommandLineOption screenshotOption(QStringLiteral("screenshot"),
         QStringLiteral("Write a PNG of the main window to <file> and exit."), QStringLiteral("file"));
+    const QCommandLineOption panelsOption(QStringLiteral("panels"),
+        QStringLiteral("Panels to open, comma separated: browser, editor, mixer."), QStringLiteral("list"));
     const QCommandLineOption viewOption(QStringLiteral("view"),
         QStringLiteral("Initial view: session or arrangement."), QStringLiteral("name"), QStringLiteral("arrangement"));
     parser.addOption(themeOption);
     parser.addOption(workspaceOption);
     parser.addOption(startOption);
     parser.addOption(tracksOption);
+    parser.addOption(panelsOption);
     parser.addOption(viewOption);
     parser.addOption(screenshotOption);
     const QCommandLineOption controlOption(QStringLiteral("control"),
@@ -76,10 +80,9 @@ int main(int argc, char** argv)
     if (parser.isSet(startOption)) {
         window.showStartScreen();
     } else if (tracks > 0) {
-        if (!bridge.reset()) {
-            std::fprintf(stderr, "the core rejected resetting the project\n");
-            return 1;
-        }
+        // The same path a new project takes, so the window opens at the
+        // workspace size rather than the size the start screen uses.
+        window.newProject();
         for (int i = 0; i < tracks; ++i) {
             if (!bridge.addTrack()) {
                 std::fprintf(stderr, "the core rejected adding track %d\n", i + 1);
@@ -113,6 +116,29 @@ int main(int argc, char** argv)
             return 2;
         }
     }
+    if (parser.isSet(panelsOption)) {
+        // Panel names map to the same actions the View menu drives, so a
+        // capture and a keystroke reach the same state.
+        const QMap<QString, QString> actions {
+            {QStringLiteral("browser"), QStringLiteral("actionToggleBrowser")},
+            {QStringLiteral("editor"), QStringLiteral("actionToggleDetail")},
+            {QStringLiteral("mixer"), QStringLiteral("actionToggleMixer")},
+        };
+        const QStringList wanted = parser.value(panelsOption).toLower().split(QLatin1Char(','),
+            Qt::SkipEmptyParts);
+        for (const QString& name : wanted) {
+            const auto found = actions.constFind(name.trimmed());
+            if (found == actions.constEnd()) {
+                std::fprintf(stderr, "--panels expects browser, editor or mixer\n");
+                return 2;
+            }
+            QAction* item = window.action(found.value());
+            if (item && !item->isChecked()) {
+                item->trigger();
+            }
+        }
+    }
+
     nylon::RemoteControl control(&window);
     if (parser.isSet(controlOption) &&
         (parser.value(controlOption).isEmpty() || !control.listen(parser.value(controlOption)))) {

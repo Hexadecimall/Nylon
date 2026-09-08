@@ -58,7 +58,9 @@ MixerStrip::MixerStrip(const Theme* theme, Kind kind, QWidget* parent)
     m_pan->setStatusTip(tr("Pan. Drag up or down; double-click to center."));
 
     m_fader->setStatusTip(tr("Track volume in dB. Double-click resets to 0 dB."));
-    m_fader->setShowScale(false);
+    // The master carries the scale for the whole mixer; repeating it on
+    // every strip would be noise.
+    m_fader->setShowScale(kind == Kind::Master);
     m_meter->setStatusTip(tr("Output level."));
     m_volume->setAlignment(Qt::AlignCenter);
     m_volume->setObjectName(QStringLiteral("secondary"));
@@ -101,7 +103,7 @@ MixerStrip::MixerStrip(const Theme* theme, Kind kind, QWidget* parent)
     layout->addLayout(faderRow, 1);
     layout->addWidget(m_volume);
 
-    connect(m_fader, &Fader::valueChanged, this, [this] { m_volume->setText(m_fader->displayText()); });
+    connect(m_fader, &Fader::valueChanged, this, [this] { m_volume->setText(volumeText()); });
     connect(m_fader, &Fader::dragFinished, this, [this] {
         if (!m_syncing) {
             emit volumeChanged(m_index, m_fader->value() <= m_fader->minimum()
@@ -134,9 +136,15 @@ MixerStrip::MixerStrip(const Theme* theme, Kind kind, QWidget* parent)
         }
     });
 
-    m_volume->setText(m_fader->displayText());
+    m_volume->setText(volumeText());
     setInteractive(false);
     setTheme(theme);
+}
+
+QString MixerStrip::volumeText() const
+{
+    const QString value = m_fader->displayText();
+    return value == QStringLiteral("-inf") ? value : tr("%1 dB").arg(value);
 }
 
 void MixerStrip::setTheme(const Theme* theme)
@@ -164,6 +172,11 @@ void MixerStrip::setTheme(const Theme* theme)
 void MixerStrip::setTrackIndex(int index)
 {
     m_index = index;
+    if (m_kind == Kind::Track) {
+        // The activator carries the strip's number, which is how a mixer
+        // stays readable once the names are elided.
+        m_activator->setText(QString::number(index + 1));
+    }
 }
 
 void MixerStrip::setName(const QString& name)
@@ -199,7 +212,7 @@ void MixerStrip::setState(double volumeDb, double pan, bool active, bool solo, b
 {
     m_syncing = true;
     m_fader->setValue(std::isfinite(volumeDb) ? volumeDb : m_fader->minimum());
-    m_volume->setText(m_fader->displayText());
+    m_volume->setText(volumeText());
     m_pan->setValue(pan);
     m_activator->setChecked(active);
     m_solo->setChecked(solo);

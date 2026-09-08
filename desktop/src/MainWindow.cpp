@@ -44,6 +44,13 @@
 
 namespace nylon {
 
+namespace {
+// Smallest window each screen is laid out for. The workspace floor is
+// whatever its own layout needs, never less than this.
+const QSize kWorkspaceFloor(960, 640);
+const QSize kStartMinimum(720, 420);
+} // namespace
+
 MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* parent)
     : QMainWindow(parent)
     , m_bridge(bridge)
@@ -498,6 +505,9 @@ void MainWindow::showStartScreen()
         if (m_root->currentWidget() != m_start) {
             m_workspaceSize = size();
         }
+        // The start screen is a small window, so the workspace minimum has
+        // to come off before the resize can take effect.
+        setMinimumSize(kStartMinimum);
         resize(840, 480);
     }
     statusBar()->clearMessage();
@@ -562,10 +572,7 @@ bool MainWindow::openProjectAt(const QString& bundleDirectory)
     StartScreen::addRecentProject(bundleDirectory);
     rebuildRecentMenu();
     selectTrack(-1);
-    if (!isMaximized() && !isFullScreen() && m_root->currentWidget() == m_start) {
-        resize(m_workspaceSize);
-    }
-    m_root->setCurrentWidget(m_workspace);
+    enterWorkspace();
     updateWindowTitle();
     showSession();
     showStatus(tr("Opened %1.").arg(QFileInfo(bundleDirectory).completeBaseName()));
@@ -614,11 +621,8 @@ void MainWindow::newProject()
         showStatus(tr("The core could not create a project."));
         return;
     }
-    if (!isMaximized() && !isFullScreen() && m_root->currentWidget() == m_start) {
-        resize(m_workspaceSize);
-    }
     selectTrack(-1);
-    m_root->setCurrentWidget(m_workspace);
+    enterWorkspace();
     updateWindowTitle();
     showSession();
 }
@@ -644,9 +648,25 @@ void MainWindow::newProjectFromTemplate(int audioTracks, int midiTracks)
     showArrangement();
 }
 
+void MainWindow::enterWorkspace()
+{
+    if (m_root->currentWidget() == m_workspace) {
+        return;
+    }
+    // The workspace carries the transport bar, the browser and the panels
+    // side by side. Below this size they start to overlap each other, so
+    // the window refuses to go smaller once a project is open.
+    const QSize floor = m_workspace->minimumSizeHint().expandedTo(kWorkspaceFloor);
+    setMinimumSize(floor);
+    if (!isMaximized() && !isFullScreen()) {
+        resize(m_workspaceSize.expandedTo(floor));
+    }
+    m_root->setCurrentWidget(m_workspace);
+}
+
 void MainWindow::showSession()
 {
-    m_root->setCurrentWidget(m_workspace);
+    enterWorkspace();
     m_views->setCurrentIndex(0);
     m_transport->showSessionActive(true);
     updateWorkspaceContext();
@@ -654,7 +674,7 @@ void MainWindow::showSession()
 
 void MainWindow::showArrangement()
 {
-    m_root->setCurrentWidget(m_workspace);
+    enterWorkspace();
     m_views->setCurrentIndex(1);
     m_transport->showSessionActive(false);
     updateWorkspaceContext();
@@ -811,7 +831,7 @@ void MainWindow::buildMenus()
             showStatus(tr("Could not add a track."));
             return;
         }
-        m_root->setCurrentWidget(m_workspace);
+        enterWorkspace();
         selectTrack(static_cast<int>(m_bridge->trackCount()) - 1);
     };
     add(create, QStringLiteral("actionAddTrack"), tr("Insert &Audio Track"), QKeySequence(Qt::CTRL | Qt::Key_T),

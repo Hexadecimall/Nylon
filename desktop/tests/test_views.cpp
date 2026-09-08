@@ -76,6 +76,7 @@ private slots:
     void saveOpenAndRecentThroughTheWindow();
     void arrangementGridFollowsTimeSignature();
     void trackHeaderCarriesStateAndVolume();
+    void theWorkspaceHoldsItsLayoutAtTheSmallestWindow();
     void detailClipPageHostsThePianoRoll();
 
 private:
@@ -812,6 +813,54 @@ void TestViews::trackHeaderCarriesStateAndVolume()
     QVERIFY(bridge.trackSolo(0));
     QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, view->headerStateRect(0, 2).center());
     QVERIFY(bridge.trackArmed(0));
+}
+
+void TestViews::theWorkspaceHoldsItsLayoutAtTheSmallestWindow()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    bridge.addTrack();
+    w.showArrangement();
+    QCoreApplication::processEvents();
+
+    // A window that opens a project cannot be shrunk to the size the start
+    // screen uses, because the transport bar would fold over itself.
+    const QSize floor = w.minimumSize();
+    QVERIFY(floor.width() >= 960);
+    w.resize(floor);
+    QCoreApplication::processEvents();
+    QCOMPARE(w.size(), floor);
+
+    QWidget* bar = w.transport();
+    QVERIFY(bar != nullptr);
+    QList<QWidget*> laid;
+    for (QObject* child : bar->children()) {
+        auto* widget = qobject_cast<QWidget*>(child);
+        if (widget && widget->isVisible() && !widget->geometry().isEmpty()) {
+            laid.append(widget);
+        }
+    }
+    QVERIFY(laid.size() >= 8);
+    for (int a = 0; a < laid.size(); ++a) {
+        for (int b = a + 1; b < laid.size(); ++b) {
+            const QRect overlap = laid[a]->geometry().intersected(laid[b]->geometry());
+            QVERIFY2(overlap.isEmpty(),
+                qPrintable(QStringLiteral("%1 overlaps %2")
+                        .arg(laid[a]->objectName().isEmpty() ? laid[a]->metaObject()->className()
+                                                             : laid[a]->objectName(),
+                            laid[b]->objectName().isEmpty() ? laid[b]->metaObject()->className()
+                                                            : laid[b]->objectName())));
+        }
+    }
+    QVERIFY(bar->childrenRect().right() <= bar->width());
+
+    // Going back to the start screen lets the window be small again.
+    w.showStartScreen();
+    QCoreApplication::processEvents();
+    QVERIFY(w.minimumSize().width() < floor.width());
 }
 
 void TestViews::detailClipPageHostsThePianoRoll()

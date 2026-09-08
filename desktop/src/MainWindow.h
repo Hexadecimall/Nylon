@@ -78,6 +78,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
 
 private:
+    void enterWorkspace();
     void buildMenus();
     void buildWorkspace();
     void applyTheme(const Theme& theme);
