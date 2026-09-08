@@ -1,7 +1,7 @@
 //! Native control interface. Handles belong to one control thread and must
 //! not be accessed concurrently or used after release.
 
-use crate::project::{Command, Project, TrackId, TrackKind};
+use crate::project::{ClipId, Command, MidiNote, Project, SceneId, TrackId, TrackKind};
 use std::ffi::{CStr, c_char};
 
 #[unsafe(no_mangle)]
@@ -420,4 +420,593 @@ pub unsafe extern "C" fn nylon_project_open(handle: *mut Project, directory: *co
     };
     *project = loaded;
     1
+}
+
+fn copy_text(text: &str, buffer: *mut c_char, capacity: u64) -> u64 {
+    if !buffer.is_null() && capacity > 0 {
+        let count = text
+            .len()
+            .min(usize::try_from(capacity - 1).unwrap_or(usize::MAX));
+        // SAFETY: Native callers provide writable, nonoverlapping output storage.
+        unsafe {
+            std::ptr::copy_nonoverlapping(text.as_ptr(), buffer.cast(), count);
+            buffer.add(count).write(0);
+        }
+    }
+    text.len() as u64
+}
+
+unsafe fn input_text(value: *const c_char) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    // SAFETY: Native callers provide a readable terminated string.
+    unsafe { CStr::from_ptr(value) }
+        .to_str()
+        .ok()
+        .map(str::to_owned)
+}
+
+fn slot_ids(project: &Project, track: u64, scene: u64) -> Option<(TrackId, SceneId, ClipId)> {
+    let track = usize::try_from(track).ok()?;
+    let scene = usize::try_from(scene).ok()?;
+    let track_ref = project.current.tracks.get(track)?;
+    let scene_ref = project.current.scenes.get(scene)?;
+    Some((
+        track_ref.id,
+        scene_ref.id,
+        track_ref.session_slots.get(scene)?.as_ref().copied()?,
+    ))
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_scene_count(handle: *const Project) -> u64 {
+    // SAFETY: Handle validity is required by the native interface.
+    unsafe { handle.as_ref() }.map_or(0, |p| p.current.scenes.len() as u64)
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_scene_create(handle: *mut Project, name: *const c_char) -> i32 {
+    // SAFETY: The native interface requires readable text and exclusive project access.
+    let Some(name) = (unsafe { input_text(name) }) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and exclusivity are required by the native interface.
+    unsafe { handle.as_mut() }.map_or(0, |p| {
+        i32::from(p.apply(&[Command::CreateScene { name }]).is_ok())
+    })
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_scene_delete(handle: *mut Project, scene: u64) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the native interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let Some(id) = usize::try_from(scene)
+        .ok()
+        .and_then(|i| project.current.scenes.get(i))
+        .map(|s| s.id)
+    else {
+        return 0;
+    };
+    i32::from(project.apply(&[Command::DeleteScene(id)]).is_ok())
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_scene_name(
+    handle: *const Project,
+    scene: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    // SAFETY: Handle validity is required by the native interface.
+    let text = unsafe { handle.as_ref() }
+        .and_then(|p| {
+            usize::try_from(scene)
+                .ok()
+                .and_then(|i| p.current.scenes.get(i))
+        })
+        .map_or("", |s| s.name.as_str());
+    copy_text(text, buffer, capacity)
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_scene_set_name(
+    handle: *mut Project,
+    scene: u64,
+    name: *const c_char,
+) -> i32 {
+    // SAFETY: The native interface requires readable text and exclusive project access.
+    let Some(name) = (unsafe { input_text(name) }) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and exclusivity are required by the native interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let Some(id) = usize::try_from(scene)
+        .ok()
+        .and_then(|i| project.current.scenes.get(i))
+        .map(|s| s.id)
+    else {
+        return 0;
+    };
+    i32::from(project.apply(&[Command::RenameScene { id, name }]).is_ok())
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_slot_state(
+    handle: *const Project,
+    track: u64,
+    scene: u64,
+) -> i32 {
+    // SAFETY: Handle validity is required by the native interface.
+    unsafe { handle.as_ref() }.map_or(0, |p| i32::from(slot_ids(p, track, scene).is_some()))
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_create_midi(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    length_beats: f64,
+) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the native interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let (Some(track_id), Some(scene_id)) = (
+        usize::try_from(track)
+            .ok()
+            .and_then(|i| project.current.tracks.get(i))
+            .map(|t| t.id),
+        usize::try_from(scene)
+            .ok()
+            .and_then(|i| project.current.scenes.get(i))
+            .map(|s| s.id),
+    ) else {
+        return 0;
+    };
+    let name = format!("MIDI Clip {}", project.current.clips.len() + 1);
+    i32::from(
+        project
+            .apply(&[Command::CreateMidiClip {
+                track: track_id,
+                scene: scene_id,
+                name,
+                length_beats,
+            }])
+            .is_ok(),
+    )
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_delete(handle: *mut Project, track: u64, scene: u64) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the native interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let Some((track, scene, _)) = slot_ids(project, track, scene) else {
+        return 0;
+    };
+    i32::from(
+        project
+            .apply(&[Command::DeleteClip { track, scene }])
+            .is_ok(),
+    )
+}
+
+unsafe fn edit_slot_clip(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    make: impl FnOnce(ClipId) -> Option<Command>,
+) -> i32 {
+    // SAFETY: The caller transfers the native interface's exclusive access contract.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let Some((_, _, clip)) = slot_ids(project, track, scene) else {
+        return 0;
+    };
+    let Some(command) = make(clip) else { return 0 };
+    i32::from(project.apply(&[command]).is_ok())
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_name(
+    handle: *const Project,
+    track: u64,
+    scene: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    // SAFETY: Handle validity is required by the native interface.
+    let text = unsafe { handle.as_ref() }
+        .and_then(|p| {
+            let (_, _, id) = slot_ids(p, track, scene)?;
+            p.current
+                .clips
+                .iter()
+                .find(|clip| clip.id == id)
+                .map(|clip| clip.name.as_str())
+        })
+        .unwrap_or("");
+    copy_text(text, buffer, capacity)
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_set_name(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    name: *const c_char,
+) -> i32 {
+    // SAFETY: The native interface requires readable text and exclusive project access.
+    let Some(name) = (unsafe { input_text(name) }) else {
+        return 0;
+    };
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::SetClipName { id, name })
+        })
+    }
+}
+
+macro_rules! clip_getter {
+    ($name:ident, $result:ty, $fallback:expr, $read:expr) => {
+        /// # Safety
+        /// The handle must be live and have no concurrent mutation.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(handle: *const Project, track: u64, scene: u64) -> $result {
+            // SAFETY: Handle validity is required by the native interface.
+            unsafe { handle.as_ref() }
+                .and_then(|p| {
+                    let (_, _, id) = slot_ids(p, track, scene)?;
+                    p.current.clips.iter().find(|clip| clip.id == id).map($read)
+                })
+                .unwrap_or($fallback)
+        }
+    };
+}
+
+clip_getter!(nylon_clip_color_index, i32, -1, |clip| i32::from(
+    clip.color_index
+));
+clip_getter!(nylon_clip_loop_start, f64, 0.0, |clip| clip
+    .loop_start_beats);
+clip_getter!(nylon_clip_loop_length, f64, 0.0, |clip| clip
+    .loop_length_beats);
+clip_getter!(nylon_clip_note_count, u64, 0, |clip| clip.notes.len()
+    as u64);
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_set_color_index(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    index: i32,
+) -> i32 {
+    let Ok(index) = u8::try_from(index) else {
+        return 0;
+    };
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::SetClipColor { id, index })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_set_loop(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    start_beats: f64,
+    length_beats: f64,
+) -> i32 {
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::SetClipLoop {
+                id,
+                start_beats,
+                length_beats,
+            })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_note_at(
+    handle: *const Project,
+    track: u64,
+    scene: u64,
+    index: u64,
+    pitch: *mut u8,
+    velocity: *mut u8,
+    start_beats: *mut f64,
+    length_beats: *mut f64,
+) -> i32 {
+    if pitch.is_null() || velocity.is_null() || start_beats.is_null() || length_beats.is_null() {
+        return 0;
+    }
+    // SAFETY: Handle validity is required by the native interface.
+    let Some(note) = (unsafe { handle.as_ref() }).and_then(|p| {
+        let (_, _, id) = slot_ids(p, track, scene)?;
+        let clip = p.current.clips.iter().find(|clip| clip.id == id)?;
+        clip.notes.get(usize::try_from(index).ok()?).copied()
+    }) else {
+        return 0;
+    };
+    // SAFETY: Native callers provide four writable output values.
+    unsafe {
+        pitch.write(note.pitch);
+        velocity.write(note.velocity);
+        start_beats.write(note.start_beats);
+        length_beats.write(note.length_beats);
+    }
+    1
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_note_add(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    pitch: u8,
+    velocity: u8,
+    start_beats: f64,
+    length_beats: f64,
+) -> i32 {
+    let note = MidiNote {
+        pitch,
+        velocity,
+        start_beats,
+        length_beats,
+    };
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::AddNote { id, note })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_note_remove(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    index: u64,
+) -> i32 {
+    let Ok(index) = usize::try_from(index) else {
+        return 0;
+    };
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::RemoveNote { id, index })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_note_move(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    index: u64,
+    pitch: u8,
+    velocity: u8,
+    start_beats: f64,
+    length_beats: f64,
+) -> i32 {
+    let Ok(index) = usize::try_from(index) else {
+        return 0;
+    };
+    let note = MidiNote {
+        pitch,
+        velocity,
+        start_beats,
+        length_beats,
+    };
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::MoveNote { id, index, note })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_arrangement_clip_count(handle: *const Project, track: u64) -> u64 {
+    // SAFETY: Handle validity is required by the native interface.
+    unsafe { handle.as_ref() }
+        .and_then(|p| {
+            usize::try_from(track)
+                .ok()
+                .and_then(|i| p.current.tracks.get(i))
+        })
+        .map_or(0, |t| t.arrangement.len() as u64)
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_arrangement_clip_add_from_slot(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    start_beats: f64,
+    length_beats: f64,
+) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the native interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let Some((track, _, clip)) = slot_ids(project, track, scene) else {
+        return 0;
+    };
+    i32::from(
+        project
+            .apply(&[Command::PlaceClip {
+                track,
+                clip,
+                start_beats,
+                length_beats,
+            }])
+            .is_ok(),
+    )
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_arrangement_clip_range(
+    handle: *const Project,
+    track: u64,
+    index: u64,
+    start_beats: *mut f64,
+    length_beats: *mut f64,
+) -> i32 {
+    if start_beats.is_null() || length_beats.is_null() {
+        return 0;
+    }
+    // SAFETY: Handle validity is required by the native interface.
+    let Some(placement) = (unsafe { handle.as_ref() }).and_then(|p| {
+        p.current
+            .tracks
+            .get(usize::try_from(track).ok()?)?
+            .arrangement
+            .get(usize::try_from(index).ok()?)
+            .copied()
+    }) else {
+        return 0;
+    };
+    // SAFETY: Native callers provide two writable output values.
+    unsafe {
+        start_beats.write(placement.start_beats);
+        length_beats.write(placement.length_beats);
+    }
+    1
+}
+
+unsafe fn edit_placement(
+    handle: *mut Project,
+    track: u64,
+    index: u64,
+    make: impl FnOnce(TrackId, usize) -> Command,
+) -> i32 {
+    // SAFETY: The caller transfers the native interface's exclusive access contract.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let (Ok(track_index), Ok(index)) = (usize::try_from(track), usize::try_from(index)) else {
+        return 0;
+    };
+    let Some(track) = project.current.tracks.get(track_index) else {
+        return 0;
+    };
+    if index >= track.arrangement.len() {
+        return 0;
+    }
+    i32::from(project.apply(&[make(track.id, index)]).is_ok())
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_arrangement_clip_remove(
+    handle: *mut Project,
+    track: u64,
+    index: u64,
+) -> i32 {
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_placement(handle, track, index, |track, index| {
+            Command::RemovePlacement { track, index }
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_arrangement_clip_set_range(
+    handle: *mut Project,
+    track: u64,
+    index: u64,
+    start_beats: f64,
+    length_beats: f64,
+) -> i32 {
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_placement(handle, track, index, |track, index| {
+            Command::SetPlacementRange {
+                track,
+                index,
+                start_beats,
+                length_beats,
+            }
+        })
+    }
 }

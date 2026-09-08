@@ -8,8 +8,7 @@ class ProjectBridge;
 class Theme;
 
 // Clip launch grid: one column per track, one row per scene, plus a master
-// column at the right holding the scene launch slots. The core does not
-// expose clips yet, so every slot is drawn empty.
+// column at the right holding the scene launch slots.
 class SessionView : public QAbstractScrollArea {
     Q_OBJECT
 public:
@@ -36,11 +35,13 @@ public slots:
 signals:
     void trackSelected(int index);
     void slotClicked(int track, int scene);
+    void slotCreateRequested(int track, int scene);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void leaveEvent(QEvent* event) override;
 

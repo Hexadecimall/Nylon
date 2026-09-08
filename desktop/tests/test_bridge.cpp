@@ -235,6 +235,20 @@ void TestBridge::cppBindingMatchesCInterface()
     QVERIFY(moved.valid());
     QVERIFY(!p.valid());
     QCOMPARE(moved.trackCount(), std::uint64_t(1));
+    QCOMPARE(moved.sceneCount(), std::uint64_t(8));
+    QVERIFY(moved.createMidiClip(0, 0, 4.0));
+    QVERIFY(moved.clipSlotOccupied(0, 0));
+    QVERIFY(moved.setClipName(0, 0, "Verse"));
+    QCOMPARE(QString::fromStdString(moved.clipName(0, 0)), QStringLiteral("Verse"));
+    QVERIFY(moved.addClipNote(0, 0, {60, 100, 0.0, 1.0}));
+    QCOMPARE(moved.clipNoteCount(0, 0), std::uint64_t(1));
+    nylon::MidiNote note {};
+    QVERIFY(moved.clipNote(0, 0, 0, note));
+    QCOMPARE(note.pitch, std::uint8_t(60));
+    QVERIFY(moved.addArrangementClipFromSlot(0, 0, {8.0, 4.0}));
+    nylon::BeatRange range {};
+    QVERIFY(moved.arrangementClipRange(0, 0, range));
+    QCOMPARE(range.startBeats, 8.0);
     QVERIFY(moved.undo());
     QVERIFY(moved.canRedo());
 }

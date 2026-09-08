@@ -47,8 +47,27 @@ int SessionView::separator() const
 
 int SessionView::sceneCount() const
 {
-    const qint64 requested = qMax(1, m_theme->metricInt(QStringLiteral("session.scene.count"), 8));
+    const qint64 coreScenes = static_cast<qint64>(qMin<quint64>(
+        m_bridge->sceneCount(), static_cast<quint64>(layout::kMaxExtent)));
+    const qint64 requested = qMax(coreScenes,
+        static_cast<qint64>(qMax(1, m_theme->metricInt(QStringLiteral("session.scene.count"), 8))));
     return static_cast<int>(layoutCount(requested, slotHeight() + separator(), headerHeight() + separator()));
+}
+
+void SessionView::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton) {
+        const QPoint point = event->position().toPoint();
+        const int track = columnAt(point.x());
+        const int scene = sceneAt(point.y());
+        if (track >= 0 && scene >= 0) {
+            selectTrack(track);
+            emit slotCreateRequested(track, scene);
+            event->accept();
+            return;
+        }
+    }
+    QAbstractScrollArea::mouseDoubleClickEvent(event);
 }
 
 int SessionView::columnCount() const
@@ -263,8 +282,16 @@ void SessionView::paintEvent(QPaintEvent* event)
             for (qint64 s = firstScene; s <= lastScene; ++s) {
                 const int y = static_cast<int>(gridTop + s * (sh + sep) - scrollY);
                 const bool hovered = t == m_hoverTrack && s == m_hoverScene;
-                p.fillPath(paint::rounded(*m_theme, QRectF(x + 1, y + 1, sw - 2, sh - 2)), hovered ? slotHover : slotColor);
-                p.fillPath(paint::rounded(*m_theme, QRectF(x + stopInset + 1, y + (sh - stopSize) / 2, stopSize, stopSize)), stopColor);
+                const bool occupied = m_bridge->clipSlotOccupied(static_cast<quint64>(t), static_cast<quint64>(s));
+                const QColor fill = occupied ? trackColor : hovered ? slotHover : slotColor;
+                p.fillPath(paint::rounded(*m_theme, QRectF(x + 1, y + 1, sw - 2, sh - 2)), fill);
+                if (occupied) {
+                    p.setPen(m_theme->color(QStringLiteral("track.text")));
+                    p.drawText(QRect(x + textInset, y, sw - 2 * textInset, sh), Qt::AlignLeft | Qt::AlignVCenter,
+                        p.fontMetrics().elidedText(m_bridge->clipName(static_cast<quint64>(t), static_cast<quint64>(s)), Qt::ElideRight, sw - 2 * textInset));
+                } else {
+                    p.fillPath(paint::rounded(*m_theme, QRectF(x + stopInset + 1, y + (sh - stopSize) / 2, stopSize, stopSize)), stopColor);
+                }
             }
             Q_UNUSED(gridHeight);
             Q_UNUSED(sepColor);
@@ -287,7 +314,9 @@ void SessionView::paintEvent(QPaintEvent* event)
             p.fillPath(paint::rounded(*m_theme, QRectF(slot).adjusted(1, 1, -1, -1)), slotColor);
             p.setPen(secondary);
             p.drawText(slot.adjusted(labelInset, 0, -textInset, 0), Qt::AlignLeft | Qt::AlignVCenter,
-                QString::number(s + 1));
+                static_cast<quint64>(s) < m_bridge->sceneCount()
+                    ? m_bridge->sceneName(static_cast<quint64>(s))
+                    : QString::number(s + 1));
             p.fillRect(QRect(mx + stopInset, y + (sh - stopSize) / 2, stopSize, stopSize), stopColor);
         }
         Q_UNUSED(headerY);

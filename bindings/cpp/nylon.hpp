@@ -10,6 +10,18 @@ namespace nylon {
 
 enum class TrackKind : int { Audio = 0, Midi = 1, Return = 2, Master = 3, Group = 4, Cue = 5 };
 
+struct MidiNote {
+    std::uint8_t pitch;
+    std::uint8_t velocity;
+    double startBeats;
+    double lengthBeats;
+};
+
+struct BeatRange {
+    double startBeats;
+    double lengthBeats;
+};
+
 // Owning handle to a core project. Move-only.
 class Project {
 public:
@@ -65,6 +77,34 @@ public:
     bool setTrackArmed(std::uint64_t index, bool on);
     int trackColorIndex(std::uint64_t index) const;
     bool setTrackColorIndex(std::uint64_t index, int color);
+
+    std::uint64_t sceneCount() const;
+    bool createScene(const std::string& name);
+    bool deleteScene(std::uint64_t scene);
+    std::string sceneName(std::uint64_t scene) const;
+    bool setSceneName(std::uint64_t scene, const std::string& name);
+
+    bool clipSlotOccupied(std::uint64_t track, std::uint64_t scene) const;
+    bool createMidiClip(std::uint64_t track, std::uint64_t scene, double lengthBeats);
+    bool deleteClip(std::uint64_t track, std::uint64_t scene);
+    std::string clipName(std::uint64_t track, std::uint64_t scene) const;
+    bool setClipName(std::uint64_t track, std::uint64_t scene, const std::string& name);
+    int clipColorIndex(std::uint64_t track, std::uint64_t scene) const;
+    bool setClipColorIndex(std::uint64_t track, std::uint64_t scene, int color);
+    BeatRange clipLoop(std::uint64_t track, std::uint64_t scene) const;
+    bool setClipLoop(std::uint64_t track, std::uint64_t scene, BeatRange range);
+    std::uint64_t clipNoteCount(std::uint64_t track, std::uint64_t scene) const;
+    bool clipNote(std::uint64_t track, std::uint64_t scene, std::uint64_t index, MidiNote& note) const;
+    bool addClipNote(std::uint64_t track, std::uint64_t scene, MidiNote note);
+    bool removeClipNote(std::uint64_t track, std::uint64_t scene, std::uint64_t index);
+    bool moveClipNote(std::uint64_t track, std::uint64_t scene, std::uint64_t index, MidiNote note);
+
+    std::uint64_t arrangementClipCount(std::uint64_t track) const;
+    bool addArrangementClipFromSlot(
+        std::uint64_t track, std::uint64_t scene, BeatRange range);
+    bool arrangementClipRange(std::uint64_t track, std::uint64_t index, BeatRange& range) const;
+    bool removeArrangementClip(std::uint64_t track, std::uint64_t index);
+    bool setArrangementClipRange(std::uint64_t track, std::uint64_t index, BeatRange range);
 
 private:
     void* m_handle;

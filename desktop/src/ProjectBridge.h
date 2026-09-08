@@ -43,6 +43,16 @@ public:
     bool trackSolo(quint64 index) const;
     bool trackArmed(quint64 index) const;
     int trackColorIndex(quint64 index) const;
+    quint64 sceneCount() const;
+    QString sceneName(quint64 scene) const;
+    bool clipSlotOccupied(quint64 track, quint64 scene) const;
+    QString clipName(quint64 track, quint64 scene) const;
+    int clipColorIndex(quint64 track, quint64 scene) const;
+    BeatRange clipLoop(quint64 track, quint64 scene) const;
+    quint64 clipNoteCount(quint64 track, quint64 scene) const;
+    bool clipNote(quint64 track, quint64 scene, quint64 index, MidiNote& note) const;
+    quint64 arrangementClipCount(quint64 track) const;
+    bool arrangementClipRange(quint64 track, quint64 index, BeatRange& range) const;
 
     // True once the core can read and write project bundles.
     static bool isPersistenceAvailable() { return true; }
@@ -73,6 +83,20 @@ public slots:
     bool setTrackSolo(quint64 index, bool solo);
     bool setTrackArmed(quint64 index, bool armed);
     bool setTrackColorIndex(quint64 index, int color);
+    bool createScene(const QString& name);
+    bool deleteScene(quint64 scene);
+    bool setSceneName(quint64 scene, const QString& name);
+    bool createMidiClip(quint64 track, quint64 scene, double lengthBeats);
+    bool deleteClip(quint64 track, quint64 scene);
+    bool setClipName(quint64 track, quint64 scene, const QString& name);
+    bool setClipColorIndex(quint64 track, quint64 scene, int color);
+    bool setClipLoop(quint64 track, quint64 scene, BeatRange range);
+    bool addClipNote(quint64 track, quint64 scene, MidiNote note);
+    bool removeClipNote(quint64 track, quint64 scene, quint64 index);
+    bool moveClipNote(quint64 track, quint64 scene, quint64 index, MidiNote note);
+    bool addArrangementClipFromSlot(quint64 track, quint64 scene, BeatRange range);
+    bool removeArrangementClip(quint64 track, quint64 index);
+    bool setArrangementClipRange(quint64 track, quint64 index, BeatRange range);
     bool undo();
     bool redo();
 

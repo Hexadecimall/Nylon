@@ -1,6 +1,9 @@
 //! Versioned binary project documents and directory bundles.
 
-use crate::project::{self, Project, Snapshot, Track, TrackId, TrackKind};
+use crate::project::{
+    self, ArrangementPlacement, ClipId, MidiClip, MidiNote, Project, Scene, SceneId, Snapshot,
+    Track, TrackId, TrackKind,
+};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -11,7 +14,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +63,39 @@ impl Encoder {
             self.count(track.name.len())?;
             self.bytes(track.name.as_bytes())?;
         }
+        self.count(snapshot.scenes.len())?;
+        for scene in &snapshot.scenes {
+            self.bytes(&scene.id.0.to_le_bytes())?;
+            self.count(scene.name.len())?;
+            self.bytes(scene.name.as_bytes())?;
+        }
+        self.count(snapshot.clips.len())?;
+        for clip in &snapshot.clips {
+            self.bytes(&clip.id.0.to_le_bytes())?;
+            self.bytes(&[clip.color_index])?;
+            self.bytes(&clip.loop_start_beats.to_le_bytes())?;
+            self.bytes(&clip.loop_length_beats.to_le_bytes())?;
+            self.count(clip.name.len())?;
+            self.bytes(clip.name.as_bytes())?;
+            self.count(clip.notes.len())?;
+            for note in &clip.notes {
+                self.bytes(&[note.pitch, note.velocity])?;
+                self.bytes(&note.start_beats.to_le_bytes())?;
+                self.bytes(&note.length_beats.to_le_bytes())?;
+            }
+        }
+        for track in &snapshot.tracks {
+            self.count(track.session_slots.len())?;
+            for slot in &track.session_slots {
+                self.bytes(&slot.map_or(0, |id| id.0).to_le_bytes())?;
+            }
+            self.count(track.arrangement.len())?;
+            for placement in &track.arrangement {
+                self.bytes(&placement.clip.0.to_le_bytes())?;
+                self.bytes(&placement.start_beats.to_le_bytes())?;
+                self.bytes(&placement.length_beats.to_le_bytes())?;
+            }
+        }
         Ok(())
     }
 }
@@ -83,7 +119,7 @@ impl<'a> Decoder<'a> {
     fn count(&mut self) -> Result<usize, PersistenceError> {
         Ok(u32::from_le_bytes(self.array()?) as usize)
     }
-    fn snapshot(&mut self, next_id: u64) -> Result<Arc<Snapshot>, PersistenceError> {
+    fn snapshot(&mut self, next_id: u64, version: u32) -> Result<Arc<Snapshot>, PersistenceError> {
         let tempo = f64::from_le_bytes(self.array()?);
         let numerator = u16::from_le_bytes(self.array()?);
         let denominator = u16::from_le_bytes(self.array()?);
@@ -134,7 +170,151 @@ impl<'a> Decoder<'a> {
                 solo: flags & 2 != 0,
                 armed: flags & 4 != 0,
                 color_index,
+                session_slots: Vec::new(),
+                arrangement: Vec::new(),
             });
+        }
+        if version == 1 {
+            return Ok(Arc::new(Snapshot {
+                tempo,
+                numerator,
+                denominator,
+                sample_rate,
+                tracks,
+                scenes: Vec::new(),
+                clips: Vec::new(),
+            }));
+        }
+
+        let scene_count = self.count()?;
+        if scene_count > self.remaining.len() / 12 {
+            return Err(PersistenceError::InvalidFormat);
+        }
+        let mut scenes = Vec::with_capacity(scene_count);
+        for _ in 0..scene_count {
+            let id = u64::from_le_bytes(self.array()?);
+            if id == 0 || id >= next_id || !ids.insert(id) {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            let length = self.count()?;
+            if length > 1024 {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            let name = std::str::from_utf8(self.bytes(length)?)
+                .map_err(|_| PersistenceError::InvalidFormat)?;
+            project::validate_name(name).map_err(|_| PersistenceError::InvalidFormat)?;
+            scenes.push(Scene {
+                id: SceneId(id),
+                name: name.into(),
+            });
+        }
+
+        let clip_count = self.count()?;
+        if clip_count > self.remaining.len() / 33 {
+            return Err(PersistenceError::InvalidFormat);
+        }
+        let mut clips = Vec::with_capacity(clip_count);
+        for _ in 0..clip_count {
+            let id = u64::from_le_bytes(self.array()?);
+            if id == 0 || id >= next_id || !ids.insert(id) {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            let color_index = self.array::<1>()?[0];
+            let loop_start_beats = f64::from_le_bytes(self.array()?);
+            let loop_length_beats = f64::from_le_bytes(self.array()?);
+            if color_index >= 16
+                || !loop_start_beats.is_finite()
+                || loop_start_beats < 0.0
+                || !loop_length_beats.is_finite()
+                || loop_length_beats <= 0.0
+            {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            let length = self.count()?;
+            if length > 1024 {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            let name = std::str::from_utf8(self.bytes(length)?)
+                .map_err(|_| PersistenceError::InvalidFormat)?;
+            project::validate_name(name).map_err(|_| PersistenceError::InvalidFormat)?;
+            let note_count = self.count()?;
+            if note_count > self.remaining.len() / 18 {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            let mut notes = Vec::with_capacity(note_count);
+            for _ in 0..note_count {
+                let [pitch, velocity] = self.array()?;
+                let start_beats = f64::from_le_bytes(self.array()?);
+                let length_beats = f64::from_le_bytes(self.array()?);
+                if pitch > 127
+                    || velocity == 0
+                    || velocity > 127
+                    || !start_beats.is_finite()
+                    || start_beats < 0.0
+                    || !length_beats.is_finite()
+                    || length_beats <= 0.0
+                {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                notes.push(MidiNote {
+                    pitch,
+                    velocity,
+                    start_beats,
+                    length_beats,
+                });
+            }
+            clips.push(MidiClip {
+                id: ClipId(id),
+                name: name.into(),
+                color_index,
+                loop_start_beats,
+                loop_length_beats,
+                notes,
+            });
+        }
+
+        for track in &mut tracks {
+            let slot_count = self.count()?;
+            if slot_count != scenes.len() {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            for _ in 0..slot_count {
+                let id = u64::from_le_bytes(self.array()?);
+                if id != 0 && !clips.iter().any(|clip| clip.id.0 == id) {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                track.session_slots.push((id != 0).then_some(ClipId(id)));
+            }
+            let placement_count = self.count()?;
+            for _ in 0..placement_count {
+                let clip = u64::from_le_bytes(self.array()?);
+                let start_beats = f64::from_le_bytes(self.array()?);
+                let length_beats = f64::from_le_bytes(self.array()?);
+                if !clips.iter().any(|item| item.id.0 == clip)
+                    || !start_beats.is_finite()
+                    || start_beats < 0.0
+                    || !length_beats.is_finite()
+                    || length_beats <= 0.0
+                {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                track.arrangement.push(ArrangementPlacement {
+                    clip: ClipId(clip),
+                    start_beats,
+                    length_beats,
+                });
+            }
+        }
+        if clips.iter().any(|clip| {
+            !tracks.iter().any(|track| {
+                track.session_slots.contains(&Some(clip.id))
+                    || track
+                        .arrangement
+                        .iter()
+                        .any(|placement| placement.clip == clip.id)
+            })
+        }) {
+            return Err(PersistenceError::InvalidFormat);
         }
         Ok(Arc::new(Snapshot {
             tempo,
@@ -142,6 +322,8 @@ impl<'a> Decoder<'a> {
             denominator,
             sample_rate,
             tracks,
+            scenes,
+            clips,
         }))
     }
 }
@@ -179,7 +361,8 @@ impl Project {
         if input.bytes(4)? != b"NYLN" {
             return Err(PersistenceError::InvalidFormat);
         }
-        if u32::from_le_bytes(input.array()?) != VERSION {
+        let version = u32::from_le_bytes(input.array()?);
+        if version == 0 || version > VERSION {
             return Err(PersistenceError::UnsupportedVersion);
         }
         let checksum = u32::from_le_bytes(
@@ -198,14 +381,14 @@ impl Project {
         {
             return Err(PersistenceError::InvalidFormat);
         }
-        let current = input.snapshot(next_id)?;
+        let current = input.snapshot(next_id, version)?;
         let mut undo = Vec::new();
         let mut redo = Vec::new();
         for _ in 0..undo_count {
-            undo.push(input.snapshot(next_id)?);
+            undo.push(input.snapshot(next_id, version)?);
         }
         for _ in 0..redo_count {
-            redo.push(input.snapshot(next_id)?);
+            redo.push(input.snapshot(next_id, version)?);
         }
         if !input.remaining.is_empty() {
             return Err(PersistenceError::InvalidFormat);

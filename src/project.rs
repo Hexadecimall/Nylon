@@ -6,6 +6,79 @@ use std::sync::Arc;
 pub struct TrackId(pub(crate) u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneId(pub(crate) u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClipId(pub(crate) u64);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scene {
+    pub(crate) id: SceneId,
+    pub(crate) name: String,
+}
+
+impl Scene {
+    pub fn id(&self) -> SceneId {
+        self.id
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MidiNote {
+    pub pitch: u8,
+    pub velocity: u8,
+    pub start_beats: f64,
+    pub length_beats: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MidiClip {
+    pub(crate) id: ClipId,
+    pub(crate) name: String,
+    pub(crate) color_index: u8,
+    pub(crate) loop_start_beats: f64,
+    pub(crate) loop_length_beats: f64,
+    pub(crate) notes: Vec<MidiNote>,
+}
+
+impl MidiClip {
+    pub fn id(&self) -> ClipId {
+        self.id
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn color_index(&self) -> u8 {
+        self.color_index
+    }
+    pub fn loop_range(&self) -> (f64, f64) {
+        (self.loop_start_beats, self.loop_length_beats)
+    }
+    pub fn notes(&self) -> &[MidiNote] {
+        &self.notes
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArrangementPlacement {
+    pub(crate) clip: ClipId,
+    pub(crate) start_beats: f64,
+    pub(crate) length_beats: f64,
+}
+
+impl ArrangementPlacement {
+    pub fn start_beats(&self) -> f64 {
+        self.start_beats
+    }
+    pub fn length_beats(&self) -> f64 {
+        self.length_beats
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackKind {
     Audio,
     Midi,
@@ -50,6 +123,8 @@ pub struct Track {
     pub(crate) solo: bool,
     pub(crate) armed: bool,
     pub(crate) color_index: u8,
+    pub(crate) session_slots: Vec<Option<ClipId>>,
+    pub(crate) arrangement: Vec<ArrangementPlacement>,
 }
 
 impl Track {
@@ -80,6 +155,9 @@ impl Track {
     pub fn color_index(&self) -> u8 {
         self.color_index
     }
+    pub fn arrangement(&self) -> &[ArrangementPlacement] {
+        &self.arrangement
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -89,6 +167,8 @@ pub struct Snapshot {
     pub(crate) numerator: u16,
     pub(crate) denominator: u16,
     pub(crate) sample_rate: u32,
+    pub(crate) scenes: Vec<Scene>,
+    pub(crate) clips: Vec<MidiClip>,
 }
 
 impl Snapshot {
@@ -104,6 +184,13 @@ impl Snapshot {
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
+    pub fn scenes(&self) -> &[Scene] {
+        &self.scenes
+    }
+    pub fn clip_at(&self, track: usize, scene: usize) -> Option<&MidiClip> {
+        let id = self.tracks.get(track)?.session_slots.get(scene)?.as_ref()?;
+        self.clips.iter().find(|clip| clip.id == *id)
+    }
 
     fn track_mut(&mut self, id: TrackId) -> Result<&mut Track, ProjectError> {
         self.tracks
@@ -116,17 +203,104 @@ impl Snapshot {
 #[derive(Clone, Debug)]
 pub enum Command {
     SetTempo(f64),
-    CreateTrack { name: String, kind: TrackKind },
+    CreateTrack {
+        name: String,
+        kind: TrackKind,
+    },
     DeleteTrack(TrackId),
-    RenameTrack { id: TrackId, name: String },
-    SetTrackVolume { id: TrackId, db: f64 },
-    SetTrackPan { id: TrackId, pan: f64 },
-    SetTrackMute { id: TrackId, enabled: bool },
-    SetTrackSolo { id: TrackId, enabled: bool },
-    SetTrackArm { id: TrackId, enabled: bool },
-    SetTrackColor { id: TrackId, index: u8 },
-    SetTimeSignature { numerator: u16, denominator: u16 },
+    RenameTrack {
+        id: TrackId,
+        name: String,
+    },
+    SetTrackVolume {
+        id: TrackId,
+        db: f64,
+    },
+    SetTrackPan {
+        id: TrackId,
+        pan: f64,
+    },
+    SetTrackMute {
+        id: TrackId,
+        enabled: bool,
+    },
+    SetTrackSolo {
+        id: TrackId,
+        enabled: bool,
+    },
+    SetTrackArm {
+        id: TrackId,
+        enabled: bool,
+    },
+    SetTrackColor {
+        id: TrackId,
+        index: u8,
+    },
+    SetTimeSignature {
+        numerator: u16,
+        denominator: u16,
+    },
     SetSampleRate(u32),
+    CreateScene {
+        name: String,
+    },
+    DeleteScene(SceneId),
+    RenameScene {
+        id: SceneId,
+        name: String,
+    },
+    CreateMidiClip {
+        track: TrackId,
+        scene: SceneId,
+        name: String,
+        length_beats: f64,
+    },
+    DeleteClip {
+        track: TrackId,
+        scene: SceneId,
+    },
+    SetClipName {
+        id: ClipId,
+        name: String,
+    },
+    SetClipColor {
+        id: ClipId,
+        index: u8,
+    },
+    SetClipLoop {
+        id: ClipId,
+        start_beats: f64,
+        length_beats: f64,
+    },
+    AddNote {
+        id: ClipId,
+        note: MidiNote,
+    },
+    RemoveNote {
+        id: ClipId,
+        index: usize,
+    },
+    MoveNote {
+        id: ClipId,
+        index: usize,
+        note: MidiNote,
+    },
+    PlaceClip {
+        track: TrackId,
+        clip: ClipId,
+        start_beats: f64,
+        length_beats: f64,
+    },
+    RemovePlacement {
+        track: TrackId,
+        index: usize,
+    },
+    SetPlacementRange {
+        track: TrackId,
+        index: usize,
+        start_beats: f64,
+        length_beats: f64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +314,13 @@ pub enum ProjectError {
     InvalidColor,
     InvalidTimeSignature,
     InvalidSampleRate,
+    MissingScene,
+    MissingClip,
+    OccupiedClipSlot,
+    InvalidClipLength,
+    InvalidNote,
+    MissingNote,
+    MissingPlacement,
 }
 
 /// Control-thread state. Snapshots and history must never be destroyed in a
@@ -159,6 +340,12 @@ impl Default for Project {
 
 impl Project {
     pub fn new() -> Self {
+        let scenes = (1..=8)
+            .map(|number| Scene {
+                id: SceneId(number),
+                name: format!("Scene {number}"),
+            })
+            .collect();
         Self {
             current: Arc::new(Snapshot {
                 tempo: 120.0,
@@ -166,10 +353,12 @@ impl Project {
                 numerator: 4,
                 denominator: 4,
                 sample_rate: 48000,
+                scenes,
+                clips: Vec::new(),
             }),
             undo: Vec::new(),
             redo: Vec::new(),
-            next_id: 1,
+            next_id: 9,
         }
     }
 
@@ -213,7 +402,9 @@ impl Project {
                         muted: false,
                         solo: false,
                         armed: false,
-                        color_index: ((id.0 - 1) % 16) as u8,
+                        color_index: (snapshot.tracks.len() % 16) as u8,
+                        session_slots: vec![None; snapshot.scenes.len()],
+                        arrangement: Vec::new(),
                     });
                 }
                 Command::DeleteTrack(id) => {
@@ -223,6 +414,7 @@ impl Project {
                         .position(|track| track.id == *id)
                         .ok_or(ProjectError::MissingTrack)?;
                     snapshot.tracks.remove(index);
+                    remove_unreferenced_clips(&mut snapshot);
                 }
                 Command::RenameTrack { id, name } => {
                     validate_name(name)?;
@@ -261,6 +453,160 @@ impl Project {
                 Command::SetSampleRate(rate) => {
                     validate_rate(*rate)?;
                     snapshot.sample_rate = *rate;
+                }
+                Command::CreateScene { name } => {
+                    validate_name(name)?;
+                    let id = SceneId(next_id);
+                    next_id = next_identifier(next_id)?;
+                    snapshot.scenes.push(Scene {
+                        id,
+                        name: name.clone(),
+                    });
+                    for track in &mut snapshot.tracks {
+                        track.session_slots.push(None);
+                    }
+                }
+                Command::DeleteScene(id) => {
+                    let index = scene_index(&snapshot, *id)?;
+                    snapshot.scenes.remove(index);
+                    for track in &mut snapshot.tracks {
+                        track.session_slots.remove(index);
+                    }
+                    remove_unreferenced_clips(&mut snapshot);
+                }
+                Command::RenameScene { id, name } => {
+                    validate_name(name)?;
+                    let index = scene_index(&snapshot, *id)?;
+                    snapshot.scenes[index].name = name.clone();
+                }
+                Command::CreateMidiClip {
+                    track,
+                    scene,
+                    name,
+                    length_beats,
+                } => {
+                    validate_name(name)?;
+                    validate_positive_beats(*length_beats)?;
+                    let scene = scene_index(&snapshot, *scene)?;
+                    let id = ClipId(next_id);
+                    next_id = next_identifier(next_id)?;
+                    let color_index = {
+                        let track = snapshot.track_mut(*track)?;
+                        if track.kind != TrackKind::Midi || track.session_slots[scene].is_some() {
+                            return Err(ProjectError::OccupiedClipSlot);
+                        }
+                        track.session_slots[scene] = Some(id);
+                        track.color_index
+                    };
+                    snapshot.clips.push(MidiClip {
+                        id,
+                        name: name.clone(),
+                        color_index,
+                        loop_start_beats: 0.0,
+                        loop_length_beats: *length_beats,
+                        notes: Vec::new(),
+                    });
+                }
+                Command::DeleteClip { track, scene } => {
+                    let scene = scene_index(&snapshot, *scene)?;
+                    let track = snapshot.track_mut(*track)?;
+                    if track.session_slots[scene].take().is_none() {
+                        return Err(ProjectError::MissingClip);
+                    }
+                    remove_unreferenced_clips(&mut snapshot);
+                }
+                Command::SetClipName { id, name } => {
+                    validate_name(name)?;
+                    clip_mut(&mut snapshot, *id)?.name = name.clone();
+                }
+                Command::SetClipColor { id, index } => {
+                    if *index >= 16 {
+                        return Err(ProjectError::InvalidColor);
+                    }
+                    clip_mut(&mut snapshot, *id)?.color_index = *index;
+                }
+                Command::SetClipLoop {
+                    id,
+                    start_beats,
+                    length_beats,
+                } => {
+                    validate_nonnegative_beats(*start_beats)?;
+                    validate_positive_beats(*length_beats)?;
+                    let clip = clip_mut(&mut snapshot, *id)?;
+                    clip.loop_start_beats = *start_beats;
+                    clip.loop_length_beats = *length_beats;
+                }
+                Command::AddNote { id, note } => {
+                    validate_note(*note)?;
+                    let clip = clip_mut(&mut snapshot, *id)?;
+                    clip.notes.push(*note);
+                    clip.notes.sort_by(|a, b| {
+                        a.start_beats
+                            .total_cmp(&b.start_beats)
+                            .then(a.pitch.cmp(&b.pitch))
+                    });
+                }
+                Command::RemoveNote { id, index } => {
+                    let clip = clip_mut(&mut snapshot, *id)?;
+                    if *index >= clip.notes.len() {
+                        return Err(ProjectError::MissingNote);
+                    }
+                    clip.notes.remove(*index);
+                }
+                Command::MoveNote { id, index, note } => {
+                    validate_note(*note)?;
+                    let clip = clip_mut(&mut snapshot, *id)?;
+                    if *index >= clip.notes.len() {
+                        return Err(ProjectError::MissingNote);
+                    }
+                    clip.notes[*index] = *note;
+                    clip.notes.sort_by(|a, b| {
+                        a.start_beats
+                            .total_cmp(&b.start_beats)
+                            .then(a.pitch.cmp(&b.pitch))
+                    });
+                }
+                Command::PlaceClip {
+                    track,
+                    clip,
+                    start_beats,
+                    length_beats,
+                } => {
+                    validate_nonnegative_beats(*start_beats)?;
+                    validate_positive_beats(*length_beats)?;
+                    clip_mut(&mut snapshot, *clip)?;
+                    snapshot
+                        .track_mut(*track)?
+                        .arrangement
+                        .push(ArrangementPlacement {
+                            clip: *clip,
+                            start_beats: *start_beats,
+                            length_beats: *length_beats,
+                        });
+                }
+                Command::RemovePlacement { track, index } => {
+                    let track = snapshot.track_mut(*track)?;
+                    if *index >= track.arrangement.len() {
+                        return Err(ProjectError::MissingPlacement);
+                    }
+                    track.arrangement.remove(*index);
+                    remove_unreferenced_clips(&mut snapshot);
+                }
+                Command::SetPlacementRange {
+                    track,
+                    index,
+                    start_beats,
+                    length_beats,
+                } => {
+                    validate_nonnegative_beats(*start_beats)?;
+                    validate_positive_beats(*length_beats)?;
+                    let track = snapshot.track_mut(*track)?;
+                    let placement = track
+                        .arrangement
+                        .get_mut(*index)
+                        .ok_or(ProjectError::MissingPlacement)?;
+                    placement.start_beats = *start_beats;
+                    placement.length_beats = *length_beats;
                 }
             }
         }
@@ -330,4 +676,62 @@ pub(crate) fn validate_rate(rate: u32) -> Result<(), ProjectError> {
     } else {
         Err(ProjectError::InvalidSampleRate)
     }
+}
+
+fn next_identifier(value: u64) -> Result<u64, ProjectError> {
+    value
+        .checked_add(1)
+        .ok_or(ProjectError::IdentifierExhausted)
+}
+
+fn scene_index(snapshot: &Snapshot, id: SceneId) -> Result<usize, ProjectError> {
+    snapshot
+        .scenes
+        .iter()
+        .position(|scene| scene.id == id)
+        .ok_or(ProjectError::MissingScene)
+}
+
+fn clip_mut(snapshot: &mut Snapshot, id: ClipId) -> Result<&mut MidiClip, ProjectError> {
+    snapshot
+        .clips
+        .iter_mut()
+        .find(|clip| clip.id == id)
+        .ok_or(ProjectError::MissingClip)
+}
+
+fn validate_nonnegative_beats(value: f64) -> Result<(), ProjectError> {
+    if value.is_finite() && value >= 0.0 {
+        Ok(())
+    } else {
+        Err(ProjectError::InvalidClipLength)
+    }
+}
+
+fn validate_positive_beats(value: f64) -> Result<(), ProjectError> {
+    if value.is_finite() && value > 0.0 {
+        Ok(())
+    } else {
+        Err(ProjectError::InvalidClipLength)
+    }
+}
+
+fn validate_note(note: MidiNote) -> Result<(), ProjectError> {
+    if note.pitch > 127 || note.velocity == 0 || note.velocity > 127 {
+        return Err(ProjectError::InvalidNote);
+    }
+    validate_nonnegative_beats(note.start_beats).map_err(|_| ProjectError::InvalidNote)?;
+    validate_positive_beats(note.length_beats).map_err(|_| ProjectError::InvalidNote)
+}
+
+fn remove_unreferenced_clips(snapshot: &mut Snapshot) {
+    snapshot.clips.retain(|clip| {
+        snapshot.tracks.iter().any(|track| {
+            track.session_slots.contains(&Some(clip.id))
+                || track
+                    .arrangement
+                    .iter()
+                    .any(|placement| placement.clip == clip.id)
+        })
+    });
 }

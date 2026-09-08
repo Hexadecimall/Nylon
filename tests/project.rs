@@ -1,4 +1,4 @@
-use nylon::project::{Command, Project, ProjectError, TrackKind};
+use nylon::project::{Command, MidiNote, Project, ProjectError, TrackKind};
 
 #[test]
 fn grouped_commands_undo_as_one_and_snapshots_stay_immutable() {
@@ -196,4 +196,98 @@ fn session_settings_validate_before_publishing() {
     assert!(project.undo());
     assert_eq!(project.snapshot().time_signature(), (4, 4));
     assert_eq!(project.snapshot().sample_rate(), 48000);
+}
+
+#[test]
+fn scenes_slots_notes_and_placements_share_one_undoable_model() {
+    let mut project = Project::new();
+    project
+        .apply(&[
+            Command::CreateTrack {
+                name: "Keys".into(),
+                kind: TrackKind::Midi,
+            },
+            Command::CreateScene {
+                name: "Verse".into(),
+            },
+        ])
+        .unwrap();
+    let snapshot = project.snapshot();
+    let track = snapshot.tracks()[0].id();
+    let scene = snapshot.scenes()[0].id();
+    project
+        .apply(&[Command::CreateMidiClip {
+            track,
+            scene,
+            name: "Chord".into(),
+            length_beats: 4.0,
+        }])
+        .unwrap();
+    let clip = project.snapshot().clip_at(0, 0).unwrap().id();
+    project
+        .apply(&[
+            Command::AddNote {
+                id: clip,
+                note: MidiNote {
+                    pitch: 64,
+                    velocity: 96,
+                    start_beats: 1.0,
+                    length_beats: 0.5,
+                },
+            },
+            Command::AddNote {
+                id: clip,
+                note: MidiNote {
+                    pitch: 60,
+                    velocity: 110,
+                    start_beats: 0.0,
+                    length_beats: 1.0,
+                },
+            },
+            Command::PlaceClip {
+                track,
+                clip,
+                start_beats: 8.0,
+                length_beats: 4.0,
+            },
+        ])
+        .unwrap();
+    let snapshot = project.snapshot();
+    let clip = snapshot.clip_at(0, 0).unwrap();
+    assert_eq!(clip.notes()[0].pitch, 60);
+    assert_eq!(clip.notes()[1].pitch, 64);
+    assert_eq!(snapshot.tracks()[0].arrangement()[0].start_beats(), 8.0);
+    assert!(project.undo());
+    assert!(project.snapshot().clip_at(0, 0).unwrap().notes().is_empty());
+    assert!(project.redo());
+    assert_eq!(project.snapshot().clip_at(0, 0).unwrap().notes().len(), 2);
+}
+
+#[test]
+fn invalid_clip_edits_leave_the_snapshot_unchanged() {
+    let mut project = Project::new();
+    project
+        .apply(&[
+            Command::CreateTrack {
+                name: "Keys".into(),
+                kind: TrackKind::Midi,
+            },
+            Command::CreateScene {
+                name: "Scene".into(),
+            },
+        ])
+        .unwrap();
+    let before = project.snapshot();
+    let track = before.tracks()[0].id();
+    let scene = before.scenes()[0].id();
+    assert_eq!(
+        project.apply(&[Command::CreateMidiClip {
+            track,
+            scene,
+            name: "Bad".into(),
+            length_beats: f64::NAN,
+        }]),
+        Err(ProjectError::InvalidClipLength)
+    );
+    assert_eq!(*project.snapshot(), *before);
 }

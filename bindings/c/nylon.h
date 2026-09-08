@@ -94,6 +94,62 @@ int nylon_track_set_arm(void* project, unsigned long long index, int enabled);
 int nylon_track_color_index(const void* project, unsigned long long index);
 int nylon_track_set_color_index(void* project, unsigned long long index, int color);
 
+/* Session scenes. Names use the same UTF-8 buffer convention as track names. */
+unsigned long long nylon_scene_count(const void* project);
+int nylon_scene_create(void* project, const char* utf8);
+int nylon_scene_delete(void* project, unsigned long long scene);
+unsigned long long nylon_scene_name(const void* project, unsigned long long scene, char* buffer,
+    unsigned long long capacity);
+int nylon_scene_set_name(void* project, unsigned long long scene, const char* utf8);
+
+/* Session clip slots are addressed by zero-based track and scene indices.
+ * State is 0 for empty or invalid and 1 for a MIDI clip. */
+int nylon_clip_slot_state(const void* project, unsigned long long track, unsigned long long scene);
+int nylon_clip_create_midi(
+    void* project, unsigned long long track, unsigned long long scene, double length_beats);
+int nylon_clip_delete(void* project, unsigned long long track, unsigned long long scene);
+unsigned long long nylon_clip_name(const void* project, unsigned long long track,
+    unsigned long long scene, char* buffer, unsigned long long capacity);
+int nylon_clip_set_name(
+    void* project, unsigned long long track, unsigned long long scene, const char* utf8);
+int nylon_clip_color_index(
+    const void* project, unsigned long long track, unsigned long long scene);
+int nylon_clip_set_color_index(
+    void* project, unsigned long long track, unsigned long long scene, int color);
+double nylon_clip_loop_start(
+    const void* project, unsigned long long track, unsigned long long scene);
+double nylon_clip_loop_length(
+    const void* project, unsigned long long track, unsigned long long scene);
+int nylon_clip_set_loop(void* project, unsigned long long track, unsigned long long scene,
+    double start_beats, double length_beats);
+
+/* MIDI notes use pitches 0..127, velocities 1..127, and finite beat values.
+ * note_at writes all four outputs only when it succeeds. */
+unsigned long long nylon_clip_note_count(
+    const void* project, unsigned long long track, unsigned long long scene);
+int nylon_clip_note_at(const void* project, unsigned long long track, unsigned long long scene,
+    unsigned long long index, unsigned char* pitch, unsigned char* velocity, double* start_beats,
+    double* length_beats);
+int nylon_clip_note_add(void* project, unsigned long long track, unsigned long long scene,
+    unsigned char pitch, unsigned char velocity, double start_beats, double length_beats);
+int nylon_clip_note_remove(void* project, unsigned long long track, unsigned long long scene,
+    unsigned long long index);
+int nylon_clip_note_move(void* project, unsigned long long track, unsigned long long scene,
+    unsigned long long index, unsigned char pitch, unsigned char velocity, double start_beats,
+    double length_beats);
+
+/* Arrangement placements reference a session clip and have an independent
+ * start and length. */
+unsigned long long nylon_arrangement_clip_count(const void* project, unsigned long long track);
+int nylon_arrangement_clip_add_from_slot(void* project, unsigned long long track,
+    unsigned long long scene, double start_beats, double length_beats);
+int nylon_arrangement_clip_range(const void* project, unsigned long long track,
+    unsigned long long index, double* start_beats, double* length_beats);
+int nylon_arrangement_clip_remove(
+    void* project, unsigned long long track, unsigned long long index);
+int nylon_arrangement_clip_set_range(void* project, unsigned long long track,
+    unsigned long long index, double start_beats, double length_beats);
+
 #ifdef __cplusplus
 }
 #endif

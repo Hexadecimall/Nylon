@@ -266,7 +266,25 @@ void MainWindow::buildWorkspace()
     connect(m_mixer, &MixerSection::trackSelected, this, &MainWindow::selectTrack);
     connect(m_session, &SessionView::slotClicked, this, [this](int track, int scene) {
         m_detail->showClipPage();
-        showStatus(tr("Slot %1 on %2 is empty.").arg(scene + 1).arg(trackName(track)));
+        if (m_bridge->clipSlotOccupied(static_cast<quint64>(track), static_cast<quint64>(scene))) {
+            showStatus(tr("Selected %1.").arg(m_bridge->clipName(static_cast<quint64>(track), static_cast<quint64>(scene))));
+        } else {
+            showStatus(tr("Empty slot. Double-click to create a MIDI clip."));
+        }
+    });
+    connect(m_session, &SessionView::slotCreateRequested, this, [this](int track, int scene) {
+        if (m_bridge->trackKind(static_cast<quint64>(track)) != ProjectBridge::TrackKind::Midi) {
+            showStatus(tr("MIDI clips require a MIDI track."));
+            return;
+        }
+        if (m_bridge->clipSlotOccupied(static_cast<quint64>(track), static_cast<quint64>(scene))) {
+            showStatus(tr("The slot already contains a clip."));
+            return;
+        }
+        if (m_bridge->createMidiClip(static_cast<quint64>(track), static_cast<quint64>(scene), 4.0)) {
+            m_detail->showClipPage();
+            showStatus(tr("Created MIDI clip."));
+        }
     });
     connect(m_browser, &BrowserPanel::fileActivated, this, [this](const QString& path) {
         showStatus(tr("Loading %1 is not available until the core imports media.").arg(path));

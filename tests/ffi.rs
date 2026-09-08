@@ -104,3 +104,58 @@ fn native_save_open_preserves_state_and_rejects_corrupt_documents() {
     }
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn native_session_notes_and_arrangement_are_editable() {
+    let handle = nylon_project_new();
+    // SAFETY: This thread owns the handle and every output buffer until release.
+    unsafe {
+        assert_eq!(nylon_project_add_track_kind(handle, 1), 1);
+        assert_eq!(nylon_scene_create(handle, c"Verse".as_ptr()), 1);
+        assert_eq!(nylon_scene_count(handle), 9);
+        assert_eq!(nylon_clip_slot_state(handle, 0, 0), 0);
+        assert_eq!(nylon_clip_create_midi(handle, 0, 0, 4.0), 1);
+        assert_eq!(nylon_clip_slot_state(handle, 0, 0), 1);
+        assert_eq!(nylon_clip_set_name(handle, 0, 0, c"Chords".as_ptr()), 1);
+        assert_eq!(nylon_clip_set_color_index(handle, 0, 0, 6), 1);
+        assert_eq!(nylon_clip_set_loop(handle, 0, 0, 1.0, 3.0), 1);
+        assert_eq!(nylon_clip_note_add(handle, 0, 0, 64, 100, 1.0, 0.5), 1);
+        assert_eq!(nylon_clip_note_add(handle, 0, 0, 60, 110, 0.0, 1.0), 1);
+        assert_eq!(nylon_clip_note_count(handle, 0, 0), 2);
+        let (mut pitch, mut velocity) = (0, 0);
+        let (mut start, mut length) = (0.0, 0.0);
+        assert_eq!(
+            nylon_clip_note_at(
+                handle,
+                0,
+                0,
+                0,
+                &mut pitch,
+                &mut velocity,
+                &mut start,
+                &mut length,
+            ),
+            1
+        );
+        assert_eq!((pitch, velocity, start, length), (60, 110, 0.0, 1.0));
+        assert_eq!(nylon_clip_note_move(handle, 0, 0, 0, 61, 90, 2.0, 0.25), 1);
+        assert_eq!(
+            nylon_arrangement_clip_add_from_slot(handle, 0, 0, 8.0, 4.0),
+            1
+        );
+        assert_eq!(nylon_arrangement_clip_count(handle, 0), 1);
+        assert_eq!(
+            nylon_arrangement_clip_range(handle, 0, 0, &mut start, &mut length),
+            1
+        );
+        assert_eq!((start, length), (8.0, 4.0));
+        assert_eq!(nylon_clip_note_add(handle, 0, 0, 128, 100, 0.0, 1.0), 0);
+        assert_eq!(nylon_clip_note_add(handle, 0, 0, 60, 0, 0.0, 1.0), 0);
+        assert_eq!(nylon_clip_create_midi(handle, 0, 0, 4.0), 0);
+        assert_eq!(nylon_project_undo(handle), 1);
+        assert_eq!(nylon_arrangement_clip_count(handle, 0), 0);
+        assert_eq!(nylon_project_redo(handle), 1);
+        assert_eq!(nylon_arrangement_clip_count(handle, 0), 1);
+        nylon_project_free(handle);
+    }
+}

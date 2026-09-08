@@ -100,4 +100,120 @@ bool Project::setTrackColorIndex(std::uint64_t index, int color)
     return nylon_track_set_color_index(m_handle, index, color) != 0;
 }
 
+std::uint64_t Project::sceneCount() const { return nylon_scene_count(m_handle); }
+bool Project::createScene(const std::string& name) { return nylon_scene_create(m_handle, name.c_str()) != 0; }
+bool Project::deleteScene(std::uint64_t scene) { return nylon_scene_delete(m_handle, scene) != 0; }
+std::string Project::sceneName(std::uint64_t scene) const
+{
+    char small[128];
+    const auto needed = nylon_scene_name(m_handle, scene, small, sizeof(small));
+    if (needed < sizeof(small)) return std::string(small);
+    std::string large(static_cast<std::size_t>(needed), '\0');
+    nylon_scene_name(m_handle, scene, large.data(), needed + 1);
+    return large;
+}
+bool Project::setSceneName(std::uint64_t scene, const std::string& name)
+{
+    return nylon_scene_set_name(m_handle, scene, name.c_str()) != 0;
+}
+
+bool Project::clipSlotOccupied(std::uint64_t track, std::uint64_t scene) const
+{
+    return nylon_clip_slot_state(m_handle, track, scene) != 0;
+}
+bool Project::createMidiClip(std::uint64_t track, std::uint64_t scene, double lengthBeats)
+{
+    return nylon_clip_create_midi(m_handle, track, scene, lengthBeats) != 0;
+}
+bool Project::deleteClip(std::uint64_t track, std::uint64_t scene)
+{
+    return nylon_clip_delete(m_handle, track, scene) != 0;
+}
+std::string Project::clipName(std::uint64_t track, std::uint64_t scene) const
+{
+    char small[128];
+    const auto needed = nylon_clip_name(m_handle, track, scene, small, sizeof(small));
+    if (needed < sizeof(small)) return std::string(small);
+    std::string large(static_cast<std::size_t>(needed), '\0');
+    nylon_clip_name(m_handle, track, scene, large.data(), needed + 1);
+    return large;
+}
+bool Project::setClipName(std::uint64_t track, std::uint64_t scene, const std::string& name)
+{
+    return nylon_clip_set_name(m_handle, track, scene, name.c_str()) != 0;
+}
+int Project::clipColorIndex(std::uint64_t track, std::uint64_t scene) const
+{
+    return nylon_clip_color_index(m_handle, track, scene);
+}
+bool Project::setClipColorIndex(std::uint64_t track, std::uint64_t scene, int color)
+{
+    return nylon_clip_set_color_index(m_handle, track, scene, color) != 0;
+}
+BeatRange Project::clipLoop(std::uint64_t track, std::uint64_t scene) const
+{
+    return {nylon_clip_loop_start(m_handle, track, scene), nylon_clip_loop_length(m_handle, track, scene)};
+}
+bool Project::setClipLoop(std::uint64_t track, std::uint64_t scene, BeatRange range)
+{
+    return nylon_clip_set_loop(m_handle, track, scene, range.startBeats, range.lengthBeats) != 0;
+}
+std::uint64_t Project::clipNoteCount(std::uint64_t track, std::uint64_t scene) const
+{
+    return nylon_clip_note_count(m_handle, track, scene);
+}
+bool Project::clipNote(std::uint64_t track, std::uint64_t scene, std::uint64_t index, MidiNote& note) const
+{
+    return nylon_clip_note_at(m_handle, track, scene, index, &note.pitch, &note.velocity,
+               &note.startBeats, &note.lengthBeats)
+        != 0;
+}
+bool Project::addClipNote(std::uint64_t track, std::uint64_t scene, MidiNote note)
+{
+    return nylon_clip_note_add(m_handle, track, scene, note.pitch, note.velocity, note.startBeats,
+               note.lengthBeats)
+        != 0;
+}
+bool Project::removeClipNote(std::uint64_t track, std::uint64_t scene, std::uint64_t index)
+{
+    return nylon_clip_note_remove(m_handle, track, scene, index) != 0;
+}
+bool Project::moveClipNote(
+    std::uint64_t track, std::uint64_t scene, std::uint64_t index, MidiNote note)
+{
+    return nylon_clip_note_move(m_handle, track, scene, index, note.pitch, note.velocity,
+               note.startBeats, note.lengthBeats)
+        != 0;
+}
+
+std::uint64_t Project::arrangementClipCount(std::uint64_t track) const
+{
+    return nylon_arrangement_clip_count(m_handle, track);
+}
+bool Project::addArrangementClipFromSlot(
+    std::uint64_t track, std::uint64_t scene, BeatRange range)
+{
+    return nylon_arrangement_clip_add_from_slot(
+               m_handle, track, scene, range.startBeats, range.lengthBeats)
+        != 0;
+}
+bool Project::arrangementClipRange(
+    std::uint64_t track, std::uint64_t index, BeatRange& range) const
+{
+    return nylon_arrangement_clip_range(
+               m_handle, track, index, &range.startBeats, &range.lengthBeats)
+        != 0;
+}
+bool Project::removeArrangementClip(std::uint64_t track, std::uint64_t index)
+{
+    return nylon_arrangement_clip_remove(m_handle, track, index) != 0;
+}
+bool Project::setArrangementClipRange(
+    std::uint64_t track, std::uint64_t index, BeatRange range)
+{
+    return nylon_arrangement_clip_set_range(
+               m_handle, track, index, range.startBeats, range.lengthBeats)
+        != 0;
+}
+
 } // namespace nylon

@@ -98,6 +98,40 @@ bool ProjectBridge::trackMuted(quint64 index) const { return m_project.trackMute
 bool ProjectBridge::trackSolo(quint64 index) const { return m_project.trackSolo(index); }
 bool ProjectBridge::trackArmed(quint64 index) const { return m_project.trackArmed(index); }
 int ProjectBridge::trackColorIndex(quint64 index) const { return m_project.trackColorIndex(index); }
+quint64 ProjectBridge::sceneCount() const { return m_project.sceneCount(); }
+QString ProjectBridge::sceneName(quint64 scene) const { return QString::fromStdString(m_project.sceneName(scene)); }
+bool ProjectBridge::clipSlotOccupied(quint64 track, quint64 scene) const
+{
+    return m_project.clipSlotOccupied(track, scene);
+}
+QString ProjectBridge::clipName(quint64 track, quint64 scene) const
+{
+    return QString::fromStdString(m_project.clipName(track, scene));
+}
+int ProjectBridge::clipColorIndex(quint64 track, quint64 scene) const
+{
+    return m_project.clipColorIndex(track, scene);
+}
+BeatRange ProjectBridge::clipLoop(quint64 track, quint64 scene) const
+{
+    return m_project.clipLoop(track, scene);
+}
+quint64 ProjectBridge::clipNoteCount(quint64 track, quint64 scene) const
+{
+    return m_project.clipNoteCount(track, scene);
+}
+bool ProjectBridge::clipNote(quint64 track, quint64 scene, quint64 index, MidiNote& note) const
+{
+    return m_project.clipNote(track, scene, index, note);
+}
+quint64 ProjectBridge::arrangementClipCount(quint64 track) const
+{
+    return m_project.arrangementClipCount(track);
+}
+bool ProjectBridge::arrangementClipRange(quint64 track, quint64 index, BeatRange& range) const
+{
+    return m_project.arrangementClipRange(track, index, range);
+}
 
 bool ProjectBridge::setTempo(double bpm) { return commit(this, [&] { return m_project.setTempo(bpm); }); }
 bool ProjectBridge::setTimeSignature(int numerator, int denominator)
@@ -129,6 +163,62 @@ bool ProjectBridge::setTrackArmed(quint64 index, bool armed)
 bool ProjectBridge::setTrackColorIndex(quint64 index, int color)
 {
     return commit(this, [&] { return m_project.setTrackColorIndex(index, color); });
+}
+bool ProjectBridge::createScene(const QString& name)
+{
+    return commit(this, [&] { return m_project.createScene(name.toStdString()); });
+}
+bool ProjectBridge::deleteScene(quint64 scene)
+{
+    return commit(this, [&] { return m_project.deleteScene(scene); });
+}
+bool ProjectBridge::setSceneName(quint64 scene, const QString& name)
+{
+    return commit(this, [&] { return m_project.setSceneName(scene, name.toStdString()); });
+}
+bool ProjectBridge::createMidiClip(quint64 track, quint64 scene, double lengthBeats)
+{
+    return commit(this, [&] { return m_project.createMidiClip(track, scene, lengthBeats); });
+}
+bool ProjectBridge::deleteClip(quint64 track, quint64 scene)
+{
+    return commit(this, [&] { return m_project.deleteClip(track, scene); });
+}
+bool ProjectBridge::setClipName(quint64 track, quint64 scene, const QString& name)
+{
+    return commit(this, [&] { return m_project.setClipName(track, scene, name.toStdString()); });
+}
+bool ProjectBridge::setClipColorIndex(quint64 track, quint64 scene, int color)
+{
+    return commit(this, [&] { return m_project.setClipColorIndex(track, scene, color); });
+}
+bool ProjectBridge::setClipLoop(quint64 track, quint64 scene, BeatRange range)
+{
+    return commit(this, [&] { return m_project.setClipLoop(track, scene, range); });
+}
+bool ProjectBridge::addClipNote(quint64 track, quint64 scene, MidiNote note)
+{
+    return commit(this, [&] { return m_project.addClipNote(track, scene, note); });
+}
+bool ProjectBridge::removeClipNote(quint64 track, quint64 scene, quint64 index)
+{
+    return commit(this, [&] { return m_project.removeClipNote(track, scene, index); });
+}
+bool ProjectBridge::moveClipNote(quint64 track, quint64 scene, quint64 index, MidiNote note)
+{
+    return commit(this, [&] { return m_project.moveClipNote(track, scene, index, note); });
+}
+bool ProjectBridge::addArrangementClipFromSlot(quint64 track, quint64 scene, BeatRange range)
+{
+    return commit(this, [&] { return m_project.addArrangementClipFromSlot(track, scene, range); });
+}
+bool ProjectBridge::removeArrangementClip(quint64 track, quint64 index)
+{
+    return commit(this, [&] { return m_project.removeArrangementClip(track, index); });
+}
+bool ProjectBridge::setArrangementClipRange(quint64 track, quint64 index, BeatRange range)
+{
+    return commit(this, [&] { return m_project.setArrangementClipRange(track, index, range); });
 }
 bool ProjectBridge::undo() { return commit(this, [this] { return m_project.undo(); }); }
 bool ProjectBridge::redo() { return commit(this, [this] { return m_project.redo(); }); }
