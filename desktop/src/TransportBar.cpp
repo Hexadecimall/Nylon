@@ -3,6 +3,7 @@
 #include "ProjectBridge.h"
 #include "Theme.h"
 #include "widgets/FlatButton.h"
+#include "widgets/LcdDisplay.h"
 #include "widgets/ValueBox.h"
 
 #include "PanelPaint.h"
@@ -23,7 +24,7 @@ TransportBar::TransportBar(ProjectBridge* bridge, const Theme* theme, QWidget* p
     , m_numerator(new ValueBox(theme, this))
     , m_denominator(new ValueBox(theme, this))
     , m_metronome(new FlatButton(theme, this))
-    , m_position(new QLabel(this))
+    , m_lcd(new LcdDisplay(theme, this))
     , m_play(new FlatButton(theme, this))
     , m_stop(new FlatButton(theme, this))
     , m_record(new FlatButton(theme, this))
@@ -61,10 +62,7 @@ TransportBar::TransportBar(ProjectBridge* bridge, const Theme* theme, QWidget* p
     m_metronome->setActiveColorKey(QStringLiteral("state.on"));
     m_metronome->setStatusTip(tr("Metronome."));
 
-    m_position->setText(QStringLiteral("1 . 1 . 1"));
-    m_position->setAlignment(Qt::AlignCenter);
-    m_position->setObjectName(QStringLiteral("positionDisplay"));
-    m_position->setStatusTip(tr("Arrangement position in bars, beats, and sixteenths."));
+    m_lcd->setStatusTip(tr("Position, tempo, time signature, and key."));
 
     m_play->setGlyph(FlatButton::Glyph::Play);
     m_play->setCheckable(true);
@@ -103,7 +101,7 @@ TransportBar::TransportBar(ProjectBridge* bridge, const Theme* theme, QWidget* p
     layout->addWidget(m_denominator);
     layout->addWidget(m_metronome);
     layout->addStretch(1);
-    layout->addWidget(m_position);
+    layout->addWidget(m_lcd);
     layout->addSpacing(6);
     layout->addWidget(m_play);
     layout->addWidget(m_stop);
@@ -151,6 +149,7 @@ void TransportBar::setTheme(const Theme* theme)
         b->setTheme(theme);
     }
     m_tempo->setTheme(theme);
+    m_lcd->setTheme(theme);
     m_numerator->setTheme(theme);
     m_denominator->setTheme(theme);
     const int h = theme->metricInt(QStringLiteral("transport.height"), 28);
@@ -165,7 +164,7 @@ void TransportBar::setTheme(const Theme* theme)
     m_tempo->setFixedWidth(theme->metricInt(QStringLiteral("transport.tempo.width"), 96));
     m_numerator->setFixedWidth(theme->metricInt(QStringLiteral("control.height"), 20) + 12);
     m_denominator->setFixedWidth(theme->metricInt(QStringLiteral("control.height"), 20) + 12);
-    m_position->setFixedWidth(theme->metricInt(QStringLiteral("transport.tempo.width"), 96));
+    m_lcd->setFixedWidth(theme->metricInt(QStringLiteral("lcd.width"), 300));
     update();
 }
 
@@ -183,7 +182,7 @@ void TransportBar::setTransportAvailable(bool available)
         b->setEnabled(available);
         b->setToolTip(available ? QString() : why);
     }
-    m_position->setEnabled(available);
+    m_lcd->setEnabled(available);
 }
 
 void TransportBar::showSessionActive(bool session)
@@ -200,6 +199,8 @@ void TransportBar::refresh()
     m_tempo->setValue(m_bridge->tempo());
     m_numerator->setValue(m_bridge->timeSignatureNumerator());
     m_denominator->setValue(m_bridge->timeSignatureDenominator());
+    m_lcd->setTempo(m_bridge->tempo());
+    m_lcd->setSignature(m_bridge->timeSignatureNumerator(), m_bridge->timeSignatureDenominator());
     const quint64 n = m_bridge->trackCount();
     m_trackCount->setText(n == 1 ? tr("1 track") : tr("%1 tracks").arg(n));
 }

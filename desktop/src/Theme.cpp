@@ -213,7 +213,8 @@ const QStringList& Theme::requiredColors()
         for (const char* extra : {"state.on", "state.solo", "state.arm", "state.play", "state.record",
                  "state.loop", "browser.background", "browser.selection", "browser.header",
                  "detail.background", "mixer.background", "fader.track", "fader.fill", "fader.handle",
-                 "knob.track", "knob.arc", "meter.background", "clip.empty.hover", "track.text", "window.border",
+                 "knob.track", "knob.arc", "meter.background", "clip.empty.hover", "track.text", "lcd.background",
+                 "lcd.text", "lcd.dim", "window.border",
                  "titlebar.background", "panel.border", "window.control.close", "window.control.minimize",
                  "window.control.zoom"}) {
             k.append(QString::fromLatin1(extra));
@@ -265,6 +266,7 @@ const QStringList& Theme::requiredMetrics()
         QStringLiteral("titlebar.height"),
         QStringLiteral("window.border"),
         QStringLiteral("window.control.size"),
+        QStringLiteral("lcd.width"),
     };
     return keys;
 }
@@ -374,7 +376,8 @@ QString Theme::styleSheet() const
         "QMenu::item:selected { background: %ACCENT; color: %ACCENTTEXT; }"
         "QMenu::item:disabled { color: %DISABLED; }"
         "QMenu::separator { height: %SEPpx; background: %SEPC; margin: %PADpx 0; }"
-        "QPushButton, QToolButton { background: %CTRLBG; color: %CTRLTEXT; border: %SEPpx solid %BORDER;"
+        "QPushButton, QToolButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %CTRLHI, stop:1 %CTRLBG);"
+        "  color: %CTRLTEXT; border: %SEPpx solid %BORDER;"
         "  border-radius: %RSMALLpx; padding: 0 %PAD2px; min-height: %CTRLHpx; max-height: %CTRLHpx; }"
         "QPushButton:hover, QToolButton:hover { background: %HOVER; }"
         "QPushButton:pressed, QToolButton:pressed, QToolButton:checked { background: %PRESSED; }"
@@ -437,6 +440,7 @@ QString Theme::styleSheet() const
         .replace(QLatin1String("%DISABLED"), c("text.disabled"))
         .replace(QLatin1String("%ACCENTTEXT"), c("accent.text"))
         .replace(QLatin1String("%ACCENT"), c("accent"))
+        .replace(QLatin1String("%CTRLHI"), color(QStringLiteral("control.background")).lighter(118).name(QColor::HexArgb))
         .replace(QLatin1String("%CTRLBG"), c("control.background"))
         .replace(QLatin1String("%CTRLTEXT"), c("control.text"))
         .replace(QLatin1String("%BORDER"), c("control.border"))

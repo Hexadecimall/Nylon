@@ -1,5 +1,6 @@
 #include "Knob.h"
 
+#include "PanelPaint.h"
 #include "Theme.h"
 
 #include <QPainter>
@@ -50,11 +51,16 @@ void Knob::paintEvent(QPaintEvent*)
     const double thickness = qMax(2.0, d / 9.0);
     const QRectF arcRect = ring.adjusted(thickness / 2, thickness / 2, -thickness / 2, -thickness / 2);
 
+    // Disc with a lit rim, then the value arc around it.
+    QPainterPath disc;
+    disc.addEllipse(arcRect.adjusted(thickness, thickness, -thickness, -thickness));
+    paint::control(p, *t, disc, t->color(QStringLiteral("control.background")));
     // Sweep runs 270 degrees from 225 (lower left) clockwise to -45.
     const int startAngle = 225 * 16;
     const int span = -270 * 16;
     QPen track(t->color(QStringLiteral("knob.track")), thickness, Qt::SolidLine, Qt::FlatCap);
     p.setPen(track);
+    p.setBrush(Qt::NoBrush);
     p.drawArc(arcRect, startAngle, span);
 
     const QColor arcColor = isEnabled() ? t->color(QStringLiteral("knob.arc"))

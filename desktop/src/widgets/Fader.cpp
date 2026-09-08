@@ -1,5 +1,6 @@
 #include "Fader.h"
 
+#include "PanelPaint.h"
 #include "Theme.h"
 
 #include <QMouseEvent>
@@ -126,7 +127,7 @@ void Fader::paintEvent(QPaintEvent*)
     const double tr = track.width() / 2.0;
     QPainterPath trackPath;
     trackPath.addRoundedRect(QRectF(track), tr, tr);
-    p.fillPath(trackPath, t->color(QStringLiteral("fader.track")));
+    paint::control(p, *t, trackPath, t->color(QStringLiteral("fader.track")), true);
 
     // Fill from the bottom up to the handle.
     const QRect handle = handleRect();
@@ -142,9 +143,9 @@ void Fader::paintEvent(QPaintEvent*)
     p.fillRect(QRect(track.x() - 2, unityY, track.width() + 4, 1), t->color(QStringLiteral("text.secondary")));
 
     QPainterPath handlePath;
-    handlePath.addRoundedRect(QRectF(handle), 3, 3);
-    p.fillPath(handlePath, isEnabled() ? t->color(QStringLiteral("fader.handle")) : t->color(QStringLiteral("text.disabled")));
-    p.fillRect(QRect(handle.x() + 2, handle.center().y(), handle.width() - 4, 1), t->color(QStringLiteral("background")));
+    handlePath.addRoundedRect(QRectF(handle).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
+    paint::control(p, *t, handlePath, isEnabled() ? t->color(QStringLiteral("fader.handle")) : t->color(QStringLiteral("text.disabled")));
+    p.fillRect(QRect(handle.x() + 3, handle.center().y(), handle.width() - 6, 1), t->color(QStringLiteral("fader.track")));
 
     if (m_showScale) {
         p.setPen(t->color(QStringLiteral("text.secondary")));

@@ -128,12 +128,13 @@ void ValueBox::paintEvent(QPaintEvent*)
     QPainter p(this);
     const Theme* t = theme();
     const int sep = qBound(0, t->metricInt(QStringLiteral("separator"), 1), 4);
-    p.setRenderHint(QPainter::Antialiasing, true);
     const QPainterPath shape = paint::rounded(*t, QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5));
-    p.fillPath(shape, t->color(QStringLiteral("control.background")));
-    p.setPen(QPen(hasFocus() ? t->color(QStringLiteral("accent")) : t->color(QStringLiteral("control.border")), sep));
-    p.setBrush(Qt::NoBrush);
-    p.drawPath(shape);
+    paint::control(p, *t, shape, t->color(QStringLiteral("control.background")).darker(115), true);
+    if (hasFocus()) {
+        p.setPen(QPen(t->color(QStringLiteral("accent")), sep));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(shape);
+    }
     p.setPen(isEnabled() ? t->color(QStringLiteral("control.text")) : t->color(QStringLiteral("control.disabled")));
     const int pad = t->metricInt(QStringLiteral("control.padding"), 4);
     const QString shown = m_editing ? m_buffer + QStringLiteral("_") : text();

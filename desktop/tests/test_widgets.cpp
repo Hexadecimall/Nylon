@@ -155,11 +155,18 @@ void TestWidgets::flatButtonPaintsActiveColor()
     b.setCheckable(true);
     b.setActiveColorKey(QStringLiteral("state.solo"));
     b.resize(40, 20);
+    // Controls are shaded top to bottom, so compare against the base color
+    // with a tolerance instead of an exact match.
+    auto near = [](const QColor& a, const QColor& b) {
+        return qAbs(a.red() - b.red()) <= 40 && qAbs(a.green() - b.green()) <= 40 && qAbs(a.blue() - b.blue()) <= 40;
+    };
     QImage off = b.grab().toImage();
-    QCOMPARE(off.pixelColor(3, 3), t.color(QStringLiteral("control.background")));
+    QVERIFY2(near(off.pixelColor(6, 10), t.color(QStringLiteral("control.background"))),
+        qPrintable(off.pixelColor(6, 10).name()));
     b.setChecked(true);
     QImage on = b.grab().toImage();
-    QCOMPARE(on.pixelColor(3, 3), t.color(QStringLiteral("state.solo")));
+    QVERIFY2(near(on.pixelColor(6, 10), t.color(QStringLiteral("state.solo"))), qPrintable(on.pixelColor(6, 10).name()));
+    QVERIFY(!near(on.pixelColor(6, 10), t.color(QStringLiteral("control.background"))));
     b.setGlyph(FlatButton::Glyph::Play);
     b.setText(QString());
     b.setSquare(24);

@@ -126,12 +126,9 @@ void FlatButton::paintEvent(QPaintEvent*)
     } else if (m_hover) {
         fill = m_theme->color(QStringLiteral("control.hover"));
     }
-    p.setRenderHint(QPainter::Antialiasing, true);
     const QPainterPath shape = paint::rounded(*m_theme, QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5));
-    p.fillPath(shape, fill);
-    p.setPen(QPen(m_theme->color(QStringLiteral("control.border")), sep));
-    p.setBrush(Qt::NoBrush);
-    p.drawPath(shape);
+    paint::control(p, *m_theme, shape, fill, isDown() || (isChecked() && !isEnabled()));
+    Q_UNUSED(sep);
 
     if (m_glyph != Glyph::None) {
         const int inset = qMax(3, r.height() / 4);

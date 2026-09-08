@@ -48,6 +48,8 @@ add_library(nylon_desktop STATIC
     src/widgets/FlatButton.h
     src/widgets/ValueBox.cpp
     src/widgets/ValueBox.h
+    src/widgets/LcdDisplay.cpp
+    src/widgets/LcdDisplay.h
     src/BrowserPanel.cpp
     src/BrowserPanel.h
     src/DetailPanel.cpp

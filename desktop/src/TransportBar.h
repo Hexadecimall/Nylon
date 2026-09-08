@@ -9,6 +9,7 @@ namespace nylon {
 
 class FlatButton;
 class Knob;
+class LcdDisplay;
 class ProjectBridge;
 class Theme;
 class ValueBox;
@@ -33,7 +34,7 @@ public:
     FlatButton* loopButton() const { return m_loop; }
     FlatButton* sessionButton() const { return m_session; }
     FlatButton* arrangementButton() const { return m_arrangement; }
-    QLabel* positionLabel() const { return m_position; }
+    LcdDisplay* lcd() const { return m_lcd; }
     ValueBox* numeratorBox() const { return m_numerator; }
     ValueBox* denominatorBox() const { return m_denominator; }
     bool isTransportAvailable() const { return m_transportAvailable; }
@@ -63,7 +64,7 @@ private:
     ValueBox* m_numerator;
     ValueBox* m_denominator;
     FlatButton* m_metronome;
-    QLabel* m_position;
+    LcdDisplay* m_lcd;
     FlatButton* m_play;
     FlatButton* m_stop;
     FlatButton* m_record;

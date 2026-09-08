@@ -76,6 +76,9 @@ active.
 | `meter.background` | Meter background |
 | `clip.empty.hover` | Hovered empty clip slot |
 | `track.text` | Text drawn on a track-colored title bar |
+| `lcd.background` | Inset display in the control bar |
+| `lcd.text` | Bright display text |
+| `lcd.dim` | Dim display labels |
 | `window.border` | Outline of the frameless window |
 | `titlebar.background` | Title bar band |
 | `panel.border` | Outline of rounded panels |
@@ -125,6 +128,7 @@ active.
 | `titlebar.height` | Height of the custom title bar |
 | `window.border` | Thickness of the window outline |
 | `window.control.size` | Diameter of the window controls |
+| `lcd.width` | Width of the control bar display |
 
 Metrics that reach the Qt style sheet are clamped before use: `separator`
 to 0–16, `control.padding` to 0–64, and `control.height` to 8–256. The views
