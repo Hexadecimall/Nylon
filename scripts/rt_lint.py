@@ -23,6 +23,7 @@ def sources():
     for path in sorted(pathlib.Path("src/dsp").glob("*.rs")):
         yield path
     yield pathlib.Path("src/dsp.rs")
+    yield pathlib.Path("src/mixer.rs")
 
 
 def strip_tests(source):

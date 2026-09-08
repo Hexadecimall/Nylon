@@ -103,6 +103,86 @@ fn processing_a_block_performs_no_allocator_operations() {
 }
 
 #[test]
+fn mixing_a_block_performs_no_allocator_operations() {
+    use nylon::mixer::{MASTER, MixEvent, Mixer, Parameter, TrackInput};
+
+    const TRACKS: usize = 32;
+    let mut mixer = Mixer::new(TRACKS, RATE);
+    let track_buffers: Vec<Vec<[f32; 2]>> = (0..TRACKS)
+        .map(|track| {
+            (0..BLOCK)
+                .map(|index| {
+                    let phase = (index + track) as f32 * 0.01;
+                    [phase.sin() * 0.2, phase.cos() * 0.2]
+                })
+                .collect()
+        })
+        .collect();
+    let inputs: Vec<TrackInput<'_>> = track_buffers
+        .iter()
+        .enumerate()
+        .map(|(track, samples)| TrackInput {
+            track: track as u16,
+            samples,
+        })
+        .collect();
+    let mut output = vec![[0.0_f32; 2]; BLOCK];
+    let events = [
+        MixEvent {
+            offset: 0,
+            track: 0,
+            parameter: Parameter::Volume,
+            value: -6.0,
+        },
+        MixEvent {
+            offset: 128,
+            track: 3,
+            parameter: Parameter::Pan,
+            value: -0.5,
+        },
+        MixEvent {
+            offset: 256,
+            track: 7,
+            parameter: Parameter::Solo,
+            value: 1.0,
+        },
+        MixEvent {
+            offset: 384,
+            track: MASTER,
+            parameter: Parameter::Volume,
+            value: -3.0,
+        },
+    ];
+    let mut levels = vec![nylon::mixer::Levels::default(); TRACKS + 1];
+
+    // One render before counting, so any lazy initialization is done.
+    mixer.render(&inputs, &mut output, &events).unwrap();
+
+    let operations = measure(|| {
+        for _ in 0..8 {
+            mixer.render(&inputs, &mut output, &events).unwrap();
+            mixer.copy_levels(&mut levels);
+        }
+        mixer.clear_clipping();
+        mixer.set_volume_db(1, -12.0);
+        mixer.set_pan(2, 0.75);
+        mixer.set_muted(4, true);
+        mixer.set_soloed(5, true);
+        mixer.reset();
+    });
+
+    assert_eq!(
+        operations, 0,
+        "{operations} allocator operations while mixing"
+    );
+    assert!(
+        output
+            .iter()
+            .all(|frame| frame[0].is_finite() && frame[1].is_finite())
+    );
+}
+
+#[test]
 fn envelope_and_oscillator_state_changes_do_not_allocate() {
     let mut oscillator = Oscillator::new(Shape::Sine, 440.0, RATE);
     let mut envelope = Envelope::new(Settings::default(), RATE);
