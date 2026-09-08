@@ -113,8 +113,8 @@ color.window.control.close = #D47A66
 color.window.control.minimize = #D2AD57
 color.window.control.zoom = #7ABE89
 
-metric.radius = 8
-metric.radius.small = 4
+metric.radius = 10
+metric.radius.small = 6
 metric.panel.gap = 6
 metric.panel.padding = 8
 metric.titlebar.height = 36

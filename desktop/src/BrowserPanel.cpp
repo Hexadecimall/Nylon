@@ -68,6 +68,9 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
     m_categories->setObjectName(QStringLiteral("browserCategories"));
     m_categories->setFrameShape(QFrame::NoFrame);
     m_categories->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_categories->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_categories->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_categories->setTextElideMode(Qt::ElideRight);
     m_categories->setStatusTip(tr("Library categories. Each one is a folder in the library."));
     for (const Category& c : kCategories) {
         m_categories->addItem(QString::fromLatin1(c.name));
@@ -254,7 +257,9 @@ void BrowserPanel::onCategoryChanged()
     }
     const QModelIndex source = m_model->setRootPath(folder);
     m_tree->setRootIndex(m_proxy->mapFromSource(source));
-    m_info->setText(QDir::toNativeSeparators(folder));
+    // Show the location relative to the library so the label never carries
+    // the user's home directory.
+    m_info->setText(QDir(libraryRoot()).dirName() + QLatin1Char('/') + folderForCategory(currentCategory()));
     updateEmptyState();
     // The model populates asynchronously; check again once it has had a
     // chance to list the folder.

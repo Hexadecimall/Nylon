@@ -137,7 +137,7 @@ content past that extent is not reachable by scrolling.
 
 | File | Character |
 | --- | --- |
-| `nylon.theme` | Default. Near-black slate base, neutral greys, single blue accent. |
+| `nylon.theme` | Default. Near-black slate base, neutral greys, single blue accent, 10 px panel radius. |
 | `slate.theme` | Mid-grey base for brighter rooms. |
 | `graphite.theme` | Darker than Nylon. |
 | `paper.theme` | Light base with dark text. Track colors are darkened for legibility. |
