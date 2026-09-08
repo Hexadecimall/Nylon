@@ -143,6 +143,13 @@ jobs:
           -DNYLON_WINDEPLOYQT_QTPATHS="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin/qtpaths.bat"
       - run: cmake --build target/desktop --config Release --parallel 2
       - run: ctest --test-dir target/desktop -C Release --output-on-failure --timeout 600
+      - name: Show Qt test logs
+        if: failure()
+        run: |
+          for f in target/desktop/Testing/qt-*.txt; do
+            echo "===== $f"
+            cat "$f"
+          done
       - name: Install portable layout
         run: cmake --install target/desktop --config Release --prefix target/package
       - name: Verify the installed application starts

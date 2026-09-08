@@ -273,7 +273,13 @@ enable_testing()
 foreach(_test layout theme bridge widgets views control commands pianoroll)
     add_executable(test_${_test} tests/test_${_test}.cpp)
     target_link_libraries(test_${_test} PRIVATE nylon_desktop Qt6::Test)
-    add_test(NAME ${_test} COMMAND test_${_test})
+    if(WIN32)
+        # Qt Test output does not reach the console on Windows runners, so
+        # each suite also writes a plain-text log the workflow prints.
+        add_test(NAME ${_test} COMMAND test_${_test} -o - -o "${CMAKE_CURRENT_BINARY_DIR}/Testing/qt-${_test}.txt,txt")
+    else()
+        add_test(NAME ${_test} COMMAND test_${_test})
+    endif()
     # Widgets need a display; the offscreen platform works on every CI host.
     set_tests_properties(${_test} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endforeach()
