@@ -24,6 +24,7 @@ def sources():
         yield path
     yield pathlib.Path("src/dsp.rs")
     yield pathlib.Path("src/mixer.rs")
+    yield pathlib.Path("src/transport.rs")
 
 
 def strip_tests(source):
