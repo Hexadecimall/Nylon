@@ -1,7 +1,13 @@
 #include "PreferencesDialog.h"
 
 #include "BrowserPanel.h"
+#include "Shortcuts.h"
 #include "ThemeManager.h"
+
+#include <QAction>
+#include <QHeaderView>
+#include <QKeySequenceEdit>
+#include <QTableWidget>
 
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -16,11 +22,14 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace nylon {
 
-PreferencesDialog::PreferencesDialog(ThemeManager* themes, QWidget* parent)
+PreferencesDialog::PreferencesDialog(ThemeManager* themes, const QList<QAction*>& actions, QWidget* parent)
     : QDialog(parent)
     , m_themes(themes)
+    , m_actions(actions)
     , m_sections(new QListWidget(this))
     , m_pages(new QStackedWidget(this))
     , m_theme(new QComboBox(this))
@@ -33,7 +42,7 @@ PreferencesDialog::PreferencesDialog(ThemeManager* themes, QWidget* parent)
 
     m_sections->setFrameShape(QFrame::NoFrame);
     m_sections->setFixedWidth(140);
-    m_sections->addItems({tr("Look & Feel"), tr("Library"), tr("Audio")});
+    m_sections->addItems({tr("Look & Feel"), tr("Library"), tr("Shortcuts"), tr("Audio")});
 
     // Look & Feel
     auto* look = new QWidget(this);
@@ -72,8 +81,33 @@ PreferencesDialog::PreferencesDialog(ThemeManager* themes, QWidget* parent)
     m_audioStatus->setWordWrap(true);
     audioForm->addRow(m_audioStatus);
 
+    // Shortcuts
+    auto* shortcuts = new QWidget(this);
+    auto* shortcutsLayout = new QVBoxLayout(shortcuts);
+    m_shortcuts = new QTableWidget(0, 2, shortcuts);
+    m_shortcuts->setObjectName(QStringLiteral("shortcutTable"));
+    m_shortcuts->setHorizontalHeaderLabels({tr("Command"), tr("Shortcut")});
+    m_shortcuts->horizontalHeader()->setStretchLastSection(true);
+    m_shortcuts->verticalHeader()->hide();
+    m_shortcuts->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_shortcuts->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_shortcutNote = new QLabel(tr("Click a shortcut to change it. Keys already in use are refused."), shortcuts);
+    m_shortcutNote->setObjectName(QStringLiteral("secondary"));
+    m_shortcutNote->setWordWrap(true);
+    auto* resetShortcuts = new QPushButton(tr("Restore Defaults"), shortcuts);
+    resetShortcuts->setObjectName(QStringLiteral("resetShortcuts"));
+    shortcutsLayout->addWidget(m_shortcuts, 1);
+    shortcutsLayout->addWidget(m_shortcutNote);
+    shortcutsLayout->addWidget(resetShortcuts, 0, Qt::AlignLeft);
+    connect(resetShortcuts, &QPushButton::clicked, this, [this] {
+        Shortcuts::resetAll(m_actions);
+        buildShortcutRows();
+    });
+    buildShortcutRows();
+
     m_pages->addWidget(look);
     m_pages->addWidget(library);
+    m_pages->addWidget(shortcuts);
     m_pages->addWidget(audio);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
@@ -104,6 +138,64 @@ PreferencesDialog::PreferencesDialog(ThemeManager* themes, QWidget* parent)
         }
     });
     m_sections->setCurrentRow(0);
+}
+
+void PreferencesDialog::buildShortcutRows()
+{
+    m_shortcuts->setRowCount(0);
+    std::sort(m_actions.begin(), m_actions.end(), [](QAction* a, QAction* b) {
+        return a->text().localeAwareCompare(b->text()) < 0;
+    });
+    for (QAction* a : m_actions) {
+        const int row = m_shortcuts->rowCount();
+        m_shortcuts->insertRow(row);
+        QString text = a->text();
+        text.remove(QLatin1Char('&'));
+        auto* name = new QTableWidgetItem(text);
+        name->setData(Qt::UserRole, a->objectName());
+        m_shortcuts->setItem(row, 0, name);
+        auto* edit = new QKeySequenceEdit(a->shortcut(), m_shortcuts);
+        edit->setClearButtonEnabled(true);
+        edit->setMaximumSequenceLength(1);
+        m_shortcuts->setCellWidget(row, 1, edit);
+        connect(edit, &QKeySequenceEdit::editingFinished, this, [this, row, edit] {
+            if (!assignShortcut(row, edit->keySequence())) {
+                const QString name = m_shortcuts->item(row, 0)->data(Qt::UserRole).toString();
+                for (QAction* a : m_actions) {
+                    if (a->objectName() == name) {
+                        edit->setKeySequence(a->shortcut());
+                    }
+                }
+            }
+        });
+    }
+    m_shortcuts->resizeColumnToContents(0);
+}
+
+bool PreferencesDialog::assignShortcut(int row, const QKeySequence& sequence)
+{
+    if (row < 0 || row >= m_shortcuts->rowCount()) {
+        return false;
+    }
+    const QString name = m_shortcuts->item(row, 0)->data(Qt::UserRole).toString();
+    QAction* target = nullptr;
+    for (QAction* a : m_actions) {
+        if (a->objectName() == name) {
+            target = a;
+        }
+    }
+    if (!target) {
+        return false;
+    }
+    if (QAction* other = Shortcuts::conflict(m_actions, sequence, target)) {
+        QString otherText = other->text();
+        otherText.remove(QLatin1Char('&'));
+        m_shortcutNote->setText(tr("%1 is already used by %2.").arg(sequence.toString(QKeySequence::NativeText), otherText));
+        return false;
+    }
+    Shortcuts::setOverride(target, sequence);
+    m_shortcutNote->setText(tr("Click a shortcut to change it. Keys already in use are refused."));
+    return true;
 }
 
 void PreferencesDialog::chooseLibraryFolder()

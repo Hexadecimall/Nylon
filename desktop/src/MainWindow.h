@@ -42,6 +42,8 @@ public:
     bool isStartScreenVisible() const;
     bool isSessionVisible() const;
     QAction* action(const QString& objectName) const;
+    // Every named action, for the command palette and shortcut editor.
+    QList<QAction*> namedActions() const;
 
 public slots:
     void showStartScreen();
@@ -51,6 +53,7 @@ public slots:
     void toggleView();
     void selectTrack(int index);
     void showPreferences();
+    void showCommandPalette();
     void renameSelectedTrack();
     void deleteSelectedTrack();
     void toggleMaximized();

@@ -2,6 +2,8 @@
 
 #include "ArrangementView.h"
 #include "BrowserPanel.h"
+#include "CommandPalette.h"
+#include "Shortcuts.h"
 #include "DetailPanel.h"
 #include "MixerSection.h"
 #include "PreferencesDialog.h"
@@ -86,6 +88,7 @@ MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* par
     });
 
     buildMenus();
+    Shortcuts::apply(namedActions());
     applyTheme(m_themes->theme());
     restoreLayout();
     m_workspaceSize = QSize(qMax(width(), 1280), qMax(height(), 800));
@@ -512,11 +515,31 @@ void MainWindow::selectTrack(int index)
     updateEditActions();
 }
 
+QList<QAction*> MainWindow::namedActions() const
+{
+    QList<QAction*> out;
+    for (QAction* a : findChildren<QAction*>()) {
+        if (!a->objectName().isEmpty() && !a->isSeparator() && !a->text().isEmpty()) {
+            out.append(a);
+        }
+    }
+    return out;
+}
+
 void MainWindow::showPreferences()
 {
-    PreferencesDialog dialog(m_themes, this);
+    PreferencesDialog dialog(m_themes, namedActions(), this);
     connect(&dialog, &PreferencesDialog::libraryRootChanged, m_browser, &BrowserPanel::reload);
     dialog.exec();
+}
+
+void MainWindow::showCommandPalette()
+{
+    auto* palette = new CommandPalette(namedActions(), &m_themes->theme(), this);
+    palette->setAttribute(Qt::WA_DeleteOnClose);
+    const QPoint anchor = mapToGlobal(QPoint((width() - palette->width()) / 2, m_titleBar->height() + 8));
+    palette->move(anchor);
+    palette->show();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
@@ -692,6 +715,12 @@ void MainWindow::buildMenus()
         ProjectBridge::isTransportAvailable(), noTransport);
     add(transport, QStringLiteral("actionMetronome"), tr("&Metronome"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K), nullptr,
         ProjectBridge::isTransportAvailable(), noTransport);
+
+    view->addSeparator();
+    QAction* paletteAction = add(view, QStringLiteral("actionCommandPalette"), tr("&Command Palette..."),
+        QKeySequence(Qt::CTRL | Qt::Key_K), [this] { showCommandPalette(); });
+    paletteAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_K), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P)});
+    paletteAction->setStatusTip(tr("Search every command by name."));
 
     QMenu* help = roundMenu(bar->addMenu(tr("&Help")));
     add(help, QStringLiteral("actionLibraryFolder"), tr("Show &Library Folder"), QKeySequence(), [this] {

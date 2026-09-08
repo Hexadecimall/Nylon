@@ -62,6 +62,10 @@ add_library(nylon_desktop STATIC
     src/TitleBar.h
     src/PreferencesDialog.cpp
     src/PreferencesDialog.h
+    src/CommandPalette.cpp
+    src/CommandPalette.h
+    src/Shortcuts.cpp
+    src/Shortcuts.h
     src/Theme.cpp
     src/Theme.h
     src/ThemeManager.cpp
@@ -262,7 +266,7 @@ else()
 endif()
 
 enable_testing()
-foreach(_test layout theme bridge widgets views control)
+foreach(_test layout theme bridge widgets views control commands)
     add_executable(test_${_test} tests/test_${_test}.cpp)
     target_link_libraries(test_${_test} PRIVATE nylon_desktop Qt6::Test)
     add_test(NAME ${_test} COMMAND test_${_test})
