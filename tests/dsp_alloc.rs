@@ -94,7 +94,10 @@ fn processing_a_block_performs_no_allocator_operations() {
         let _ = db::from_linear(0.5);
     });
 
-    assert_eq!(operations, 0, "{operations} allocator operations during processing");
+    assert_eq!(
+        operations, 0,
+        "{operations} allocator operations during processing"
+    );
     assert!(block.iter().all(|sample| sample.is_finite()));
     assert!(meter.peak() > 0.0);
 }
@@ -106,7 +109,11 @@ fn envelope_and_oscillator_state_changes_do_not_allocate() {
     let operations = measure(|| {
         for index in 0..1_000 {
             oscillator.set_frequency(440.0 + index as f32);
-            oscillator.set_shape(if index % 2 == 0 { Shape::Square } else { Shape::Triangle });
+            oscillator.set_shape(if index % 2 == 0 {
+                Shape::Square
+            } else {
+                Shape::Triangle
+            });
             oscillator.process();
             if index % 100 == 0 {
                 envelope.note_on();
