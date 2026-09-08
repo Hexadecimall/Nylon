@@ -285,10 +285,12 @@ foreach(_test layout theme bridge widgets views control commands pianoroll)
 endforeach()
 
 add_executable(nylon_control ../cli/main.cpp)
-target_link_libraries(nylon_control PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(nylon_control PRIVATE Qt6::Core Qt6::Network nyloncpp)
 set_target_properties(nylon_control PROPERTIES OUTPUT_NAME "nylon-control")
 install(TARGETS nylon_control RUNTIME DESTINATION "${NYLON_BIN}")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME control_process COMMAND "${Python3_EXECUTABLE}"
     "${NYLON_REPO_ROOT}/scripts/test_control_process.py"
     "$<TARGET_FILE:nylon>" "$<TARGET_FILE:nylon_control>")
+add_test(NAME cli_project COMMAND "${Python3_EXECUTABLE}"
+    "${NYLON_REPO_ROOT}/scripts/test_cli_project.py" "$<TARGET_FILE:nylon_control>")

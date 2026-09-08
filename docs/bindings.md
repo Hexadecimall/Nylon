@@ -60,6 +60,25 @@ carries the core library and the C header directory.
 `bindings/cmake/NylonCore.cmake` defines the imported `nylon_core` target;
 `NYLON_CORE_LIBRARY` selects a static or shared core.
 
+## Command line
+
+`nylon-control --endpoint NAME COMMAND` sends transport, edit, view, and
+window commands to a running desktop process. Without an endpoint, it can
+operate directly on the library:
+
+```text
+nylon-control --project Session.nylon new
+nylon-control --project Session.nylon info
+nylon-control --project Session.nylon add-track midi Lead
+nylon-control --project Session.nylon tracks
+nylon-control --project Session.nylon set-tempo 128
+nylon-control --project Session.nylon bounce mix.wav 0 64 48000
+nylon-control devices
+```
+
+Every reply is one JSON object. Direct edit commands save the bundle only
+after the core accepts the change.
+
 ## Rust
 
 The crate itself is the Rust binding: `nylon::project::Project` and the
