@@ -21,6 +21,22 @@ ThemeManager::ThemeManager(QObject* parent)
 {
     initThemeResources();
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, &ThemeManager::onFileChanged);
+    m_poll.setInterval(500);
+    connect(&m_poll, &QTimer::timeout, this, &ThemeManager::pollOverride);
+}
+
+void ThemeManager::pollOverride()
+{
+    if (m_path.isEmpty() || !m_fromUser) {
+        return;
+    }
+    const QFileInfo info(m_path);
+    if (!info.exists()) {
+        return;
+    }
+    if (info.lastModified() != m_lastModified || info.size() != m_lastSize) {
+        onFileChanged(m_path);
+    }
 }
 
 QStringList ThemeManager::builtinNames()
@@ -87,6 +103,14 @@ bool ThemeManager::loadFrom(const QString& name, const QString& path, bool fromU
     m_fromUser = fromUser;
     m_errors.clear();
     watch(fromUser ? path : QString());
+    const QFileInfo info(path);
+    m_lastModified = info.lastModified();
+    m_lastSize = info.size();
+    if (fromUser) {
+        m_poll.start();
+    } else {
+        m_poll.stop();
+    }
     // Install the font before listeners build widgets so nothing is laid
     // out with the platform placeholder font.
     if (qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
@@ -112,6 +136,11 @@ void ThemeManager::onFileChanged(const QString& path)
     // Editors commonly replace the file rather than write in place, which
     // drops the watch. Re-arm after a short delay so the new inode is seen
     // and a half-written file is not parsed.
+    // Record the state seen so a rewrite in progress is picked up on the
+    // next poll rather than parsed half-written.
+    const QFileInfo info(path);
+    m_lastModified = info.lastModified();
+    m_lastSize = info.size();
     QTimer::singleShot(100, this, [this, path] {
         if (QFileInfo::exists(path)) {
             loadFrom(m_name, path, true);

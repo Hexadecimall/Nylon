@@ -2,9 +2,11 @@
 
 #include "Theme.h"
 
+#include <QDateTime>
 #include <QFileSystemWatcher>
 #include <QObject>
 #include <QStringList>
+#include <QTimer>
 
 namespace nylon {
 
@@ -50,6 +52,12 @@ private:
     bool m_fromUser = false;
     QStringList m_errors;
     QFileSystemWatcher m_watcher;
+    // Watcher notifications are not delivered uniformly on every platform,
+    // so an active override is also polled for size and time changes.
+    QTimer m_poll;
+    QDateTime m_lastModified;
+    qint64 m_lastSize = -1;
+    void pollOverride();
 };
 
 } // namespace nylon
