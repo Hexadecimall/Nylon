@@ -13,6 +13,7 @@
 #include "ThemeManager.h"
 #include "TitleBar.h"
 #include "TransportBar.h"
+#include "widgets/FlatButton.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -21,14 +22,17 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
+#include <QHBoxLayout>
 #include <QStandardPaths>
 #include <QKeySequence>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -235,11 +239,42 @@ void MainWindow::buildWorkspace()
     m_views->addWidget(m_session);
     m_views->addWidget(m_arrangement);
 
+    m_lowerViews = new QStackedWidget(m_workspace);
+    m_lowerViews->addWidget(m_mixer);
+    m_lowerViews->addWidget(m_detail);
+    m_lowerViews->setCurrentWidget(m_mixer);
+
+    m_lowerDock = new QWidget(m_workspace);
+    m_lowerDock->setObjectName(QStringLiteral("lowerDock"));
+    auto* lowerHeader = new QWidget(m_lowerDock);
+    lowerHeader->setObjectName(QStringLiteral("lowerDockHeader"));
+    m_mixerTab = new FlatButton(theme, lowerHeader);
+    m_mixerTab->setText(tr("Mixer"));
+    m_mixerTab->setCheckable(true);
+    m_mixerTab->setChecked(true);
+    m_detailTab = new FlatButton(theme, lowerHeader);
+    m_detailTab->setText(tr("Editor"));
+    m_detailTab->setCheckable(true);
+    m_lowerClose = new FlatButton(theme, lowerHeader);
+    m_lowerClose->setText(tr("Hide"));
+    auto* lowerHeaderLayout = new QHBoxLayout(lowerHeader);
+    lowerHeaderLayout->setContentsMargins(4, 3, 4, 3);
+    lowerHeaderLayout->setSpacing(3);
+    lowerHeaderLayout->addWidget(m_mixerTab);
+    lowerHeaderLayout->addWidget(m_detailTab);
+    lowerHeaderLayout->addStretch(1);
+    lowerHeaderLayout->addWidget(m_lowerClose);
+    auto* lowerLayout = new QVBoxLayout(m_lowerDock);
+    lowerLayout->setContentsMargins(0, 0, 0, 0);
+    lowerLayout->setSpacing(0);
+    lowerLayout->addWidget(lowerHeader);
+    lowerLayout->addWidget(m_lowerViews, 1);
+
     m_vertical = new QSplitter(Qt::Vertical, m_workspace);
     m_vertical->setObjectName(QStringLiteral("verticalSplit"));
-    m_vertical->setChildrenCollapsible(false);
+    m_vertical->setChildrenCollapsible(true);
     m_vertical->addWidget(m_views);
-    m_vertical->addWidget(m_mixer);
+    m_vertical->addWidget(m_lowerDock);
     m_vertical->setStretchFactor(0, 1);
     m_vertical->setStretchFactor(1, 0);
 
@@ -248,24 +283,66 @@ void MainWindow::buildWorkspace()
     m_horizontal->setChildrenCollapsible(false);
     m_horizontal->addWidget(m_browser);
     m_horizontal->addWidget(m_vertical);
-    m_horizontal->addWidget(m_detail);
     m_horizontal->setStretchFactor(0, 0);
     m_horizontal->setStretchFactor(1, 1);
-    m_horizontal->setStretchFactor(2, 0);
 
     auto* layout = new QVBoxLayout(m_workspace);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     layout->addWidget(m_transport);
     layout->addWidget(m_horizontal, 1);
+    auto* viewBar = new QWidget(m_workspace);
+    viewBar->setObjectName(QStringLiteral("viewBar"));
+    m_browserToggle = new FlatButton(theme, viewBar);
+    m_browserToggle->setText(tr("Browser"));
+    m_browserToggle->setCheckable(true);
+    m_browserToggle->setChecked(true);
+    m_mixerToggle = new FlatButton(theme, viewBar);
+    m_mixerToggle->setText(tr("Mixer"));
+    m_mixerToggle->setCheckable(true);
+    m_editorToggle = new FlatButton(theme, viewBar);
+    m_editorToggle->setText(tr("Editor"));
+    m_editorToggle->setCheckable(true);
+    auto* viewBarLayout = new QHBoxLayout(viewBar);
+    viewBarLayout->setContentsMargins(4, 2, 4, 2);
+    viewBarLayout->setSpacing(3);
+    auto* ready = new QLabel(tr("Ready"), viewBar);
+    ready->setObjectName(QStringLiteral("secondary"));
+    viewBarLayout->addWidget(ready);
+    viewBarLayout->addStretch(1);
+    viewBarLayout->addWidget(m_browserToggle);
+    viewBarLayout->addWidget(m_editorToggle);
+    viewBarLayout->addWidget(m_mixerToggle);
+    layout->addWidget(viewBar);
+    m_lowerDock->hide();
+
+    connect(m_browserToggle, &FlatButton::clicked, this, [this] {
+        if (QAction* item = action(QStringLiteral("actionToggleBrowser"))) item->toggle();
+    });
+    connect(m_mixerToggle, &FlatButton::clicked, this, [this] {
+        if (QAction* item = action(QStringLiteral("actionToggleMixer"))) item->toggle();
+    });
+    connect(m_editorToggle, &FlatButton::clicked, this, [this] {
+        if (QAction* item = action(QStringLiteral("actionToggleDetail"))) item->toggle();
+    });
 
     connect(m_transport, &TransportBar::message, this, &MainWindow::showStatus);
     connect(m_transport, &TransportBar::sessionRequested, this, &MainWindow::showSession);
     connect(m_transport, &TransportBar::arrangementRequested, this, &MainWindow::showArrangement);
+    connect(m_mixerTab, &FlatButton::clicked, this, [this] { showLowerWidget(m_mixer); });
+    connect(m_detailTab, &FlatButton::clicked, this, [this] { showLowerWidget(m_detail); });
+    connect(m_lowerClose, &FlatButton::clicked, this, [this] {
+        m_lowerDock->hide();
+        if (QAction* action = this->action(QStringLiteral("actionToggleMixer"))) action->setChecked(false);
+        if (QAction* action = this->action(QStringLiteral("actionToggleDetail"))) action->setChecked(false);
+    });
     connect(m_session, &SessionView::trackSelected, this, &MainWindow::selectTrack);
+    connect(m_arrangement, &ArrangementView::trackSelected, this, &MainWindow::selectTrack);
     connect(m_mixer, &MixerSection::trackSelected, this, &MainWindow::selectTrack);
     connect(m_session, &SessionView::slotClicked, this, [this](int track, int scene) {
+        m_detail->setSelectedClip(track, scene);
         m_detail->showClipPage();
+        showLowerWidget(m_detail);
         if (m_bridge->clipSlotOccupied(static_cast<quint64>(track), static_cast<quint64>(scene))) {
             showStatus(tr("Selected %1.").arg(m_bridge->clipName(static_cast<quint64>(track), static_cast<quint64>(scene))));
         } else {
@@ -282,7 +359,9 @@ void MainWindow::buildWorkspace()
             return;
         }
         if (m_bridge->createMidiClip(static_cast<quint64>(track), static_cast<quint64>(scene), 4.0)) {
+            m_detail->setSelectedClip(track, scene);
             m_detail->showClipPage();
+            showLowerWidget(m_detail);
             showStatus(tr("Created MIDI clip."));
         }
     });
@@ -292,12 +371,50 @@ void MainWindow::buildWorkspace()
     connect(m_bridge, &ProjectBridge::changed, this, [this] {
         if (m_detail->selectedTrack() >= 0) {
             const int index = qMin<int>(m_detail->selectedTrack(), static_cast<int>(m_bridge->trackCount()) - 1);
+            const int clipTrack = m_detail->selectedClipTrack();
+            const int clipScene = m_detail->selectedClipScene();
             m_detail->setSelectedTrack(index, trackName(index));
-            m_session->selectTrack(index);
-            m_mixer->selectTrack(index);
+            {
+                const QSignalBlocker sessionBlock(m_session);
+                const QSignalBlocker arrangementBlock(m_arrangement);
+                const QSignalBlocker mixerBlock(m_mixer);
+                m_session->selectTrack(index);
+                m_arrangement->selectTrack(index);
+                m_mixer->selectTrack(index);
+            }
+            if (clipTrack >= 0 && clipScene >= 0
+                && m_bridge->clipSlotOccupied(static_cast<quint64>(clipTrack), static_cast<quint64>(clipScene))) {
+                m_detail->setSelectedClip(clipTrack, clipScene);
+            } else {
+                m_detail->setSelectedClip(index, -1);
+            }
         }
         updateEditActions();
     });
+}
+
+void MainWindow::showLowerWidget(QWidget* widget)
+{
+    m_lowerViews->setCurrentWidget(widget);
+    m_lowerDock->show();
+    m_mixerTab->setChecked(widget == m_mixer);
+    m_detailTab->setChecked(widget == m_detail);
+    const int height = m_themes->theme().metricInt(
+        widget == m_mixer ? QStringLiteral("mixer.height") : QStringLiteral("detail.height"), 210);
+    m_vertical->setSizes({qMax(300, m_vertical->height() - height), height});
+    if (QAction* action = this->action(QStringLiteral("actionToggleMixer"))) {
+        const QSignalBlocker block(action);
+        action->setChecked(widget == m_mixer);
+    }
+    if (QAction* action = this->action(QStringLiteral("actionToggleDetail"))) {
+        const QSignalBlocker block(action);
+        action->setChecked(widget == m_detail);
+    }
+}
+
+void MainWindow::hideLowerWidget(QWidget* widget)
+{
+    if (m_lowerViews->currentWidget() == widget) m_lowerDock->hide();
 }
 
 QString MainWindow::trackName(int index) const
@@ -356,6 +473,11 @@ void MainWindow::updateEditActions()
 bool MainWindow::isStartScreenVisible() const
 {
     return m_root->currentWidget() == m_start;
+}
+
+bool MainWindow::isLowerDockVisible() const
+{
+    return m_lowerDock->isVisibleTo(m_workspace);
 }
 
 bool MainWindow::isSessionVisible() const
@@ -528,8 +650,10 @@ void MainWindow::selectTrack(int index)
         index = static_cast<int>(m_bridge->trackCount()) - 1;
     }
     m_session->selectTrack(index);
+    m_arrangement->selectTrack(index);
     m_mixer->selectTrack(index);
     m_detail->setSelectedTrack(index, index >= 0 ? trackName(index) : QString());
+    m_detail->setSelectedClip(index, -1);
     updateEditActions();
 }
 
@@ -672,16 +796,25 @@ void MainWindow::buildMenus()
     browserAction->setCheckable(true);
     browserAction->setChecked(true);
     connect(browserAction, &QAction::toggled, m_browser, &QWidget::setVisible);
+    connect(browserAction, &QAction::toggled, m_browserToggle, &FlatButton::setChecked);
     QAction* detailAction = add(view, QStringLiteral("actionToggleDetail"), tr("&Detail View"),
         QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_L), nullptr);
     detailAction->setCheckable(true);
-    detailAction->setChecked(true);
-    connect(detailAction, &QAction::toggled, m_detail, &QWidget::setVisible);
+    detailAction->setChecked(false);
+    connect(detailAction, &QAction::toggled, this, [this](bool on) {
+        m_editorToggle->setChecked(on);
+        if (on) showLowerWidget(m_detail);
+        else hideLowerWidget(m_detail);
+    });
     QAction* mixerAction = add(view, QStringLiteral("actionToggleMixer"), tr("&Mixer"),
         QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_M), nullptr);
     mixerAction->setCheckable(true);
-    mixerAction->setChecked(true);
-    connect(mixerAction, &QAction::toggled, m_mixer, &QWidget::setVisible);
+    mixerAction->setChecked(false);
+    connect(mixerAction, &QAction::toggled, this, [this](bool on) {
+        m_mixerToggle->setChecked(on);
+        if (on) showLowerWidget(m_mixer);
+        else hideLowerWidget(m_mixer);
+    });
     view->addSeparator();
     add(view, QStringLiteral("actionSession"), tr("&Session View"), QKeySequence(Qt::Key_F1), [this] { showSession(); });
     add(view, QStringLiteral("actionArrangement"), tr("&Arrangement View"), QKeySequence(Qt::Key_F2), [this] { showArrangement(); });
@@ -767,6 +900,12 @@ void MainWindow::applyTheme(const Theme& theme)
     m_mixer->setTheme(&theme);
     m_arrangement->setTheme(&theme);
     m_detail->setTheme(&theme);
+    m_mixerTab->setTheme(&theme);
+    m_detailTab->setTheme(&theme);
+    m_lowerClose->setTheme(&theme);
+    m_browserToggle->setTheme(&theme);
+    m_mixerToggle->setTheme(&theme);
+    m_editorToggle->setTheme(&theme);
     m_horizontal->setHandleWidth(gap);
     m_vertical->setHandleWidth(gap);
     if (m_themeActions) {
@@ -784,25 +923,25 @@ void MainWindow::showStatus(const QString& text)
 void MainWindow::restoreLayout()
 {
     QSettings settings;
-    settings.beginGroup(QStringLiteral("layout"));
+    settings.beginGroup(QStringLiteral("layoutV3"));
     const QByteArray geometry = settings.value(QStringLiteral("geometry")).toByteArray();
     if (!geometry.isEmpty()) {
         restoreGeometry(geometry);
     }
-    const QByteArray horizontal = settings.value(QStringLiteral("horizontalV2")).toByteArray();
+    const QByteArray horizontal = settings.value(QStringLiteral("horizontalV3")).toByteArray();
     if (horizontal.isEmpty() || !m_horizontal->restoreState(horizontal)) {
         const int w = m_themes->theme().metricInt(QStringLiteral("browser.width"), 230);
-        const int detail = m_themes->theme().metricInt(QStringLiteral("detail.width"), 260);
-        m_horizontal->setSizes({w, qMax(400, width() - w - detail), detail});
+        m_horizontal->setSizes({w, qMax(400, width() - w)});
     }
-    const QByteArray vertical = settings.value(QStringLiteral("verticalV2")).toByteArray();
+    const QByteArray vertical = settings.value(QStringLiteral("verticalV3")).toByteArray();
     if (vertical.isEmpty() || !m_vertical->restoreState(vertical)) {
         const int h = m_themes->theme().metricInt(QStringLiteral("mixer.height"), 170);
         m_vertical->setSizes({qMax(300, height() - h), h});
     }
     for (const char* name : {"actionToggleBrowser", "actionToggleDetail", "actionToggleMixer"}) {
         if (QAction* a = action(QLatin1String(name))) {
-            a->setChecked(settings.value(QLatin1String(name), true).toBool());
+            const bool fallback = QLatin1String(name) == QLatin1String("actionToggleBrowser");
+            a->setChecked(settings.value(QLatin1String(name), fallback).toBool());
         }
     }
     settings.endGroup();
@@ -811,10 +950,10 @@ void MainWindow::restoreLayout()
 void MainWindow::saveLayout()
 {
     QSettings settings;
-    settings.beginGroup(QStringLiteral("layout"));
+    settings.beginGroup(QStringLiteral("layoutV3"));
     settings.setValue(QStringLiteral("geometry"), saveGeometry());
-    settings.setValue(QStringLiteral("horizontalV2"), m_horizontal->saveState());
-    settings.setValue(QStringLiteral("verticalV2"), m_vertical->saveState());
+    settings.setValue(QStringLiteral("horizontalV3"), m_horizontal->saveState());
+    settings.setValue(QStringLiteral("verticalV3"), m_vertical->saveState());
     for (const char* name : {"actionToggleBrowser", "actionToggleDetail", "actionToggleMixer"}) {
         if (QAction* a = action(QLatin1String(name))) {
             settings.setValue(QLatin1String(name), a->isChecked());

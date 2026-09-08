@@ -204,6 +204,19 @@ bool Project::arrangementClipRange(
                m_handle, track, index, &range.startBeats, &range.lengthBeats)
         != 0;
 }
+std::string Project::arrangementClipName(std::uint64_t track, std::uint64_t index) const
+{
+    char small[128];
+    const auto needed = nylon_arrangement_clip_name(m_handle, track, index, small, sizeof(small));
+    if (needed < sizeof(small)) return std::string(small);
+    std::string large(static_cast<std::size_t>(needed), '\0');
+    nylon_arrangement_clip_name(m_handle, track, index, large.data(), needed + 1);
+    return large;
+}
+int Project::arrangementClipColorIndex(std::uint64_t track, std::uint64_t index) const
+{
+    return nylon_arrangement_clip_color_index(m_handle, track, index);
+}
 bool Project::removeArrangementClip(std::uint64_t track, std::uint64_t index)
 {
     return nylon_arrangement_clip_remove(m_handle, track, index) != 0;

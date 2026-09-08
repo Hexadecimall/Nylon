@@ -145,6 +145,10 @@ int nylon_arrangement_clip_add_from_slot(void* project, unsigned long long track
     unsigned long long scene, double start_beats, double length_beats);
 int nylon_arrangement_clip_range(const void* project, unsigned long long track,
     unsigned long long index, double* start_beats, double* length_beats);
+unsigned long long nylon_arrangement_clip_name(const void* project, unsigned long long track,
+    unsigned long long index, char* buffer, unsigned long long capacity);
+int nylon_arrangement_clip_color_index(
+    const void* project, unsigned long long track, unsigned long long index);
 int nylon_arrangement_clip_remove(
     void* project, unsigned long long track, unsigned long long index);
 int nylon_arrangement_clip_set_range(void* project, unsigned long long track,

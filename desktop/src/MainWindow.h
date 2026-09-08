@@ -22,6 +22,7 @@ class Theme;
 class ThemeManager;
 class TitleBar;
 class TransportBar;
+class FlatButton;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -41,6 +42,7 @@ public:
 
     bool isStartScreenVisible() const;
     bool isSessionVisible() const;
+    bool isLowerDockVisible() const;
     QAction* action(const QString& objectName) const;
     // Every named action, for the command palette and shortcut editor.
     QList<QAction*> namedActions() const;
@@ -84,6 +86,8 @@ private:
     void updateEditActions();
     void updateWindowTitle();
     void rebuildRecentMenu();
+    void showLowerWidget(QWidget* widget);
+    void hideLowerWidget(QWidget* widget);
 
     ProjectBridge* m_bridge;
     ThemeManager* m_themes;
@@ -96,10 +100,18 @@ private:
     QSplitter* m_vertical = nullptr;
     BrowserPanel* m_browser = nullptr;
     QStackedWidget* m_views = nullptr;
+    QStackedWidget* m_lowerViews = nullptr;
+    QWidget* m_lowerDock = nullptr;
     SessionView* m_session = nullptr;
     MixerSection* m_mixer = nullptr;
     ArrangementView* m_arrangement = nullptr;
     DetailPanel* m_detail = nullptr;
+    FlatButton* m_mixerTab = nullptr;
+    FlatButton* m_detailTab = nullptr;
+    FlatButton* m_lowerClose = nullptr;
+    FlatButton* m_browserToggle = nullptr;
+    FlatButton* m_mixerToggle = nullptr;
+    FlatButton* m_editorToggle = nullptr;
     QActionGroup* m_themeActions = nullptr;
     QMenu* m_recentMenu = nullptr;
     QSize m_workspaceSize{1440, 900};

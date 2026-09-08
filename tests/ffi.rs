@@ -149,6 +149,16 @@ fn native_session_notes_and_arrangement_are_editable() {
             1
         );
         assert_eq!((start, length), (8.0, 4.0));
+        let mut name = [0 as std::ffi::c_char; 32];
+        assert_eq!(
+            nylon_arrangement_clip_name(handle, 0, 0, name.as_mut_ptr(), name.len() as u64),
+            6
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(name.as_ptr()).to_bytes(),
+            b"Chords"
+        );
+        assert_eq!(nylon_arrangement_clip_color_index(handle, 0, 0), 6);
         assert_eq!(nylon_clip_note_add(handle, 0, 0, 128, 100, 0.0, 1.0), 0);
         assert_eq!(nylon_clip_note_add(handle, 0, 0, 60, 0, 0.0, 1.0), 0);
         assert_eq!(nylon_clip_create_midi(handle, 0, 0, 4.0), 0);

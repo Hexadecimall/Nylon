@@ -132,6 +132,14 @@ bool ProjectBridge::arrangementClipRange(quint64 track, quint64 index, BeatRange
 {
     return m_project.arrangementClipRange(track, index, range);
 }
+QString ProjectBridge::arrangementClipName(quint64 track, quint64 index) const
+{
+    return QString::fromStdString(m_project.arrangementClipName(track, index));
+}
+int ProjectBridge::arrangementClipColorIndex(quint64 track, quint64 index) const
+{
+    return m_project.arrangementClipColorIndex(track, index);
+}
 
 bool ProjectBridge::setTempo(double bpm) { return commit(this, [&] { return m_project.setTempo(bpm); }); }
 bool ProjectBridge::setTimeSignature(int numerator, int denominator)

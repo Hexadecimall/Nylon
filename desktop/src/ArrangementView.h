@@ -7,9 +7,7 @@ namespace nylon {
 class ProjectBridge;
 class Theme;
 
-// Linear timeline: a bar ruler across the top and one lane per track with a
-// fixed-width header at the left. Clips and automation are not exposed by
-// the core yet, so lanes are drawn empty.
+// Linear timeline with core-backed track controls and clip placements.
 class ArrangementView : public QAbstractScrollArea {
     Q_OBJECT
 public:
@@ -30,10 +28,18 @@ public:
     // coordinates, or an empty rect when out of range.
     QRect laneRect(int track) const;
     bool isShowingEmptyState() const;
+    int selectedTrack() const { return m_selected; }
+
+public slots:
+    void selectTrack(int track);
+
+signals:
+    void trackSelected(int track);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
 
 private:
     void updateScrollRanges();
@@ -42,9 +48,12 @@ private:
     int rulerHeight() const;
     int headerWidth() const;
     int pixelsPerBar() const;
+    int trackAt(int y) const;
+    QRect headerButtonRect(int track, int button) const;
 
     ProjectBridge* m_bridge;
     const Theme* m_theme;
+    int m_selected = -1;
 };
 
 } // namespace nylon

@@ -53,6 +53,8 @@ public:
     bool clipNote(quint64 track, quint64 scene, quint64 index, MidiNote& note) const;
     quint64 arrangementClipCount(quint64 track) const;
     bool arrangementClipRange(quint64 track, quint64 index, BeatRange& range) const;
+    QString arrangementClipName(quint64 track, quint64 index) const;
+    int arrangementClipColorIndex(quint64 track, quint64 index) const;
 
     // True once the core can read and write project bundles.
     static bool isPersistenceAvailable() { return true; }

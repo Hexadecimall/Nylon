@@ -948,6 +948,55 @@ pub unsafe extern "C" fn nylon_arrangement_clip_range(
     1
 }
 
+/// # Safety
+/// The handle must be live and obey the access contract in the C header. Pointer
+/// arguments must reference readable or writable storage for the documented span.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_arrangement_clip_name(
+    handle: *const Project,
+    track: u64,
+    index: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    // SAFETY: Handle validity is required by the native interface.
+    let text = unsafe { handle.as_ref() }
+        .and_then(|project| {
+            let track = project.current.tracks.get(usize::try_from(track).ok()?)?;
+            let placement = track.arrangement.get(usize::try_from(index).ok()?)?;
+            project
+                .current
+                .clips
+                .iter()
+                .find(|clip| clip.id == placement.clip)
+                .map(|clip| clip.name.as_str())
+        })
+        .unwrap_or("");
+    copy_text(text, buffer, capacity)
+}
+
+/// # Safety
+/// The handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_arrangement_clip_color_index(
+    handle: *const Project,
+    track: u64,
+    index: u64,
+) -> i32 {
+    // SAFETY: Handle validity is required by the native interface.
+    unsafe { handle.as_ref() }
+        .and_then(|project| {
+            let track = project.current.tracks.get(usize::try_from(track).ok()?)?;
+            let placement = track.arrangement.get(usize::try_from(index).ok()?)?;
+            project
+                .current
+                .clips
+                .iter()
+                .find(|clip| clip.id == placement.clip)
+        })
+        .map_or(-1, |clip| i32::from(clip.color_index))
+}
+
 unsafe fn edit_placement(
     handle: *mut Project,
     track: u64,

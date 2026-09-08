@@ -6,8 +6,11 @@
 #include "Theme.h"
 
 #include <QPaintEvent>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QScrollBar>
+
+#include <cmath>
 
 namespace nylon {
 
@@ -105,6 +108,56 @@ QRect ArrangementView::laneRect(int track) const
     return QRect(x, static_cast<int>(y), qMax(0, viewport()->width() - x), laneHeight());
 }
 
+int ArrangementView::trackAt(int y) const
+{
+    const qint64 content = qint64(y) + verticalScrollBar()->value() - rulerHeight() - separator();
+    if (content < 0) return -1;
+    const qint64 pitch = laneHeight() + separator();
+    const qint64 track = content / pitch;
+    if (track >= laneCount() || content - track * pitch >= laneHeight()) return -1;
+    return static_cast<int>(track);
+}
+
+QRect ArrangementView::headerButtonRect(int track, int button) const
+{
+    if (track < 0 || track >= laneCount() || button < 0 || button > 2) return QRect();
+    const int y = rulerHeight() + separator() + track * (laneHeight() + separator())
+        - verticalScrollBar()->value();
+    const int h = qMin(20, laneHeight() / 3);
+    return QRect(18 + button * (h + 5), y + laneHeight() - h - 7, h, h);
+}
+
+void ArrangementView::selectTrack(int track)
+{
+    track = qBound(-1, track, laneCount() - 1);
+    if (m_selected == track) return;
+    m_selected = track;
+    viewport()->update();
+}
+
+void ArrangementView::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() != Qt::LeftButton) {
+        QAbstractScrollArea::mousePressEvent(event);
+        return;
+    }
+    const QPoint point = event->position().toPoint();
+    const int track = trackAt(point.y());
+    if (track < 0) return;
+    selectTrack(track);
+    emit trackSelected(track);
+    if (point.x() < headerWidth()) {
+        const quint64 index = static_cast<quint64>(track);
+        if (headerButtonRect(track, 0).contains(point))
+            m_bridge->setTrackMuted(index, !m_bridge->trackMuted(index));
+        else if (headerButtonRect(track, 1).contains(point))
+            m_bridge->setTrackSolo(index, !m_bridge->trackSolo(index));
+        else if (headerButtonRect(track, 2).contains(point))
+            m_bridge->setTrackArmed(index, !m_bridge->trackArmed(index));
+    }
+    event->accept();
+}
+
 void ArrangementView::updateScrollRanges()
 {
     const qint64 sep = separator();
@@ -175,7 +228,7 @@ void ArrangementView::paintEvent(QPaintEvent* event)
     // Beat and bar grid over the visible lanes.
     if (anyLane && anyBar) {
         const int gridTop = static_cast<int>(qMax<qint64>(lanesTop - scrollY, lanesTop));
-        const int gridBottom = static_cast<int>(qMin<qint64>(lanesTop + qint64(lanes) * (lh + sep) - scrollY, viewH));
+        const int gridBottom = viewH;
         const int gridH = gridBottom - gridTop;
         for (qint64 b = firstBar; b <= lastBar + 1 && b <= bars; ++b) {
             const int x = static_cast<int>(timelineX + b * ppb - scrollX);
@@ -191,23 +244,75 @@ void ArrangementView::paintEvent(QPaintEvent* event)
         }
     }
 
+    // Continue horizontal structure below the last live track so the editor
+    // remains a timeline at every window size.
+    const qint64 liveBottom = lanesTop + qint64(lanes) * (lh + sep) - scrollY;
+    if (liveBottom < viewH) {
+        const int guideHeight = qMax(28, lh / 2);
+        QColor guide = sepColor;
+        guide.setAlpha(120);
+        for (int y = static_cast<int>(liveBottom); y < viewH; y += guideHeight) {
+            p.fillRect(QRect(0, y, viewW, sep), guide);
+        }
+    }
+
+
+    // Arrangement clips sit above the grid and retain the source clip color.
+    if (anyLane) {
+        for (qint64 t = firstLane; t <= lastLane; ++t) {
+            const int y = static_cast<int>(lanesTop + t * (lh + sep) - scrollY);
+            const quint64 count = m_bridge->arrangementClipCount(static_cast<quint64>(t));
+            for (quint64 index = 0; index < count; ++index) {
+                BeatRange range {};
+                if (!m_bridge->arrangementClipRange(static_cast<quint64>(t), index, range)) continue;
+                const double scale = static_cast<double>(ppb) / static_cast<double>(beatsPerBar);
+                const double x = static_cast<double>(timelineX) + range.startBeats * scale - static_cast<double>(scrollX);
+                const double width = qMax(3.0, range.lengthBeats * scale);
+                if (x + width < timelineX || x > viewW) continue;
+                const int colorIndex = m_bridge->arrangementClipColorIndex(static_cast<quint64>(t), index);
+                const QColor clipColor = m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16));
+                const QRectF clipRect(x + 2.0, y + 5.0, width - 4.0, lh - 10.0);
+                p.fillPath(paint::rounded(*m_theme, clipRect), clipColor);
+                p.setPen(m_theme->color(QStringLiteral("track.text")));
+                p.drawText(clipRect.adjusted(textInset, 0, -textInset, 0), Qt::AlignLeft | Qt::AlignTop,
+                    p.fontMetrics().elidedText(m_bridge->arrangementClipName(static_cast<quint64>(t), index),
+                        Qt::ElideRight, qMax(0, qRound(clipRect.width()) - 2 * textInset)));
+            }
+        }
+    }
+
     // Track headers, drawn after the grid so they cover scrolled content.
     if (anyLane) {
         for (qint64 t = firstLane; t <= lastLane; ++t) {
             const int y = static_cast<int>(lanesTop + t * (lh + sep) - scrollY);
-            // Lane header: a track-colored name bar over the panel color,
-            // matching the session title bars.
             const QRect header(0, y, hw, lh);
-            p.fillRect(header, panel);
+            p.fillRect(header, t == m_selected ? m_theme->color(QStringLiteral("raised")) : panel);
             const int colorIndex = m_bridge->trackColorIndex(static_cast<quint64>(t));
             const QColor trackColor = m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16));
-            const int titleH = m_theme->metricInt(QStringLiteral("control.height"), 20);
-            const QRect title(header.x() + 1, y + 1, hw - 2, qMin(titleH, lh - 2));
-            p.fillPath(paint::rounded(*m_theme, QRectF(title)), trackColor);
-            p.setPen(m_theme->color(QStringLiteral("track.text")));
+            p.fillPath(paint::rounded(*m_theme, QRectF(6, y + 7, 6, lh - 14)), trackColor);
+            const QRect title(18, y + 5, hw - 62, qMin(24, lh / 2));
+            p.setPen(primary);
             p.drawText(title.adjusted(textInset, 0, -textInset, 0), Qt::AlignLeft | Qt::AlignVCenter,
                 p.fontMetrics().elidedText(m_bridge->trackName(static_cast<quint64>(t)), Qt::ElideRight,
-                    hw - 2 * textInset));
+                    title.width() - 2 * textInset));
+            p.setPen(secondary);
+            p.drawText(QRect(hw - 42, y + 5, 34, title.height()), Qt::AlignRight | Qt::AlignVCenter,
+                QString::number(t + 1));
+            const bool states[] = {m_bridge->trackMuted(static_cast<quint64>(t)),
+                m_bridge->trackSolo(static_cast<quint64>(t)), m_bridge->trackArmed(static_cast<quint64>(t))};
+            const QString labels[] = {tr("M"), tr("S"), tr("R")};
+            const QString keys[] = {QStringLiteral("control.hover"), QStringLiteral("state.solo"), QStringLiteral("state.arm")};
+            for (int button = 0; button < 3; ++button) {
+                const QRect rect = headerButtonRect(static_cast<int>(t), button);
+                p.fillPath(paint::rounded(*m_theme, QRectF(rect)),
+                    m_theme->color(states[button] ? keys[button] : QStringLiteral("control.background")));
+                p.setPen(states[button] ? m_theme->color(QStringLiteral("accent.text")) : secondary);
+                p.drawText(rect, Qt::AlignCenter, labels[button]);
+            }
+            p.setPen(secondary);
+            const double db = m_bridge->trackVolumeDb(static_cast<quint64>(t));
+            p.drawText(QRect(hw - 76, y + lh - 27, 68, 20), Qt::AlignRight | Qt::AlignVCenter,
+                std::isinf(db) ? tr("-inf dB") : tr("%1 dB").arg(db, 0, 'f', 1));
             Q_UNUSED(band);
             Q_UNUSED(primary);
             p.fillRect(QRect(hw, y, sep, lh), sepColor);

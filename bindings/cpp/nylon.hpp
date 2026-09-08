@@ -103,6 +103,8 @@ public:
     bool addArrangementClipFromSlot(
         std::uint64_t track, std::uint64_t scene, BeatRange range);
     bool arrangementClipRange(std::uint64_t track, std::uint64_t index, BeatRange& range) const;
+    std::string arrangementClipName(std::uint64_t track, std::uint64_t index) const;
+    int arrangementClipColorIndex(std::uint64_t track, std::uint64_t index) const;
     bool removeArrangementClip(std::uint64_t track, std::uint64_t index);
     bool setArrangementClipRange(std::uint64_t track, std::uint64_t index, BeatRange range);
 

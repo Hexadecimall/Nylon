@@ -122,6 +122,9 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(6, 6, 6, 6);
     layout->setSpacing(4);
+    auto* title = new QLabel(tr("Library"), this);
+    title->setObjectName(QStringLiteral("panelTitle"));
+    layout->addWidget(title);
     layout->addWidget(m_search);
     layout->addLayout(columns, 1);
 
