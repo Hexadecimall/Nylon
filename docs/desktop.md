@@ -56,6 +56,19 @@ project has no tracks.
 the status bar, and re-applies the theme whenever `ThemeManager` reports a
 change.
 
+## Clip editing
+
+Double-clicking an empty slot in the session grid creates a MIDI clip in
+that slot through the core; clicking a slot selects it and opens the Clip
+page of the detail panel. The page hosts `src/PianoRoll`: a keyboard down
+the left, a beat grid from the project time signature, the clip's loop end,
+and the notes as blocks tinted by the clip color. Double-click adds a note
+of one grid step or removes the note under the pointer, dragging a note
+moves it on the grid, the grip at its right edge changes its length, the
+lane along the bottom edits velocity by dragging, Delete removes the
+selection, and Ctrl+wheel zooms. Each edit is one command in the core and
+therefore one undo step.
+
 ## Commands and shortcuts
 
 Every menu entry is a named `QAction`. View > Command Palette (Ctrl+K or
@@ -79,6 +92,7 @@ Three Qt Test executables build alongside the application and run under
   with pixel checks against theme tokens.
 - `test_widgets`: the custom controls (knob, fader, meter, button, value box).
 - `test_commands`: the command palette and shortcut overrides.
+- `test_pianoroll`: note creation, movement, resizing, velocity, and zoom.
 - `test_layout`: the integer layout helpers.
 
 ## Portable layout
