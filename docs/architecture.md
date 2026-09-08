@@ -34,10 +34,78 @@ thread destroys retired storage. If reclamation stalls, the callback retains
 its current state and defers the next publication. Endpoints must be destroyed
 on the control thread after the callback stops.
 
-The render benchmark reports nanoseconds per 256-frame stereo block after warmup.
+## Signal processing
+
+`src/dsp` holds the primitives every device is built from: decibel
+conversion, panning laws, parameter smoothing, second-order sections,
+band-limited oscillators, an envelope generator, a delay line, and level
+metering. Each type is fixed-size. Storage that must outlive a call, such
+as a delay buffer, is borrowed from the caller, which allocates it on the
+control thread before playback.
+
+Second-order sections carry an analytic magnitude response alongside the
+filter itself, so an equalizer curve is drawn from the same coefficients
+that process the audio rather than from a separate approximation.
+
+## Mixing
+
+`src/mixer` sums stereo track signals through per-track volume, pan, mute,
+and solo into a master strip, metering every strip. Parameter changes
+arrive as events carrying the frame they take effect on: an event applies
+before the sample at its offset, equal offsets keep input order, and an
+offset at the block end applies to the next block. The values themselves
+are smoothed, so a change lands on the right sample without stepping the
+signal. The whole request is validated before anything changes, so a
+refused render leaves both the mixer and the output untouched.
+
+The pan law preserves power across the sweep and is normalized so a
+centered strip is unity gain, with a hard-panned strip 3 dB up on that
+side.
+
+## Musical time
+
+`src/transport` converts between frames and beats. It advances by whole
+blocks, so the same starting position and block length always cover the
+same span of musical time. A loop wraps at its end carrying the overshoot.
+A tempo or sample rate change keeps the musical position rather than the
+frame count, so switching devices does not move the playhead in musical
+terms.
+
+## Playback
+
+`src/engine/playback` owns the mixer and the transport and implements the
+renderer interface, so one object drives both a device stream and an
+offline bounce. It does not read the project model: the control thread
+publishes a fixed-size settings snapshot that the engine takes up at a
+block boundary, never mid-block.
+
+State travelling the other way uses `src/latest`, a triple buffer. A queue
+is the wrong shape for meters and a playhead, because a reader that falls
+behind then keeps the oldest entries and drops the newest. The triple
+buffer writer never waits and the reader always sees the most recently
+completed value.
+
+No sound sources exist yet, so the engine mixes silence. The transport,
+the metering, and sample-accurate automation are real.
+
+## Audio devices
+
+`src/audio` defines the backend, stream, and renderer interfaces. Device
+names and rate lists are fixed-capacity values, so enumerating devices
+costs no allocation. `src/audio/offline` renders on demand rather than
+against a clock, which is what a bounce needs and what lets a test step a
+render one block at a time. Platform backends render in real time against
+a device clock.
+
+## Benchmarks
+
+The render benchmark reports nanoseconds per 256-frame stereo block after warmup,
+and the mixer benchmark reports the same figure for a 32-track block with
+automation, alongside its share of the block's real-time budget.
 CI compares the previous revision and candidate on the same runner, alternating
-21 measurement pairs. A median increase above 5% fails the check. Dedicated
-performance hardware remains preferable because shared runners introduce noise.
+21 measurement pairs. A run fails only when the median rises more than 5% and the
+two samples separate, because at a few tens of nanoseconds a block, 5% is inside
+the noise of a shared runner. Dedicated performance hardware remains preferable.
 
 The project model publishes immutable snapshots through grouped commands. Undo
 and redo retain prior snapshots in memory. Track identifiers remain unique even
