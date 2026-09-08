@@ -31,6 +31,9 @@ public:
 public slots:
     void selectTrack(int index);
     void rebuild();
+    void setTrackLevels(int index, double peakLeftDb, double peakRightDb, double rmsLeftDb, double rmsRightDb);
+    void setMasterLevels(double peakLeftDb, double peakRightDb, double rmsLeftDb, double rmsRightDb);
+    void clearClipping();
 
 signals:
     void trackSelected(int index);

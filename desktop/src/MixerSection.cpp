@@ -3,6 +3,7 @@
 #include "MixerStrip.h"
 #include "ProjectBridge.h"
 #include "Theme.h"
+#include "widgets/LevelMeter.h"
 
 #include "PanelPaint.h"
 
@@ -66,6 +67,27 @@ void MixerSection::selectTrack(int index)
         m_strips[i]->setSelected(i == index);
     }
     emit trackSelected(index);
+}
+
+void MixerSection::setTrackLevels(
+    int index, double peakLeftDb, double peakRightDb, double rmsLeftDb, double rmsRightDb)
+{
+    MixerStrip* target = m_strips.value(index);
+    if (!target) return;
+    target->meter()->setLevels(0, peakLeftDb, rmsLeftDb);
+    target->meter()->setLevels(1, peakRightDb, rmsRightDb);
+}
+
+void MixerSection::setMasterLevels(double peakLeftDb, double peakRightDb, double rmsLeftDb, double rmsRightDb)
+{
+    m_master->meter()->setLevels(0, peakLeftDb, rmsLeftDb);
+    m_master->meter()->setLevels(1, peakRightDb, rmsRightDb);
+}
+
+void MixerSection::clearClipping()
+{
+    for (MixerStrip* strip : m_strips) strip->meter()->clearClip();
+    m_master->meter()->clearClip();
 }
 
 void MixerSection::rebuild()

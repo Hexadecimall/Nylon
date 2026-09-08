@@ -10,6 +10,7 @@
 #include "widgets/Fader.h"
 #include "widgets/FlatButton.h"
 #include "widgets/Knob.h"
+#include "widgets/LevelMeter.h"
 #include "widgets/ValueBox.h"
 #include "ProjectBridge.h"
 #include "SessionView.h"
@@ -530,6 +531,14 @@ void TestViews::selectionFlowsBetweenGridMixerAndDetail()
     strip->pan()->setValue(0.5);
     emit strip->pan()->dragFinished();
     QCOMPARE(bridge.trackPan(0), 0.5);
+
+    w.mixer()->setTrackLevels(0, -6.0, -7.0, -12.0, -13.0);
+    QCOMPARE(strip->meter()->peakDb(0), -6.0);
+    QCOMPARE(strip->meter()->rmsDb(1), -13.0);
+    w.mixer()->setMasterLevels(0.5, -3.0, -6.0, -7.0);
+    QVERIFY(w.mixer()->masterStrip()->meter()->isClipping(0));
+    w.mixer()->clearClipping();
+    QVERIFY(!w.mixer()->masterStrip()->meter()->isClipping(0));
 
     // Renaming through the core shows up in the strip, grid header, and detail.
     QVERIFY(bridge.setTrackName(0, QStringLiteral("Bass")));
