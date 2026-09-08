@@ -422,6 +422,8 @@ QString Theme::styleSheet() const
         "QWidget#startCard { background: transparent; }"
         "QWidget#startSidebar, QWidget#startRecent { background: %PANEL; border: %SEPpx solid %BORDER; border-radius: %RADIUSpx; }"
         "QLabel#startTitle { color: %TEXT; }"
+        "QLabel#startShortcuts { color: %SECONDARY; background: %BG; border: %SEPpx solid %SEPC;"
+        "  border-radius: %RSMALLpx; padding: %PAD2px; }"
         "QLabel#panelTitle { color: %TEXT; font-weight: 600; padding: %PADpx %PAD2px; }"
         "QLabel#sectionLabel { color: %SECONDARY; font-size: 10px; font-weight: 600; padding: %PADpx %PADpx 0 %PADpx; }"
         "QLabel#workspaceContext { color: %SECONDARY; font-size: 10px; font-weight: 600; padding-left: %PADpx; }"

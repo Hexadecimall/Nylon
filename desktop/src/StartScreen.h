@@ -26,6 +26,8 @@ public:
     static void clearRecentProjects();
 
     FlatButton* newButton() const { return m_new; }
+    FlatButton* recordingButton() const { return m_recording; }
+    FlatButton* productionButton() const { return m_production; }
     FlatButton* openButton() const { return m_open; }
     QListWidget* recentList() const { return m_recent; }
     // The launcher card in widget coordinates.
@@ -36,6 +38,7 @@ public slots:
 
 signals:
     void newProjectRequested();
+    void templateRequested(int audioTracks, int midiTracks);
     void openProjectRequested();
     void recentProjectRequested(const QString& path);
 
@@ -51,10 +54,13 @@ private:
     QLabel* m_version;
     QLabel* m_tagline;
     FlatButton* m_new;
+    FlatButton* m_recording;
+    FlatButton* m_production;
     FlatButton* m_open;
     QLabel* m_recentTitle;
     QListWidget* m_recent;
     QLabel* m_recentEmpty;
+    QLabel* m_shortcuts;
     QLabel* m_footer;
     bool m_persistence = false;
 };

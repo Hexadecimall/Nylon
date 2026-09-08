@@ -30,10 +30,13 @@ StartScreen::StartScreen(const Theme* theme, QWidget* parent)
     , m_version(new QLabel(m_card))
     , m_tagline(new QLabel(tr("START"), m_sidebar))
     , m_new(new FlatButton(theme, m_sidebar))
+    , m_recording(new FlatButton(theme, m_sidebar))
+    , m_production(new FlatButton(theme, m_sidebar))
     , m_open(new FlatButton(theme, m_sidebar))
     , m_recentTitle(new QLabel(tr("RECENT PROJECTS"), m_recentPane))
     , m_recent(new QListWidget(m_recentPane))
     , m_recentEmpty(new QLabel(m_recentPane))
+    , m_shortcuts(new QLabel(m_recentPane))
     , m_footer(new QLabel(m_sidebar))
 {
     setObjectName(QStringLiteral("start"));
@@ -47,11 +50,15 @@ StartScreen::StartScreen(const Theme* theme, QWidget* parent)
     m_version->setText(tr("Nylon %1").arg(QCoreApplication::applicationVersion()));
     m_tagline->setObjectName(QStringLiteral("secondary"));
 
-    m_new->setText(tr("New Project"));
+    m_new->setText(tr("Empty Project"));
     m_new->setProminent(true);
     m_new->setStatusTip(tr("Start an empty project (Ctrl+N)."));
     m_new->setActiveColorKey(QStringLiteral("accent"));
-    m_open->setText(tr("Open Project..."));
+    m_recording->setText(tr("Recording Setup"));
+    m_recording->setStatusTip(tr("Start with four audio tracks."));
+    m_production->setText(tr("Production Setup"));
+    m_production->setStatusTip(tr("Start with audio and MIDI tracks."));
+    m_open->setText(tr("Open Project"));
     m_open->setStatusTip(tr("Open a project bundle (Ctrl+O)."));
 
     m_recentTitle->setObjectName(QStringLiteral("secondary"));
@@ -62,6 +69,11 @@ StartScreen::StartScreen(const Theme* theme, QWidget* parent)
     m_recentEmpty->setObjectName(QStringLiteral("secondary"));
     m_recentEmpty->setAlignment(Qt::AlignCenter);
     m_recentEmpty->setWordWrap(true);
+    m_shortcuts->setObjectName(QStringLiteral("startShortcuts"));
+    m_shortcuts->setText(tr("CREATE AUDIO TRACK     Ctrl+T\n"
+                            "CREATE MIDI TRACK      Ctrl+Shift+T\n"
+                            "COMMAND PALETTE        Ctrl+K"));
+    m_shortcuts->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_footer->setObjectName(QStringLiteral("secondary"));
     m_footer->setWordWrap(true);
 
@@ -76,6 +88,9 @@ StartScreen::StartScreen(const Theme* theme, QWidget* parent)
     sidebarLayout->addWidget(m_tagline);
     sidebarLayout->addSpacing(4);
     sidebarLayout->addWidget(m_new);
+    sidebarLayout->addWidget(m_recording);
+    sidebarLayout->addWidget(m_production);
+    sidebarLayout->addSpacing(14);
     sidebarLayout->addWidget(m_open);
     sidebarLayout->addStretch(1);
     sidebarLayout->addWidget(m_footer);
@@ -85,6 +100,7 @@ StartScreen::StartScreen(const Theme* theme, QWidget* parent)
     recentLayout->addWidget(m_recentTitle);
     recentLayout->addWidget(m_recent, 1);
     recentLayout->addWidget(m_recentEmpty, 1);
+    recentLayout->addWidget(m_shortcuts);
 
     auto* body = new QHBoxLayout;
     body->setSpacing(10);
@@ -101,6 +117,8 @@ StartScreen::StartScreen(const Theme* theme, QWidget* parent)
     root->addWidget(m_card);
 
     connect(m_new, &FlatButton::clicked, this, &StartScreen::newProjectRequested);
+    connect(m_recording, &FlatButton::clicked, this, [this] { emit templateRequested(4, 0); });
+    connect(m_production, &FlatButton::clicked, this, [this] { emit templateRequested(1, 3); });
     connect(m_open, &FlatButton::clicked, this, &StartScreen::openProjectRequested);
     connect(m_recent, &QListWidget::itemActivated, this, [this](QListWidgetItem* item) {
         emit recentProjectRequested(item->data(Qt::UserRole).toString());
@@ -115,6 +133,8 @@ void StartScreen::setTheme(const Theme* theme)
 {
     m_theme = theme;
     m_new->setTheme(theme);
+    m_recording->setTheme(theme);
+    m_production->setTheme(theme);
     m_open->setTheme(theme);
     const int fontPx = theme->metricInt(QStringLiteral("font.size"), 11);
     QFont big = font();
@@ -123,6 +143,8 @@ void StartScreen::setTheme(const Theme* theme)
     m_title->setFont(big);
     const int h = theme->metricInt(QStringLiteral("control.height"), 20);
     m_new->setFixedHeight(h + 6);
+    m_recording->setFixedHeight(h + 6);
+    m_production->setFixedHeight(h + 6);
     m_open->setFixedHeight(h + 6);
     const int pad = theme->metricInt(QStringLiteral("panel.padding"), 8);
     m_card->layout()->setContentsMargins(pad * 3, pad * 2, pad * 3, pad * 3);
@@ -189,6 +211,7 @@ void StartScreen::reloadRecent()
     const bool empty = list.isEmpty();
     m_recent->setVisible(!empty);
     m_recentEmpty->setVisible(empty);
+    m_shortcuts->setVisible(empty);
     m_recentEmpty->setText(m_persistence ? tr("No recent projects\nCreate a project or open an existing bundle.")
                                          : tr("Recent projects appear here once projects can be saved."));
 }

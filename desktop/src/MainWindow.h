@@ -51,6 +51,7 @@ public:
 public slots:
     void showStartScreen();
     void newProject();
+    void newProjectFromTemplate(int audioTracks, int midiTracks);
     void showSession();
     void showArrangement();
     void toggleView();

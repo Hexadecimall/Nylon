@@ -102,14 +102,16 @@ int main(int argc, char** argv)
             mixer->trigger();
         }
     }
-    const QString view = parser.value(viewOption).toLower();
-    if (view == QLatin1String("arrangement")) {
-        window.showArrangement();
-    } else if (view == QLatin1String("session")) {
-        window.showSession();
-    } else {
-        std::fprintf(stderr, "--view expects 'session' or 'arrangement'\n");
-        return 2;
+    if (!parser.isSet(startOption)) {
+        const QString view = parser.value(viewOption).toLower();
+        if (view == QLatin1String("arrangement")) {
+            window.showArrangement();
+        } else if (view == QLatin1String("session")) {
+            window.showSession();
+        } else {
+            std::fprintf(stderr, "--view expects 'session' or 'arrangement'\n");
+            return 2;
+        }
     }
     nylon::RemoteControl control(&window);
     if (parser.isSet(controlOption) &&

@@ -84,6 +84,7 @@ MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* par
     qApp->installEventFilter(this);
 
     connect(m_start, &StartScreen::newProjectRequested, this, &MainWindow::newProject);
+    connect(m_start, &StartScreen::templateRequested, this, &MainWindow::newProjectFromTemplate);
     connect(m_start, &StartScreen::openProjectRequested, this, &MainWindow::openProject);
     connect(m_start, &StartScreen::recentProjectRequested, this, &MainWindow::openProjectAt);
     connect(m_themes, &ThemeManager::themeChanged, this, &MainWindow::applyTheme);
@@ -620,6 +621,27 @@ void MainWindow::newProject()
     m_root->setCurrentWidget(m_workspace);
     updateWindowTitle();
     showSession();
+}
+
+void MainWindow::newProjectFromTemplate(int audioTracks, int midiTracks)
+{
+    newProject();
+    for (int i = 0; i < audioTracks; ++i) {
+        if (!m_bridge->addTrack(ProjectBridge::TrackKind::Audio)) {
+            showStatus(tr("The core could not add an audio track."));
+            return;
+        }
+    }
+    for (int i = 0; i < midiTracks; ++i) {
+        if (!m_bridge->addTrack(ProjectBridge::TrackKind::Midi)) {
+            showStatus(tr("The core could not add a MIDI track."));
+            return;
+        }
+    }
+    if (m_bridge->trackCount() > 0) {
+        selectTrack(0);
+    }
+    showArrangement();
 }
 
 void MainWindow::showSession()

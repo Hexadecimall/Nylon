@@ -384,6 +384,8 @@ void TestViews::startScreenThenWorkspace()
     QVERIFY(QTest::qWaitForWindowExposed(&w));
     QVERIFY(w.isStartScreenVisible());
     QVERIFY(w.startScreen()->newButton()->isEnabled());
+    QVERIFY(w.startScreen()->recordingButton()->isEnabled());
+    QVERIFY(w.startScreen()->productionButton()->isEnabled());
     QVERIFY(w.startScreen()->openButton()->isEnabled());
     // The launcher uses the available canvas instead of floating a large card.
     const QRect card = w.startScreen()->cardRect();
@@ -402,6 +404,12 @@ void TestViews::startScreenThenWorkspace()
     QVERIFY(!bridge.undo());
     w.action(QStringLiteral("actionClose"))->trigger();
     QVERIFY(w.isStartScreenVisible());
+
+    w.startScreen()->productionButton()->click();
+    QCOMPARE(bridge.trackCount(), 4ull);
+    QCOMPARE(bridge.trackKind(0), ProjectBridge::TrackKind::Audio);
+    QCOMPARE(bridge.trackKind(1), ProjectBridge::TrackKind::Midi);
+    QVERIFY(!w.isSessionVisible());
 }
 
 void TestViews::menusAreInWindowAndComplete()
