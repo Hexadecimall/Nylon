@@ -21,6 +21,8 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 
+#include <iterator>
+
 namespace nylon {
 
 namespace {
@@ -69,7 +71,8 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
     m_categories->setFrameShape(QFrame::NoFrame);
     m_categories->setSelectionMode(QAbstractItemView::SingleSelection);
     m_categories->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_categories->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_categories->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_categories->setUniformItemSizes(true);
     m_categories->setTextElideMode(Qt::ElideRight);
     m_categories->setStatusTip(tr("Library categories. Each one is a folder in the library."));
     for (const Category& c : kCategories) {
@@ -105,28 +108,23 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
     m_info->setObjectName(QStringLiteral("secondary"));
     m_info->setMargin(4);
 
-    auto* right = new QWidget(this);
-    auto* rightLayout = new QVBoxLayout(right);
-    rightLayout->setContentsMargins(0, 0, 0, 0);
-    rightLayout->setSpacing(0);
-    rightLayout->addWidget(m_tree, 1);
-    rightLayout->addWidget(m_empty, 1);
-    rightLayout->addWidget(m_info);
-
-    auto* columns = new QHBoxLayout;
-    columns->setContentsMargins(0, 0, 0, 0);
-    columns->setSpacing(0);
-    columns->addWidget(m_categories);
-    columns->addWidget(right, 1);
-
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(6, 6, 6, 6);
     layout->setSpacing(4);
-    auto* title = new QLabel(tr("Library"), this);
+    auto* title = new QLabel(tr("LIBRARY"), this);
     title->setObjectName(QStringLiteral("panelTitle"));
+    auto* categoryTitle = new QLabel(tr("CATEGORIES"), this);
+    categoryTitle->setObjectName(QStringLiteral("sectionLabel"));
+    auto* contentTitle = new QLabel(tr("FILES"), this);
+    contentTitle->setObjectName(QStringLiteral("sectionLabel"));
     layout->addWidget(title);
     layout->addWidget(m_search);
-    layout->addLayout(columns, 1);
+    layout->addWidget(categoryTitle);
+    layout->addWidget(m_categories);
+    layout->addWidget(contentTitle);
+    layout->addWidget(m_tree, 1);
+    layout->addWidget(m_empty, 1);
+    layout->addWidget(m_info);
 
     connect(m_categories, &QListWidget::currentRowChanged, this, [this] { onCategoryChanged(); });
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString& text) {
@@ -150,9 +148,14 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
 void BrowserPanel::setTheme(const Theme* theme)
 {
     m_theme = theme;
-    const int w = m_theme->metricInt(QStringLiteral("browser.width"), 230);
-    m_categories->setFixedWidth(qMax(80, w * 2 / 5));
+    const int browserWidth = m_theme->metricInt(QStringLiteral("browser.width"), 230);
+    const int rowHeight = qMax(22, m_theme->metricInt(QStringLiteral("control.height"), 24));
+    const int categoryCount = static_cast<int>(std::size(kCategories));
     const int pad = m_theme->metricInt(QStringLiteral("panel.padding"), 8);
+    for (int index = 0; index < categoryCount; ++index) {
+        m_categories->item(index)->setSizeHint(QSize(qMax(64, browserWidth - pad * 2), rowHeight));
+    }
+    m_categories->setFixedHeight(categoryCount * rowHeight + 2);
     layout()->setContentsMargins(pad, pad, pad, pad);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::transparent);

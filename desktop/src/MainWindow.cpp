@@ -699,6 +699,7 @@ void MainWindow::buildMenus()
         a->setMenuRole(QAction::NoRole);
         if (!shortcut.isEmpty()) {
             a->setShortcut(shortcut);
+            a->setShortcutVisibleInContextMenu(true);
         }
         a->setEnabled(enabled);
         if (!enabled && !why.isEmpty()) {

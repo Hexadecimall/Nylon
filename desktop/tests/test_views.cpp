@@ -416,6 +416,7 @@ void TestViews::menusAreInWindowAndComplete()
              "actionStop", "actionRecord", "actionLoop", "actionAbout"}) {
         QVERIFY2(w.action(QLatin1String(name)), name);
     }
+    QVERIFY(w.action(QStringLiteral("actionNew"))->isShortcutVisibleInContextMenu());
     // Everything the core cannot do yet is disabled and says why.
     for (const char* name : {"actionPlay", "actionCut"}) {
         QAction* a = w.action(QLatin1String(name));
