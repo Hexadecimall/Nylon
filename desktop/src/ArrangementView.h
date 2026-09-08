@@ -29,9 +29,12 @@ public:
     QRect laneRect(int track) const;
     bool isShowingEmptyState() const;
     int selectedTrack() const { return m_selected; }
+    double playheadBeats() const { return m_playheadBeats; }
+    int playheadX() const;
 
 public slots:
     void selectTrack(int track);
+    void setPlayheadBeats(double beats);
 
 signals:
     void trackSelected(int track);
@@ -54,6 +57,7 @@ private:
     ProjectBridge* m_bridge;
     const Theme* m_theme;
     int m_selected = -1;
+    double m_playheadBeats = 0.0;
 };
 
 } // namespace nylon

@@ -11,6 +11,7 @@
 #include <QScrollBar>
 
 #include <cmath>
+#include <limits>
 
 namespace nylon {
 
@@ -89,6 +90,17 @@ int ArrangementView::barX(int bar) const
     return fitsCoordinate(x) ? static_cast<int>(x) : -1;
 }
 
+int ArrangementView::playheadX() const
+{
+    const double scale = static_cast<double>(pixelsPerBar()) / static_cast<double>(beatsPerBar());
+    const double x = static_cast<double>(headerWidth() + separator()) + m_playheadBeats * scale
+        - static_cast<double>(horizontalScrollBar()->value());
+    return x >= static_cast<double>(std::numeric_limits<int>::min())
+            && x <= static_cast<double>(std::numeric_limits<int>::max())
+        ? static_cast<int>(std::lround(x))
+        : -1;
+}
+
 bool ArrangementView::isShowingEmptyState() const
 {
     return m_bridge->trackCount() == 0;
@@ -132,6 +144,14 @@ void ArrangementView::selectTrack(int track)
     track = qBound(-1, track, laneCount() - 1);
     if (m_selected == track) return;
     m_selected = track;
+    viewport()->update();
+}
+
+void ArrangementView::setPlayheadBeats(double beats)
+{
+    const double next = std::isfinite(beats) ? qMax(0.0, beats) : 0.0;
+    if (qFuzzyCompare(m_playheadBeats + 1.0, next + 1.0)) return;
+    m_playheadBeats = next;
     viewport()->update();
 }
 
@@ -333,6 +353,17 @@ void ArrangementView::paintEvent(QPaintEvent* event)
     }
     p.fillRect(QRect(0, 0, hw, rh), panel);
     p.fillRect(QRect(hw, 0, sep, rh), sepColor);
+
+    const int cursorX = playheadX();
+    if (cursorX >= timelineX && cursorX <= viewW) {
+        const QColor playhead = m_theme->color(QStringLiteral("playhead"));
+        p.fillRect(QRect(cursorX, rh - 5, 2, qMax(0, viewH - rh + 5)), playhead);
+        QPolygonF marker;
+        marker << QPointF(cursorX - 4, rh - 6) << QPointF(cursorX + 6, rh - 6) << QPointF(cursorX + 1, rh);
+        p.setPen(Qt::NoPen);
+        p.setBrush(playhead);
+        p.drawPolygon(marker);
+    }
 
     if (m_bridge->trackCount() == 0) {
         p.setPen(secondary);

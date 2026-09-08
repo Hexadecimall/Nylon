@@ -706,13 +706,17 @@ void TestViews::arrangementGridFollowsTimeSignature()
     const QColor gridBar = t.color(QStringLiteral("arrangement.grid.bar"));
     QImage img = view->viewport()->grab().toImage();
     // In 4/4 the second beat line sits a quarter bar in; in 3/4 a third.
-    QCOMPARE(img.pixelColor(x0, lane.center().y()), gridBar);
+    QCOMPARE(img.pixelColor(x0, lane.center().y()), t.color(QStringLiteral("playhead")));
+    QCOMPARE(img.pixelColor(view->barX(1), lane.center().y()), gridBar);
     QCOMPARE(img.pixelColor(x0 + ppb / 4, lane.center().y()), grid);
     QVERIFY(bridge.setTimeSignature(3, 4));
     QCOMPARE(view->beatsPerBar(), 3);
     img = view->viewport()->grab().toImage();
     QCOMPARE(img.pixelColor(x0 + ppb / 3, lane.center().y()), grid);
     QVERIFY(img.pixelColor(x0 + ppb / 4, lane.center().y()) != grid);
+    view->setPlayheadBeats(6.0);
+    QCOMPARE(view->playheadBeats(), 6.0);
+    QCOMPARE(view->playheadX(), x0 + ppb * 2);
 }
 
 void TestViews::detailClipPageHostsThePianoRoll()
