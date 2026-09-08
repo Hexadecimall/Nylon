@@ -1,8 +1,8 @@
 //! Versioned binary project documents and directory bundles.
 
 use crate::project::{
-    self, ArrangementPlacement, ClipId, MidiClip, MidiNote, Project, Scene, SceneId, Snapshot,
-    Track, TrackId, TrackKind,
+    self, ArrangementPlacement, AudioClip, ClipId, MidiClip, MidiNote, Project, Scene, SceneId,
+    Snapshot, Track, TrackId, TrackKind,
 };
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -14,7 +14,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +83,20 @@ impl Encoder {
                 self.bytes(&note.start_beats.to_le_bytes())?;
                 self.bytes(&note.length_beats.to_le_bytes())?;
             }
+        }
+        self.count(snapshot.audio_clips.len())?;
+        for clip in &snapshot.audio_clips {
+            self.bytes(&clip.id.0.to_le_bytes())?;
+            let flags = u8::from(clip.reverse) | (u8::from(clip.warp) << 1);
+            self.bytes(&[clip.color_index, flags])?;
+            self.bytes(&clip.loop_start_beats.to_le_bytes())?;
+            self.bytes(&clip.loop_length_beats.to_le_bytes())?;
+            self.bytes(&clip.gain_db.to_le_bytes())?;
+            self.bytes(&clip.source_tempo.to_le_bytes())?;
+            self.count(clip.name.len())?;
+            self.bytes(clip.name.as_bytes())?;
+            self.count(clip.media_path.len())?;
+            self.bytes(clip.media_path.as_bytes())?;
         }
         for track in &snapshot.tracks {
             self.count(track.session_slots.len())?;
@@ -183,6 +197,7 @@ impl<'a> Decoder<'a> {
                 tracks,
                 scenes: Vec::new(),
                 clips: Vec::new(),
+                audio_clips: Vec::new(),
             }));
         }
 
@@ -273,6 +288,65 @@ impl<'a> Decoder<'a> {
             });
         }
 
+        let mut audio_clips = Vec::new();
+        if version >= 3 {
+            let audio_count = self.count()?;
+            if audio_count > self.remaining.len() / 54 {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            audio_clips.reserve(audio_count);
+            for _ in 0..audio_count {
+                let id = u64::from_le_bytes(self.array()?);
+                if id == 0 || id >= next_id || !ids.insert(id) {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                let [color_index, flags] = self.array()?;
+                let loop_start_beats = f64::from_le_bytes(self.array()?);
+                let loop_length_beats = f64::from_le_bytes(self.array()?);
+                let gain_db = f64::from_le_bytes(self.array()?);
+                let source_tempo = f64::from_le_bytes(self.array()?);
+                if color_index >= 16
+                    || flags & !3 != 0
+                    || !loop_start_beats.is_finite()
+                    || loop_start_beats < 0.0
+                    || !loop_length_beats.is_finite()
+                    || loop_length_beats <= 0.0
+                    || project::validate_volume(gain_db).is_err()
+                    || !source_tempo.is_finite()
+                    || !(20.0..=999.0).contains(&source_tempo)
+                {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                let name_length = self.count()?;
+                if name_length > 1024 {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                let name = std::str::from_utf8(self.bytes(name_length)?)
+                    .map_err(|_| PersistenceError::InvalidFormat)?;
+                project::validate_name(name).map_err(|_| PersistenceError::InvalidFormat)?;
+                let path_length = self.count()?;
+                if path_length > 4096 {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                let media_path = std::str::from_utf8(self.bytes(path_length)?)
+                    .map_err(|_| PersistenceError::InvalidFormat)?;
+                project::validate_media_path(media_path)
+                    .map_err(|_| PersistenceError::InvalidFormat)?;
+                audio_clips.push(AudioClip {
+                    id: ClipId(id),
+                    name: name.into(),
+                    color_index,
+                    loop_start_beats,
+                    loop_length_beats,
+                    media_path: media_path.into(),
+                    gain_db,
+                    reverse: flags & 1 != 0,
+                    warp: flags & 2 != 0,
+                    source_tempo,
+                });
+            }
+        }
+
         for track in &mut tracks {
             let slot_count = self.count()?;
             if slot_count != scenes.len() {
@@ -280,7 +354,17 @@ impl<'a> Decoder<'a> {
             }
             for _ in 0..slot_count {
                 let id = u64::from_le_bytes(self.array()?);
-                if id != 0 && !clips.iter().any(|clip| clip.id.0 == id) {
+                if id != 0
+                    && !clips.iter().any(|clip| clip.id.0 == id)
+                    && !audio_clips.iter().any(|clip| clip.id.0 == id)
+                {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                if id != 0
+                    && ((clips.iter().any(|clip| clip.id.0 == id) && track.kind != TrackKind::Midi)
+                        || (audio_clips.iter().any(|clip| clip.id.0 == id)
+                            && track.kind != TrackKind::Audio))
+                {
                     return Err(PersistenceError::InvalidFormat);
                 }
                 track.session_slots.push((id != 0).then_some(ClipId(id)));
@@ -291,7 +375,17 @@ impl<'a> Decoder<'a> {
                 let start_beats = f64::from_le_bytes(self.array()?);
                 let length_beats = f64::from_le_bytes(self.array()?);
                 if !clips.iter().any(|item| item.id.0 == clip)
-                    || !start_beats.is_finite()
+                    && !audio_clips.iter().any(|item| item.id.0 == clip)
+                {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                if (clips.iter().any(|item| item.id.0 == clip) && track.kind != TrackKind::Midi)
+                    || (audio_clips.iter().any(|item| item.id.0 == clip)
+                        && track.kind != TrackKind::Audio)
+                {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                if !start_beats.is_finite()
                     || start_beats < 0.0
                     || !length_beats.is_finite()
                     || length_beats <= 0.0
@@ -316,6 +410,17 @@ impl<'a> Decoder<'a> {
         }) {
             return Err(PersistenceError::InvalidFormat);
         }
+        if audio_clips.iter().any(|clip| {
+            !tracks.iter().any(|track| {
+                track.session_slots.contains(&Some(clip.id))
+                    || track
+                        .arrangement
+                        .iter()
+                        .any(|placement| placement.clip == clip.id)
+            })
+        }) {
+            return Err(PersistenceError::InvalidFormat);
+        }
         Ok(Arc::new(Snapshot {
             tempo,
             numerator,
@@ -324,6 +429,7 @@ impl<'a> Decoder<'a> {
             tracks,
             scenes,
             clips,
+            audio_clips,
         }))
     }
 }

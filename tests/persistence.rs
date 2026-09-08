@@ -4,10 +4,16 @@ use nylon::project::{Command, MidiNote, Project, TrackKind};
 fn session() -> Project {
     let mut project = Project::new();
     project
-        .apply(&[Command::CreateTrack {
-            name: "Synth".into(),
-            kind: TrackKind::Midi,
-        }])
+        .apply(&[
+            Command::CreateTrack {
+                name: "Synth".into(),
+                kind: TrackKind::Midi,
+            },
+            Command::CreateTrack {
+                name: "Recording".into(),
+                kind: TrackKind::Audio,
+            },
+        ])
         .unwrap();
     let id = project.snapshot().tracks()[0].id();
     project
@@ -56,6 +62,41 @@ fn session() -> Project {
             },
         ])
         .unwrap();
+    let audio_track = project.snapshot().tracks()[1].id();
+    project
+        .apply(&[Command::CreateAudioClip {
+            track: audio_track,
+            scene,
+            name: "Take".into(),
+            media_path: "Media/take.wav".into(),
+            length_beats: 7.0,
+            source_tempo: 128.0,
+        }])
+        .unwrap();
+    let audio = project.snapshot().audio_clip_at(1, 0).unwrap().id();
+    project
+        .apply(&[
+            Command::SetAudioClipGain {
+                id: audio,
+                db: -3.0,
+            },
+            Command::SetAudioClipReverse {
+                id: audio,
+                enabled: true,
+            },
+            Command::SetAudioClipWarp {
+                id: audio,
+                enabled: true,
+                source_tempo: 126.0,
+            },
+            Command::PlaceClip {
+                track: audio_track,
+                clip: audio,
+                start_beats: 21.0,
+                length_beats: 7.0,
+            },
+        ])
+        .unwrap();
     project.apply(&[Command::SetTempo(135.0)]).unwrap();
     project.undo();
     project
@@ -91,7 +132,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 3;
+    future[4] = 4;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)
@@ -126,6 +167,37 @@ fn version_one_empty_project_migrates_without_data_loss() {
     assert_eq!(loaded.snapshot().tempo(), 120.0);
     assert!(loaded.snapshot().tracks().is_empty());
     assert!(loaded.snapshot().scenes().is_empty());
+}
+
+#[test]
+fn version_two_empty_project_migrates_without_data_loss() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"NYLN");
+    bytes.extend_from_slice(&2_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u64.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&120_f64.to_le_bytes());
+    bytes.extend_from_slice(&4_u16.to_le_bytes());
+    bytes.extend_from_slice(&4_u16.to_le_bytes());
+    bytes.extend_from_slice(&48000_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    let mut checksum = !0_u32;
+    for byte in &bytes {
+        checksum ^= u32::from(*byte);
+        for _ in 0..8 {
+            checksum = (checksum >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(checksum & 1));
+        }
+    }
+    bytes.extend_from_slice(&(!checksum).to_le_bytes());
+    let loaded = Project::from_bytes(&bytes).unwrap();
+    assert_eq!(loaded.snapshot().tempo(), 120.0);
+    assert!(loaded.snapshot().tracks().is_empty());
+    assert!(loaded.snapshot().scenes().is_empty());
+    assert!(loaded.snapshot().clips().is_empty());
+    assert!(loaded.snapshot().audio_clips().is_empty());
 }
 
 #[test]

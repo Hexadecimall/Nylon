@@ -62,6 +62,51 @@ impl MidiClip {
     }
 }
 
+/// Audio media referenced by a session slot and arrangement placements.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioClip {
+    pub(crate) id: ClipId,
+    pub(crate) name: String,
+    pub(crate) color_index: u8,
+    pub(crate) loop_start_beats: f64,
+    pub(crate) loop_length_beats: f64,
+    pub(crate) media_path: String,
+    pub(crate) gain_db: f64,
+    pub(crate) reverse: bool,
+    pub(crate) warp: bool,
+    pub(crate) source_tempo: f64,
+}
+
+impl AudioClip {
+    pub fn id(&self) -> ClipId {
+        self.id
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn color_index(&self) -> u8 {
+        self.color_index
+    }
+    pub fn loop_range(&self) -> (f64, f64) {
+        (self.loop_start_beats, self.loop_length_beats)
+    }
+    pub fn media_path(&self) -> &str {
+        &self.media_path
+    }
+    pub fn gain_db(&self) -> f64 {
+        self.gain_db
+    }
+    pub fn reversed(&self) -> bool {
+        self.reverse
+    }
+    pub fn warped(&self) -> bool {
+        self.warp
+    }
+    pub fn source_tempo(&self) -> f64 {
+        self.source_tempo
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ArrangementPlacement {
     pub(crate) clip: ClipId,
@@ -169,6 +214,7 @@ pub struct Snapshot {
     pub(crate) sample_rate: u32,
     pub(crate) scenes: Vec<Scene>,
     pub(crate) clips: Vec<MidiClip>,
+    pub(crate) audio_clips: Vec<AudioClip>,
 }
 
 impl Snapshot {
@@ -187,9 +233,19 @@ impl Snapshot {
     pub fn scenes(&self) -> &[Scene] {
         &self.scenes
     }
+    pub fn clips(&self) -> &[MidiClip] {
+        &self.clips
+    }
+    pub fn audio_clips(&self) -> &[AudioClip] {
+        &self.audio_clips
+    }
     pub fn clip_at(&self, track: usize, scene: usize) -> Option<&MidiClip> {
         let id = self.tracks.get(track)?.session_slots.get(scene)?.as_ref()?;
         self.clips.iter().find(|clip| clip.id == *id)
+    }
+    pub fn audio_clip_at(&self, track: usize, scene: usize) -> Option<&AudioClip> {
+        let id = self.tracks.get(track)?.session_slots.get(scene)?.as_ref()?;
+        self.audio_clips.iter().find(|clip| clip.id == *id)
     }
 
     fn track_mut(&mut self, id: TrackId) -> Result<&mut Track, ProjectError> {
@@ -255,6 +311,14 @@ pub enum Command {
         name: String,
         length_beats: f64,
     },
+    CreateAudioClip {
+        track: TrackId,
+        scene: SceneId,
+        name: String,
+        media_path: String,
+        length_beats: f64,
+        source_tempo: f64,
+    },
     DeleteClip {
         track: TrackId,
         scene: SceneId,
@@ -271,6 +335,19 @@ pub enum Command {
         id: ClipId,
         start_beats: f64,
         length_beats: f64,
+    },
+    SetAudioClipGain {
+        id: ClipId,
+        db: f64,
+    },
+    SetAudioClipReverse {
+        id: ClipId,
+        enabled: bool,
+    },
+    SetAudioClipWarp {
+        id: ClipId,
+        enabled: bool,
+        source_tempo: f64,
     },
     AddNote {
         id: ClipId,
@@ -318,6 +395,7 @@ pub enum ProjectError {
     MissingClip,
     OccupiedClipSlot,
     InvalidClipLength,
+    InvalidMediaPath,
     InvalidNote,
     MissingNote,
     MissingPlacement,
@@ -355,6 +433,7 @@ impl Project {
                 sample_rate: 48000,
                 scenes,
                 clips: Vec::new(),
+                audio_clips: Vec::new(),
             }),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -507,6 +586,42 @@ impl Project {
                         notes: Vec::new(),
                     });
                 }
+                Command::CreateAudioClip {
+                    track,
+                    scene,
+                    name,
+                    media_path,
+                    length_beats,
+                    source_tempo,
+                } => {
+                    validate_name(name)?;
+                    validate_media_path(media_path)?;
+                    validate_positive_beats(*length_beats)?;
+                    validate_tempo(*source_tempo)?;
+                    let scene = scene_index(&snapshot, *scene)?;
+                    let id = ClipId(next_id);
+                    next_id = next_identifier(next_id)?;
+                    let color_index = {
+                        let track = snapshot.track_mut(*track)?;
+                        if track.kind != TrackKind::Audio || track.session_slots[scene].is_some() {
+                            return Err(ProjectError::OccupiedClipSlot);
+                        }
+                        track.session_slots[scene] = Some(id);
+                        track.color_index
+                    };
+                    snapshot.audio_clips.push(AudioClip {
+                        id,
+                        name: name.clone(),
+                        color_index,
+                        loop_start_beats: 0.0,
+                        loop_length_beats: *length_beats,
+                        media_path: media_path.clone(),
+                        gain_db: 0.0,
+                        reverse: false,
+                        warp: false,
+                        source_tempo: *source_tempo,
+                    });
+                }
                 Command::DeleteClip { track, scene } => {
                     let scene = scene_index(&snapshot, *scene)?;
                     let track = snapshot.track_mut(*track)?;
@@ -517,13 +632,13 @@ impl Project {
                 }
                 Command::SetClipName { id, name } => {
                     validate_name(name)?;
-                    clip_mut(&mut snapshot, *id)?.name = name.clone();
+                    set_clip_name(&mut snapshot, *id, name.clone())?;
                 }
                 Command::SetClipColor { id, index } => {
                     if *index >= 16 {
                         return Err(ProjectError::InvalidColor);
                     }
-                    clip_mut(&mut snapshot, *id)?.color_index = *index;
+                    set_clip_color(&mut snapshot, *id, *index)?;
                 }
                 Command::SetClipLoop {
                     id,
@@ -532,13 +647,28 @@ impl Project {
                 } => {
                     validate_nonnegative_beats(*start_beats)?;
                     validate_positive_beats(*length_beats)?;
-                    let clip = clip_mut(&mut snapshot, *id)?;
-                    clip.loop_start_beats = *start_beats;
-                    clip.loop_length_beats = *length_beats;
+                    set_clip_loop(&mut snapshot, *id, *start_beats, *length_beats)?;
+                }
+                Command::SetAudioClipGain { id, db } => {
+                    validate_volume(*db)?;
+                    audio_clip_mut(&mut snapshot, *id)?.gain_db = *db;
+                }
+                Command::SetAudioClipReverse { id, enabled } => {
+                    audio_clip_mut(&mut snapshot, *id)?.reverse = *enabled;
+                }
+                Command::SetAudioClipWarp {
+                    id,
+                    enabled,
+                    source_tempo,
+                } => {
+                    validate_tempo(*source_tempo)?;
+                    let clip = audio_clip_mut(&mut snapshot, *id)?;
+                    clip.warp = *enabled;
+                    clip.source_tempo = *source_tempo;
                 }
                 Command::AddNote { id, note } => {
                     validate_note(*note)?;
-                    let clip = clip_mut(&mut snapshot, *id)?;
+                    let clip = midi_clip_mut(&mut snapshot, *id)?;
                     clip.notes.push(*note);
                     clip.notes.sort_by(|a, b| {
                         a.start_beats
@@ -547,7 +677,7 @@ impl Project {
                     });
                 }
                 Command::RemoveNote { id, index } => {
-                    let clip = clip_mut(&mut snapshot, *id)?;
+                    let clip = midi_clip_mut(&mut snapshot, *id)?;
                     if *index >= clip.notes.len() {
                         return Err(ProjectError::MissingNote);
                     }
@@ -555,7 +685,7 @@ impl Project {
                 }
                 Command::MoveNote { id, index, note } => {
                     validate_note(*note)?;
-                    let clip = clip_mut(&mut snapshot, *id)?;
+                    let clip = midi_clip_mut(&mut snapshot, *id)?;
                     if *index >= clip.notes.len() {
                         return Err(ProjectError::MissingNote);
                     }
@@ -574,7 +704,8 @@ impl Project {
                 } => {
                     validate_nonnegative_beats(*start_beats)?;
                     validate_positive_beats(*length_beats)?;
-                    clip_mut(&mut snapshot, *clip)?;
+                    let kind = snapshot.track_mut(*track)?.kind;
+                    validate_clip_track(&snapshot, *clip, kind)?;
                     snapshot
                         .track_mut(*track)?
                         .arrangement
@@ -638,9 +769,34 @@ impl Project {
     }
 }
 
+fn validate_tempo(tempo: f64) -> Result<(), ProjectError> {
+    if tempo.is_finite() && (20.0..=999.0).contains(&tempo) {
+        Ok(())
+    } else {
+        Err(ProjectError::InvalidTempo)
+    }
+}
+
 pub(crate) fn validate_name(name: &str) -> Result<(), ProjectError> {
     if name.trim().is_empty() || name.len() > 1024 || name.chars().any(char::is_control) {
         Err(ProjectError::InvalidName)
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_media_path(path: &str) -> Result<(), ProjectError> {
+    if path.is_empty()
+        || path.len() > 4096
+        || path.starts_with('/')
+        || path.starts_with("~/")
+        || path.contains('\\')
+        || path.chars().any(char::is_control)
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        Err(ProjectError::InvalidMediaPath)
     } else {
         Ok(())
     }
@@ -692,12 +848,73 @@ fn scene_index(snapshot: &Snapshot, id: SceneId) -> Result<usize, ProjectError> 
         .ok_or(ProjectError::MissingScene)
 }
 
-fn clip_mut(snapshot: &mut Snapshot, id: ClipId) -> Result<&mut MidiClip, ProjectError> {
+fn midi_clip_mut(snapshot: &mut Snapshot, id: ClipId) -> Result<&mut MidiClip, ProjectError> {
     snapshot
         .clips
         .iter_mut()
         .find(|clip| clip.id == id)
         .ok_or(ProjectError::MissingClip)
+}
+
+fn audio_clip_mut(snapshot: &mut Snapshot, id: ClipId) -> Result<&mut AudioClip, ProjectError> {
+    snapshot
+        .audio_clips
+        .iter_mut()
+        .find(|clip| clip.id == id)
+        .ok_or(ProjectError::MissingClip)
+}
+
+fn validate_clip_track(
+    snapshot: &Snapshot,
+    id: ClipId,
+    track: TrackKind,
+) -> Result<(), ProjectError> {
+    if snapshot.clips.iter().any(|clip| clip.id == id) {
+        return (track == TrackKind::Midi)
+            .then_some(())
+            .ok_or(ProjectError::MissingClip);
+    }
+    if snapshot.audio_clips.iter().any(|clip| clip.id == id) {
+        return (track == TrackKind::Audio)
+            .then_some(())
+            .ok_or(ProjectError::MissingClip);
+    }
+    Err(ProjectError::MissingClip)
+}
+
+fn set_clip_name(snapshot: &mut Snapshot, id: ClipId, name: String) -> Result<(), ProjectError> {
+    if let Some(clip) = snapshot.clips.iter_mut().find(|clip| clip.id == id) {
+        clip.name = name;
+        return Ok(());
+    }
+    audio_clip_mut(snapshot, id)?.name = name;
+    Ok(())
+}
+
+fn set_clip_color(snapshot: &mut Snapshot, id: ClipId, color: u8) -> Result<(), ProjectError> {
+    if let Some(clip) = snapshot.clips.iter_mut().find(|clip| clip.id == id) {
+        clip.color_index = color;
+        return Ok(());
+    }
+    audio_clip_mut(snapshot, id)?.color_index = color;
+    Ok(())
+}
+
+fn set_clip_loop(
+    snapshot: &mut Snapshot,
+    id: ClipId,
+    start: f64,
+    length: f64,
+) -> Result<(), ProjectError> {
+    if let Some(clip) = snapshot.clips.iter_mut().find(|clip| clip.id == id) {
+        clip.loop_start_beats = start;
+        clip.loop_length_beats = length;
+        return Ok(());
+    }
+    let clip = audio_clip_mut(snapshot, id)?;
+    clip.loop_start_beats = start;
+    clip.loop_length_beats = length;
+    Ok(())
 }
 
 fn validate_nonnegative_beats(value: f64) -> Result<(), ProjectError> {
@@ -726,6 +943,15 @@ fn validate_note(note: MidiNote) -> Result<(), ProjectError> {
 
 fn remove_unreferenced_clips(snapshot: &mut Snapshot) {
     snapshot.clips.retain(|clip| {
+        snapshot.tracks.iter().any(|track| {
+            track.session_slots.contains(&Some(clip.id))
+                || track
+                    .arrangement
+                    .iter()
+                    .any(|placement| placement.clip == clip.id)
+        })
+    });
+    snapshot.audio_clips.retain(|clip| {
         snapshot.tracks.iter().any(|track| {
             track.session_slots.contains(&Some(clip.id))
                 || track

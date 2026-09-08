@@ -90,6 +90,98 @@ fn empty_transaction_preserves_history_and_names_are_validated() {
 }
 
 #[test]
+fn audio_clips_are_undoable_and_reject_unsafe_media_paths() {
+    let mut project = Project::new();
+    project
+        .apply(&[Command::CreateTrack {
+            name: "Audio".into(),
+            kind: TrackKind::Audio,
+        }])
+        .unwrap();
+    let snapshot = project.snapshot();
+    let track = snapshot.tracks()[0].id();
+    let scene = snapshot.scenes()[0].id();
+    project
+        .apply(&[Command::CreateAudioClip {
+            track,
+            scene,
+            name: "Take".into(),
+            media_path: "Media/take.wav".into(),
+            length_beats: 8.0,
+            source_tempo: 120.0,
+        }])
+        .unwrap();
+    let clip = project.snapshot().audio_clip_at(0, 0).unwrap().id();
+    project
+        .apply(&[
+            Command::SetClipName {
+                id: clip,
+                name: "Edited".into(),
+            },
+            Command::SetClipColor { id: clip, index: 7 },
+            Command::SetClipLoop {
+                id: clip,
+                start_beats: 1.0,
+                length_beats: 3.0,
+            },
+            Command::SetAudioClipGain { id: clip, db: -6.0 },
+            Command::SetAudioClipReverse {
+                id: clip,
+                enabled: true,
+            },
+            Command::SetAudioClipWarp {
+                id: clip,
+                enabled: true,
+                source_tempo: 128.0,
+            },
+            Command::PlaceClip {
+                track,
+                clip,
+                start_beats: 4.0,
+                length_beats: 8.0,
+            },
+        ])
+        .unwrap();
+    let snapshot = project.snapshot();
+    let audio = snapshot.audio_clip_at(0, 0).unwrap();
+    assert_eq!(audio.name(), "Edited");
+    assert_eq!(audio.media_path(), "Media/take.wav");
+    assert_eq!(audio.color_index(), 7);
+    assert_eq!(audio.loop_range(), (1.0, 3.0));
+    assert_eq!(audio.gain_db(), -6.0);
+    assert!(audio.reversed());
+    assert!(audio.warped());
+    assert_eq!(audio.source_tempo(), 128.0);
+    assert_eq!(snapshot.tracks()[0].arrangement().len(), 1);
+
+    assert!(project.undo());
+    let snapshot = project.snapshot();
+    let audio = snapshot.audio_clip_at(0, 0).unwrap();
+    assert_eq!(audio.name(), "Take");
+    assert!(!audio.reversed());
+    assert!(project.redo());
+    assert!(project.snapshot().audio_clip_at(0, 0).unwrap().reversed());
+
+    for media_path in [
+        "",
+        "../take.wav",
+        "Media/../take.wav",
+        "/Media/take.wav",
+        "Media\\take.wav",
+    ] {
+        let result = project.apply(&[Command::CreateAudioClip {
+            track,
+            scene,
+            name: "Bad".into(),
+            media_path: media_path.into(),
+            length_beats: 1.0,
+            source_tempo: 120.0,
+        }]);
+        assert_eq!(result, Err(ProjectError::InvalidMediaPath));
+    }
+}
+
+#[test]
 fn long_history_round_trips() {
     let mut project = Project::new();
     for index in 0..2000 {
