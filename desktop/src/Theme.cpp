@@ -213,7 +213,9 @@ const QStringList& Theme::requiredColors()
         for (const char* extra : {"state.on", "state.solo", "state.arm", "state.play", "state.record",
                  "state.loop", "browser.background", "browser.selection", "browser.header",
                  "detail.background", "mixer.background", "fader.track", "fader.fill", "fader.handle",
-                 "knob.track", "knob.arc", "meter.background", "clip.empty.hover"}) {
+                 "knob.track", "knob.arc", "meter.background", "clip.empty.hover", "window.border",
+                 "titlebar.background", "panel.border", "window.control.close", "window.control.minimize",
+                 "window.control.zoom"}) {
             k.append(QString::fromLatin1(extra));
         }
         return k;
@@ -255,6 +257,13 @@ const QStringList& Theme::requiredMetrics()
         QStringLiteral("meter.clip.height"),
         QStringLiteral("strip.button.height"),
         QStringLiteral("transport.button.size"),
+        QStringLiteral("radius"),
+        QStringLiteral("radius.small"),
+        QStringLiteral("panel.gap"),
+        QStringLiteral("panel.padding"),
+        QStringLiteral("titlebar.height"),
+        QStringLiteral("window.border"),
+        QStringLiteral("window.control.size"),
     };
     return keys;
 }
@@ -350,55 +359,57 @@ QString Theme::styleSheet() const
     const int sep = qBound(0, metricInt(QStringLiteral("separator"), 1), kMaxStyleBorder);
     const int pad = qBound(0, metricInt(QStringLiteral("control.padding"), 4), kMaxStylePadding);
     const int ctrlH = qBound(kMinStyleControlHeight, metricInt(QStringLiteral("control.height"), 20), kMaxStyleControlHeight);
+    const int radius = qBound(0, metricInt(QStringLiteral("radius"), 8), 32);
+    const int radiusSmall = qBound(0, metricInt(QStringLiteral("radius.small"), 4), 16);
     return QStringLiteral(
         "QMainWindow, QDialog, QWidget#central { background: %BG; }"
         "QWidget { color: %TEXT; background: %BG; }"
-        "QMenuBar { background: %PANEL; color: %TEXT; border-bottom: %SEPpx solid %SEPC; padding: 0; }"
-        "QMenuBar::item { padding: %PADpx %PAD2px; background: transparent; }"
+        "QMenuBar { background: transparent; color: %TEXT; border: none; padding: 0; }"
+        "QMenuBar::item { padding: %PADpx %PAD2px; background: transparent; border-radius: %RSMALLpx; }"
         "QMenuBar::item:selected { background: %HOVER; }"
-        "QMenu { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; padding: %SEPpx; }"
-        "QMenu::item { padding: %PADpx %PAD3px; }"
+        "QMenu { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; border-radius: %RADIUSpx; padding: %PADpx; }"
+        "QMenu::item { padding: %PADpx %PAD3px; border-radius: %RSMALLpx; }"
         "QMenu::item:selected { background: %ACCENT; color: %ACCENTTEXT; }"
         "QMenu::item:disabled { color: %DISABLED; }"
         "QMenu::separator { height: %SEPpx; background: %SEPC; margin: %PADpx 0; }"
         "QPushButton, QToolButton { background: %CTRLBG; color: %CTRLTEXT; border: %SEPpx solid %BORDER;"
-        "  border-radius: 0; padding: 0 %PAD2px; min-height: %CTRLHpx; max-height: %CTRLHpx; }"
+        "  border-radius: %RSMALLpx; padding: 0 %PAD2px; min-height: %CTRLHpx; max-height: %CTRLHpx; }"
         "QPushButton:hover, QToolButton:hover { background: %HOVER; }"
         "QPushButton:pressed, QToolButton:pressed, QToolButton:checked { background: %PRESSED; }"
         "QToolButton:checked { color: %ACCENT; border-bottom: %SEP2px solid %ACCENT; }"
         "QPushButton:disabled, QToolButton:disabled { color: %DISABLED; }"
         "QDoubleSpinBox, QSpinBox, QLineEdit { background: %CTRLBG; color: %CTRLTEXT; border: %SEPpx solid %BORDER;"
-        "  border-radius: 0; padding: 0 %PADpx; min-height: %CTRLHpx; max-height: %CTRLHpx;"
+        "  border-radius: %RSMALLpx; padding: 0 %PADpx; min-height: %CTRLHpx; max-height: %CTRLHpx;"
         "  selection-background-color: %ACCENT; selection-color: %ACCENTTEXT; }"
         "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0; border: none; }"
         "QLabel { background: transparent; }"
         "QLabel#secondary { color: %SECONDARY; }"
-        "QStatusBar { background: %PANEL; color: %SECONDARY; border-top: %SEPpx solid %SEPC; }"
+        "QStatusBar { background: transparent; color: %SECONDARY; border: none; }"
         "QStatusBar::item { border: none; }"
-        "QSplitter::handle { background: %SEPC; }"
+        "QSplitter::handle { background: transparent; }"
         "QSplitter::handle:horizontal { width: %SEPpx; }"
         "QSplitter::handle:vertical { height: %SEPpx; }"
-        "QScrollBar:vertical { background: %PANEL; width: 10px; margin: 0; border: none; }"
-        "QScrollBar:horizontal { background: %PANEL; height: 10px; margin: 0; border: none; }"
-        "QScrollBar::handle { background: %RAISED; border: %SEPpx solid %PANEL; min-height: 20px; min-width: 20px; }"
+        "QScrollBar:vertical { background: transparent; width: 10px; margin: 0; border: none; }"
+        "QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; border: none; }"
+        "QScrollBar::handle { background: %RAISED; border: 2px solid transparent; border-radius: 5px; min-height: 20px; min-width: 20px; }"
         "QScrollBar::handle:hover { background: %HOVER; }"
         "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; background: none; }"
         "QScrollBar::add-page, QScrollBar::sub-page { background: none; }"
-        "QToolTip { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; padding: %PADpx; }"
-        "QListWidget, QTreeView, QListView { background: %BROWSERBG; color: %TEXT; border: none; outline: none;"
+        "QToolTip { background: %RAISED; color: %TEXT; border: %SEPpx solid %BORDER; border-radius: %RSMALLpx; padding: %PADpx; }"
+        "QListWidget, QTreeView, QListView { background: transparent; color: %TEXT; border: none; outline: none;"
         "  selection-background-color: %BROWSERSEL; selection-color: %TEXT; show-decoration-selected: 1; }"
-        "QListWidget::item, QTreeView::item { padding: %PADpx %PAD2px; border: none; }"
+        "QListWidget::item, QTreeView::item { padding: %PADpx %PAD2px; border: none; border-radius: %RSMALLpx; }"
         "QListWidget::item:selected, QTreeView::item:selected { background: %BROWSERSEL; color: %TEXT; }"
         "QListWidget::item:hover, QTreeView::item:hover { background: %HOVER; }"
-        "QTreeView::branch { background: %BROWSERBG; }"
-        "QComboBox { background: %CTRLBG; color: %CTRLTEXT; border: %SEPpx solid %BORDER; border-radius: 0;"
+        "QTreeView::branch { background: transparent; }"
+        "QComboBox { background: %CTRLBG; color: %CTRLTEXT; border: %SEPpx solid %BORDER; border-radius: %RSMALLpx;"
         "  padding: 0 %PADpx; min-height: %CTRLHpx; }"
         "QComboBox::drop-down { border: none; width: 16px; }"
         "QComboBox QAbstractItemView { background: %RAISED; color: %TEXT; selection-background-color: %ACCENT;"
         "  selection-color: %ACCENTTEXT; border: %SEPpx solid %BORDER; }"
         "QDialog { background: %BG; }"
         "QLabel#startTitle { color: %TEXT; }"
-        "QLabel#positionDisplay { background: %CTRLBG; border: %SEPpx solid %BORDER; padding: 0 %PADpx; }"
+        "QLabel#positionDisplay { background: %CTRLBG; border: %SEPpx solid %BORDER; border-radius: %RSMALLpx; padding: 0 %PADpx; }"
         "QLabel#positionDisplay:disabled { color: %DISABLED; }"
         "QLabel#detailTitle { color: %TEXT; padding-left: %PADpx; }"
         "QLabel#stripName { color: %TEXT; }"
@@ -409,6 +420,8 @@ QString Theme::styleSheet() const
         .replace(QLatin1String("%PANEL"), c("panel"))
         .replace(QLatin1String("%RAISED"), c("raised"))
         .replace(QLatin1String("%SEPC"), c("separator"))
+        .replace(QLatin1String("%RADIUS"), QString::number(radius))
+        .replace(QLatin1String("%RSMALL"), QString::number(radiusSmall))
         .replace(QLatin1String("%SEP2"), QString::number(sep * 2))
         .replace(QLatin1String("%SEP"), QString::number(sep))
         .replace(QLatin1String("%PAD3"), QString::number(pad * 3))

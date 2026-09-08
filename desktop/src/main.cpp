@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "RemoteControl.h"
 #include "ProjectBridge.h"
 #include "ThemeManager.h"
 
@@ -26,6 +27,8 @@ int main(int argc, char** argv)
         QStringLiteral("Theme to load at startup (default: the last one chosen)."), QStringLiteral("name"));
     const QCommandLineOption workspaceOption(QStringLiteral("workspace"),
         QStringLiteral("Skip the start screen and open an empty project."));
+    const QCommandLineOption startOption(QStringLiteral("start"),
+        QStringLiteral("Stay on the start screen (with --screenshot, captures it)."));
     const QCommandLineOption tracksOption(QStringLiteral("tracks"),
         QStringLiteral("Add this many tracks to the new project."), QStringLiteral("count"), QStringLiteral("0"));
     const QCommandLineOption screenshotOption(QStringLiteral("screenshot"),
@@ -34,9 +37,13 @@ int main(int argc, char** argv)
         QStringLiteral("Initial view: session or arrangement."), QStringLiteral("name"), QStringLiteral("session"));
     parser.addOption(themeOption);
     parser.addOption(workspaceOption);
+    parser.addOption(startOption);
     parser.addOption(tracksOption);
     parser.addOption(viewOption);
     parser.addOption(screenshotOption);
+    const QCommandLineOption controlOption(QStringLiteral("control"),
+        QStringLiteral("Enable local terminal control at the named endpoint."), QStringLiteral("name"));
+    parser.addOption(controlOption);
     parser.process(app);
 
     nylon::ThemeManager themes;
@@ -65,7 +72,7 @@ int main(int argc, char** argv)
         return 2;
     }
     nylon::MainWindow window(&bridge, &themes);
-    if (parser.isSet(workspaceOption) || parser.isSet(screenshotOption) || tracks > 0) {
+    if (!parser.isSet(startOption) && (parser.isSet(workspaceOption) || parser.isSet(screenshotOption) || tracks > 0)) {
         window.newProject();
         for (int i = 0; i < tracks; ++i) {
             if (!bridge.addTrack()) {
@@ -80,6 +87,12 @@ int main(int argc, char** argv)
     } else if (view != QLatin1String("session")) {
         std::fprintf(stderr, "--view expects 'session' or 'arrangement'\n");
         return 2;
+    }
+    nylon::RemoteControl control(&window);
+    if (parser.isSet(controlOption) &&
+        (parser.value(controlOption).isEmpty() || !control.listen(parser.value(controlOption)))) {
+        std::fprintf(stderr, "Could not open the local control endpoint\n");
+        return 1;
     }
     window.show();
 

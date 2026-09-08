@@ -9,6 +9,7 @@
 #include "SessionView.h"
 #include "StartScreen.h"
 #include "ThemeManager.h"
+#include "TitleBar.h"
 #include "TransportBar.h"
 
 #include <QAction>
@@ -27,6 +28,10 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QVBoxLayout>
+#include <QWindow>
+#include <QPainter>
+#include <QPainterPath>
+#include <QMouseEvent>
 
 namespace nylon {
 
@@ -39,15 +44,28 @@ MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* par
 {
     setWindowTitle(QStringLiteral("Nylon"));
     resize(1440, 900);
-    // The menu lives in the window on every platform so the layout reads
-    // the same everywhere.
-    menuBar()->setNativeMenuBar(false);
+    // Frameless with a painted rounded outline; the title bar below carries
+    // the menus and window controls on every platform.
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setMouseTracking(true);
+    // QMainWindow::menuBar() is never used: setMenuWidget would delete it
+    // and a later call would replace the title bar with a plain bar.
+    m_titleBar = new TitleBar(&themes->theme(), this);
+    setMenuWidget(m_titleBar);
+    connect(m_titleBar, &TitleBar::closeRequested, this, &QWidget::close);
+    connect(m_titleBar, &TitleBar::minimizeRequested, this, &QWidget::showMinimized);
+    connect(m_titleBar, &TitleBar::zoomRequested, this, &MainWindow::toggleMaximized);
+    connect(this, &QWidget::windowTitleChanged, m_titleBar, &TitleBar::setTitle);
+    m_titleBar->setTitle(windowTitle());
 
     buildWorkspace();
     m_root->addWidget(m_start);
     m_root->addWidget(m_workspace);
     setCentralWidget(m_root);
     statusBar()->setSizeGripEnabled(false);
+    // Edge resizing works on every child, so the filter sits on the app.
+    qApp->installEventFilter(this);
 
     connect(m_start, &StartScreen::newProjectRequested, this, &MainWindow::newProject);
     connect(m_start, &StartScreen::openProjectRequested, this, [this] {
@@ -65,7 +83,128 @@ MainWindow::MainWindow(ProjectBridge* bridge, ThemeManager* themes, QWidget* par
     showStartScreen();
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    qApp->removeEventFilter(this);
+}
+
+void MainWindow::toggleMaximized()
+{
+    if (isMaximized() || isFullScreen()) {
+        showNormal();
+    } else {
+        showMaximized();
+    }
+}
+
+Qt::Edges MainWindow::edgesAt(const QPoint& pos) const
+{
+    if (isMaximized() || isFullScreen()) {
+        return Qt::Edges();
+    }
+    const int grip = 6;
+    Qt::Edges edges;
+    if (pos.x() <= grip) {
+        edges |= Qt::LeftEdge;
+    }
+    if (pos.x() >= width() - grip) {
+        edges |= Qt::RightEdge;
+    }
+    if (pos.y() <= grip) {
+        edges |= Qt::TopEdge;
+    }
+    if (pos.y() >= height() - grip) {
+        edges |= Qt::BottomEdge;
+    }
+    return edges;
+}
+
+void MainWindow::updateResizeCursor(const QPoint& pos)
+{
+    const Qt::Edges e = edgesAt(pos);
+    Qt::CursorShape shape = Qt::ArrowCursor;
+    if ((e & Qt::LeftEdge && e & Qt::TopEdge) || (e & Qt::RightEdge && e & Qt::BottomEdge)) {
+        shape = Qt::SizeFDiagCursor;
+    } else if ((e & Qt::RightEdge && e & Qt::TopEdge) || (e & Qt::LeftEdge && e & Qt::BottomEdge)) {
+        shape = Qt::SizeBDiagCursor;
+    } else if (e & (Qt::LeftEdge | Qt::RightEdge)) {
+        shape = Qt::SizeHorCursor;
+    } else if (e & (Qt::TopEdge | Qt::BottomEdge)) {
+        shape = Qt::SizeVerCursor;
+    }
+    if (shape == Qt::ArrowCursor) {
+        unsetCursor();
+    } else {
+        setCursor(shape);
+    }
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseMove) {
+        auto* w = qobject_cast<QWidget*>(watched);
+        if (w && w->window() == this) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            const QPoint pos = mapFromGlobal(me->globalPosition().toPoint());
+            const Qt::Edges edges = edgesAt(pos);
+            if (event->type() == QEvent::MouseMove && !(me->buttons() & Qt::LeftButton)) {
+                updateResizeCursor(pos);
+            } else if (event->type() == QEvent::MouseButtonPress && edges && me->button() == Qt::LeftButton) {
+                if (QWindow* handle = windowHandle()) {
+                    handle->startSystemResize(edges);
+                    return true;
+                }
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::mousePressEvent(QMouseEvent* event)
+{
+    const Qt::Edges edges = edgesAt(event->pos());
+    if (edges && event->button() == Qt::LeftButton) {
+        if (QWindow* handle = windowHandle()) {
+            handle->startSystemResize(edges);
+            return;
+        }
+    }
+    QMainWindow::mousePressEvent(event);
+}
+
+void MainWindow::mouseMoveEvent(QMouseEvent* event)
+{
+    updateResizeCursor(event->pos());
+    QMainWindow::mouseMoveEvent(event);
+}
+
+void MainWindow::paintEvent(QPaintEvent*)
+{
+    const Theme& theme = m_themes->theme();
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const int radius = (isMaximized() || isFullScreen()) ? 0 : qBound(0, theme.metricInt(QStringLiteral("radius"), 8), 32);
+    const int border = qBound(0, theme.metricInt(QStringLiteral("window.border"), 1), 4);
+    QPainterPath path;
+    path.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
+    p.fillPath(path, theme.color(QStringLiteral("background")));
+    // Title band across the top, clipped to the rounded outline.
+    p.save();
+    p.setClipPath(path);
+    p.fillRect(QRect(0, 0, width(), m_titleBar->height()), theme.color(QStringLiteral("titlebar.background")));
+    p.restore();
+    if (border > 0) {
+        p.setPen(QPen(theme.color(QStringLiteral("window.border")), border));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(path);
+    }
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    update();
+}
 
 void MainWindow::buildWorkspace()
 {
@@ -292,11 +431,18 @@ void MainWindow::buildMenus()
     const QString noEdit = tr("Not available until the core exposes clip editing.");
     const QString noTransport = tr("Not available until an audio backend drives the transport.");
 
-    QMenu* file = menuBar()->addMenu(tr("&File"));
+    auto roundMenu = [](QMenu* m) {
+        m->setWindowFlag(Qt::FramelessWindowHint);
+        m->setWindowFlag(Qt::NoDropShadowWindowHint);
+        m->setAttribute(Qt::WA_TranslucentBackground);
+        return m;
+    };
+    QMenuBar* bar = m_titleBar->menuBar();
+    QMenu* file = roundMenu(bar->addMenu(tr("&File")));
     add(file, QStringLiteral("actionNew"), tr("&New Project"), QKeySequence::New, [this] { newProject(); });
     add(file, QStringLiteral("actionOpen"), tr("&Open..."), QKeySequence::Open, nullptr,
         ProjectBridge::isPersistenceAvailable(), noPersist);
-    m_recentMenu = file->addMenu(tr("Open &Recent"));
+    m_recentMenu = roundMenu(file->addMenu(tr("Open &Recent")));
     m_recentMenu->setEnabled(ProjectBridge::isPersistenceAvailable());
     QAction* clearRecent = m_recentMenu->addAction(tr("Clear List"));
     clearRecent->setObjectName(QStringLiteral("actionClearRecent"));
@@ -316,7 +462,7 @@ void MainWindow::buildMenus()
     file->addSeparator();
     add(file, QStringLiteral("actionQuit"), tr("&Quit"), QKeySequence::Quit, [this] { close(); });
 
-    QMenu* edit = menuBar()->addMenu(tr("&Edit"));
+    QMenu* edit = roundMenu(bar->addMenu(tr("&Edit")));
     add(edit, QStringLiteral("actionUndo"), tr("&Undo"), QKeySequence::Undo, [this] {
         if (!m_bridge->undo()) {
             showStatus(tr("Nothing to undo."));
@@ -338,7 +484,7 @@ void MainWindow::buildMenus()
     add(edit, QStringLiteral("actionRename"), tr("Re&name Track"), QKeySequence(Qt::CTRL | Qt::Key_R),
         [this] { renameSelectedTrack(); });
 
-    QMenu* create = menuBar()->addMenu(tr("&Create"));
+    QMenu* create = roundMenu(bar->addMenu(tr("&Create")));
     auto insert = [this](ProjectBridge::TrackKind kind) {
         if (!m_bridge->addTrack(kind)) {
             showStatus(tr("Could not add a track."));
@@ -358,7 +504,7 @@ void MainWindow::buildMenus()
     add(create, QStringLiteral("actionInsertClip"), tr("Insert Empty MIDI &Clip"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M),
         nullptr, false, noEdit);
 
-    QMenu* view = menuBar()->addMenu(tr("&View"));
+    QMenu* view = roundMenu(bar->addMenu(tr("&View")));
     QAction* browserAction = add(view, QStringLiteral("actionToggleBrowser"), tr("&Browser"),
         QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_B), nullptr);
     browserAction->setCheckable(true);
@@ -389,7 +535,7 @@ void MainWindow::buildMenus()
         }
     });
     view->addSeparator();
-    QMenu* themeMenu = view->addMenu(tr("&Theme"));
+    QMenu* themeMenu = roundMenu(view->addMenu(tr("&Theme")));
     m_themeActions = new QActionGroup(this);
     m_themeActions->setExclusive(true);
     for (const QString& name : ThemeManager::builtinNames()) {
@@ -413,7 +559,7 @@ void MainWindow::buildMenus()
         }
     });
 
-    QMenu* transport = menuBar()->addMenu(tr("&Transport"));
+    QMenu* transport = roundMenu(bar->addMenu(tr("&Transport")));
     add(transport, QStringLiteral("actionPlay"), tr("&Play"), QKeySequence(Qt::Key_Space), nullptr,
         ProjectBridge::isTransportAvailable(), noTransport);
     add(transport, QStringLiteral("actionStop"), tr("&Stop"), QKeySequence(Qt::SHIFT | Qt::Key_Space), nullptr,
@@ -426,7 +572,7 @@ void MainWindow::buildMenus()
     add(transport, QStringLiteral("actionMetronome"), tr("&Metronome"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K), nullptr,
         ProjectBridge::isTransportAvailable(), noTransport);
 
-    QMenu* help = menuBar()->addMenu(tr("&Help"));
+    QMenu* help = roundMenu(bar->addMenu(tr("&Help")));
     add(help, QStringLiteral("actionLibraryFolder"), tr("Show &Library Folder"), QKeySequence(), [this] {
         showStatus(BrowserPanel::libraryRoot());
     });
@@ -440,6 +586,12 @@ void MainWindow::buildMenus()
 void MainWindow::applyTheme(const Theme& theme)
 {
     qApp->setStyleSheet(theme.styleSheet());
+    m_titleBar->setTheme(&theme);
+    const int gap = qBound(0, theme.metricInt(QStringLiteral("panel.gap"), 6), 32);
+    if (auto* layout = m_workspace->layout()) {
+        layout->setContentsMargins(gap, gap, gap, gap);
+        layout->setSpacing(gap);
+    }
     m_start->setTheme(&theme);
     m_transport->setTheme(&theme);
     m_browser->setTheme(&theme);
@@ -447,9 +599,8 @@ void MainWindow::applyTheme(const Theme& theme)
     m_mixer->setTheme(&theme);
     m_arrangement->setTheme(&theme);
     m_detail->setTheme(&theme);
-    const int sep = qBound(1, theme.metricInt(QStringLiteral("separator"), 1), 4);
-    m_horizontal->setHandleWidth(sep);
-    m_vertical->setHandleWidth(sep);
+    m_horizontal->setHandleWidth(gap);
+    m_vertical->setHandleWidth(gap);
     if (m_themeActions) {
         for (QAction* a : m_themeActions->actions()) {
             a->setChecked(a->data().toString() == m_themes->currentName());

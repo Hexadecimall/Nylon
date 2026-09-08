@@ -1,6 +1,10 @@
 #include "BrowserPanel.h"
 
+#include "PanelPaint.h"
 #include "Theme.h"
+
+#include <QPaintEvent>
+#include <QPainter>
 
 #include <QDir>
 #include <QFileInfo>
@@ -54,7 +58,7 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
     , m_info(new QLabel(this))
 {
     setObjectName(QStringLiteral("browser"));
-    setAutoFillBackground(true);
+    setAutoFillBackground(false);
 
     m_search->setObjectName(QStringLiteral("browserSearch"));
     m_search->setPlaceholderText(tr("Search (Ctrl+F)"));
@@ -113,8 +117,8 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
     columns->addWidget(right, 1);
 
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    layout->setContentsMargins(6, 6, 6, 6);
+    layout->setSpacing(4);
     layout->addWidget(m_search);
     layout->addLayout(columns, 1);
 
@@ -142,9 +146,11 @@ void BrowserPanel::setTheme(const Theme* theme)
     m_theme = theme;
     const int w = m_theme->metricInt(QStringLiteral("browser.width"), 230);
     m_categories->setFixedWidth(qMax(80, w * 2 / 5));
+    const int pad = m_theme->metricInt(QStringLiteral("panel.padding"), 8);
+    layout()->setContentsMargins(pad, pad, pad, pad);
     QPalette pal = palette();
-    pal.setColor(QPalette::Window, m_theme->color(QStringLiteral("browser.background")));
-    pal.setColor(QPalette::Base, m_theme->color(QStringLiteral("browser.background")));
+    pal.setColor(QPalette::Window, Qt::transparent);
+    pal.setColor(QPalette::Base, Qt::transparent);
     pal.setColor(QPalette::Highlight, m_theme->color(QStringLiteral("browser.selection")));
     pal.setColor(QPalette::HighlightedText, m_theme->color(QStringLiteral("text.primary")));
     pal.setColor(QPalette::Text, m_theme->color(QStringLiteral("text.primary")));
@@ -268,6 +274,12 @@ void BrowserPanel::updateEmptyState()
     }
     m_empty->setVisible(empty);
     m_tree->setVisible(!empty);
+}
+
+void BrowserPanel::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    paint::panel(p, *m_theme, rect(), m_theme->color(QStringLiteral("browser.background")));
 }
 
 } // namespace nylon

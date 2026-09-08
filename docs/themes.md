@@ -75,6 +75,12 @@ active.
 | `knob.arc` | Knob value arc |
 | `meter.background` | Meter background |
 | `clip.empty.hover` | Hovered empty clip slot |
+| `window.border` | Outline of the frameless window |
+| `titlebar.background` | Title bar band |
+| `panel.border` | Outline of rounded panels |
+| `window.control.close` | Close window control |
+| `window.control.minimize` | Minimize window control |
+| `window.control.zoom` | Maximize/zoom window control |
 
 ## Required metrics
 
@@ -111,6 +117,13 @@ active.
 | `meter.clip.height` | Height of the clip indicator |
 | `strip.button.height` | Height of activator, solo, and arm buttons |
 | `transport.button.size` | Side of the transport glyph buttons |
+| `radius` | Corner radius of panels, menus, and the window |
+| `radius.small` | Corner radius of controls, slots, and list rows |
+| `panel.gap` | Space between panels |
+| `panel.padding` | Inner padding of panels |
+| `titlebar.height` | Height of the custom title bar |
+| `window.border` | Thickness of the window outline |
+| `window.control.size` | Diameter of the window controls |
 
 Metrics that reach the Qt style sheet are clamped before use: `separator`
 to 0–16, `control.padding` to 0–64, and `control.height` to 8–256. The views

@@ -1,6 +1,10 @@
 #include "DetailPanel.h"
 
+#include "PanelPaint.h"
 #include "Theme.h"
+
+#include <QPaintEvent>
+#include <QPainter>
 #include "widgets/FlatButton.h"
 
 #include <QHBoxLayout>
@@ -21,7 +25,7 @@ DetailPanel::DetailPanel(const Theme* theme, QWidget* parent)
     , m_deviceEmpty(new QLabel(this))
 {
     setObjectName(QStringLiteral("detail"));
-    setAutoFillBackground(true);
+    setAutoFillBackground(false);
 
     m_title->setObjectName(QStringLiteral("detailTitle"));
     m_clipTab->setText(tr("Clip"));
@@ -66,10 +70,7 @@ void DetailPanel::setTheme(const Theme* theme)
     m_theme = theme;
     m_clipTab->setTheme(theme);
     m_deviceTab->setTheme(theme);
-    QPalette pal = palette();
-    pal.setColor(QPalette::Window, m_theme->color(QStringLiteral("detail.background")));
-    setPalette(pal);
-    const int pad = m_theme->metricInt(QStringLiteral("control.padding"), 4);
+    const int pad = m_theme->metricInt(QStringLiteral("panel.padding"), 8);
     layout()->setContentsMargins(pad, pad, pad, pad);
     refresh();
 }
@@ -106,6 +107,12 @@ void DetailPanel::refresh()
     m_title->setText(m_trackName);
     m_clipEmpty->setText(tr("%1 has no clip in the selected slot.").arg(m_trackName));
     m_deviceEmpty->setText(tr("%1 has no devices.\nDrop an instrument or effect here from the browser.").arg(m_trackName));
+}
+
+void DetailPanel::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    paint::panel(p, *m_theme, rect(), m_theme->color(QStringLiteral("detail.background")));
 }
 
 } // namespace nylon

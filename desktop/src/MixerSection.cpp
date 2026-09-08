@@ -4,6 +4,8 @@
 #include "ProjectBridge.h"
 #include "Theme.h"
 
+#include "PanelPaint.h"
+
 #include <QPainter>
 #include <QScrollBar>
 
@@ -140,11 +142,16 @@ void MixerSection::relayout()
 {
     const int sep = qMax(0, m_theme->metricInt(QStringLiteral("separator"), 1));
     const int stripW = m_theme->metricInt(QStringLiteral("session.slot.width"), 96);
-    const int masterW = m_master->sizeHint().width();
+    const int masterW = m_theme->metricInt(QStringLiteral("session.master.width"), 72);
     const int h = height();
     const int scroll = m_scroll ? m_scroll->value() : 0;
-    m_master->setGeometry(width() - masterW, 0, masterW, h);
-    m_stripHost->setGeometry(0, 0, qMax(0, width() - masterW - sep), h);
+    // The master strip follows the grid's master column, but never leaves
+    // the visible area.
+    const qint64 masterX = qint64(m_strips.size()) * (stripW + sep) - scroll;
+    const qint64 maxX = qMax(0, width() - masterW);
+    const int mx = static_cast<int>(qBound<qint64>(0, masterX, maxX));
+    m_master->setGeometry(mx, 0, masterW, h);
+    m_stripHost->setGeometry(0, 0, qMax(0, mx - sep), h);
     for (int i = 0; i < m_strips.size(); ++i) {
         m_strips[i]->setGeometry(i * (stripW + sep) - scroll, 0, stripW, h);
     }
@@ -153,9 +160,7 @@ void MixerSection::relayout()
 void MixerSection::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    p.fillRect(rect(), m_theme->color(QStringLiteral("mixer.background")));
-    p.fillRect(QRect(0, 0, width(), qBound(0, m_theme->metricInt(QStringLiteral("separator"), 1), 4)),
-        m_theme->color(QStringLiteral("separator")));
+    p.fillRect(rect(), m_theme->color(QStringLiteral("background")));
 }
 
 } // namespace nylon

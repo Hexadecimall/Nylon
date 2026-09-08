@@ -50,6 +50,9 @@ signals:
     void fileActivated(const QString& path);
     void selectionChanged(const QString& path);
 
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
 private:
     void ensureLibraryLayout();
     void updateEmptyState();

@@ -5,6 +5,8 @@
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include "PanelPaint.h"
+
 #include <QPainter>
 
 namespace nylon {
@@ -126,9 +128,12 @@ void ValueBox::paintEvent(QPaintEvent*)
     QPainter p(this);
     const Theme* t = theme();
     const int sep = qBound(0, t->metricInt(QStringLiteral("separator"), 1), 4);
-    p.fillRect(rect(), t->color(QStringLiteral("control.background")));
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QPainterPath shape = paint::rounded(*t, QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5));
+    p.fillPath(shape, t->color(QStringLiteral("control.background")));
     p.setPen(QPen(hasFocus() ? t->color(QStringLiteral("accent")) : t->color(QStringLiteral("control.border")), sep));
-    p.drawRect(rect().adjusted(0, 0, -1, -1));
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(shape);
     p.setPen(isEnabled() ? t->color(QStringLiteral("control.text")) : t->color(QStringLiteral("control.disabled")));
     const int pad = t->metricInt(QStringLiteral("control.padding"), 4);
     const QString shown = m_editing ? m_buffer + QStringLiteral("_") : text();

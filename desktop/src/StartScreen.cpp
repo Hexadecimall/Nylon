@@ -1,5 +1,6 @@
 #include "StartScreen.h"
 
+#include "PanelPaint.h"
 #include "Theme.h"
 #include "widgets/FlatButton.h"
 
@@ -156,7 +157,8 @@ void StartScreen::reloadRecent()
 void StartScreen::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    p.fillRect(rect(), m_theme->color(QStringLiteral("background")));
+    const int pad = m_theme->metricInt(QStringLiteral("panel.gap"), 6);
+    paint::panel(p, *m_theme, rect().adjusted(pad, pad, -pad, -pad), m_theme->color(QStringLiteral("panel")));
 }
 
 } // namespace nylon

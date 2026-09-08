@@ -104,3 +104,19 @@ metric.meter.channel.width = 4
 metric.meter.clip.height = 4
 metric.strip.button.height = 16
 metric.transport.button.size = 22
+
+# Window chrome
+color.window.border = #464B50
+color.titlebar.background = #2F3337
+color.panel.border = #3D4146
+color.window.control.close = #D47A66
+color.window.control.minimize = #D2AD57
+color.window.control.zoom = #7ABE89
+
+metric.radius = 8
+metric.radius.small = 4
+metric.panel.gap = 6
+metric.panel.padding = 8
+metric.titlebar.height = 36
+metric.window.border = 1
+metric.window.control.size = 12

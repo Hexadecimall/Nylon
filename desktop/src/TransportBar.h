@@ -38,6 +38,9 @@ public:
     ValueBox* denominatorBox() const { return m_denominator; }
     bool isTransportAvailable() const { return m_transportAvailable; }
 
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
 signals:
     void message(const QString& text);
     void sessionRequested();

@@ -25,7 +25,7 @@ elseif(MSVC)
     add_compile_options("/pathmap:${NYLON_REPO_ROOT}=.")
 endif()
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Test Network)
 
 # The core library and its C++ binding.
 add_subdirectory("${NYLON_REPO_ROOT}/bindings/cpp" bindings_cpp)
@@ -33,6 +33,8 @@ add_subdirectory("${NYLON_REPO_ROOT}/bindings/cpp" bindings_cpp)
 # Everything except main.cpp lives in a static library so the tests link the
 # same objects as the application.
 add_library(nylon_desktop STATIC
+    src/RemoteControl.cpp
+    src/RemoteControl.h
     src/LayoutMath.h
     src/widgets/ControlWidget.cpp
     src/widgets/ControlWidget.h
@@ -56,6 +58,8 @@ add_library(nylon_desktop STATIC
     src/MixerSection.h
     src/StartScreen.cpp
     src/StartScreen.h
+    src/TitleBar.cpp
+    src/TitleBar.h
     src/PreferencesDialog.cpp
     src/PreferencesDialog.h
     src/Theme.cpp
@@ -75,7 +79,7 @@ add_library(nylon_desktop STATIC
     themes.qrc
 )
 target_include_directories(nylon_desktop PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(nylon_desktop PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets nyloncpp)
+target_link_libraries(nylon_desktop PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network nyloncpp)
 target_compile_definitions(nylon_desktop PUBLIC NYLON_VERSION_STRING="${PROJECT_VERSION}")
 if(MSVC)
     target_compile_options(nylon_desktop PUBLIC /W4 /permissive-)
@@ -94,10 +98,18 @@ set_target_properties(nylon PROPERTIES
     MACOSX_BUNDLE_COPYRIGHT "Copyright (c) Nylon Contributors")
 
 enable_testing()
-foreach(_test layout theme bridge widgets views)
+foreach(_test layout theme bridge widgets views control)
     add_executable(test_${_test} tests/test_${_test}.cpp)
     target_link_libraries(test_${_test} PRIVATE nylon_desktop Qt6::Test)
     add_test(NAME ${_test} COMMAND test_${_test})
     # Widgets need a display; the offscreen platform works on every CI host.
     set_tests_properties(${_test} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endforeach()
+
+add_executable(nylon_control ../cli/main.cpp)
+target_link_libraries(nylon_control PRIVATE Qt6::Core Qt6::Network)
+set_target_properties(nylon_control PROPERTIES OUTPUT_NAME "nylon-control")
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME control_process COMMAND "${Python3_EXECUTABLE}"
+    "${NYLON_REPO_ROOT}/scripts/test_control_process.py"
+    "$<TARGET_FILE:nylon>" "$<TARGET_FILE:nylon_control>")

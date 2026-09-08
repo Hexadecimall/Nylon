@@ -31,6 +31,9 @@ public slots:
     void showClipPage() { showPage(Page::Clip); }
     void showDevicePage() { showPage(Page::Device); }
 
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
 private:
     void refresh();
 

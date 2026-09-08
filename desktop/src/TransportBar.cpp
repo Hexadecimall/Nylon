@@ -5,8 +5,12 @@
 #include "widgets/FlatButton.h"
 #include "widgets/ValueBox.h"
 
+#include "PanelPaint.h"
+
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPaintEvent>
+#include <QPainter>
 
 namespace nylon {
 
@@ -29,7 +33,7 @@ TransportBar::TransportBar(ProjectBridge* bridge, const Theme* theme, QWidget* p
     , m_arrangement(new FlatButton(theme, this))
 {
     setObjectName(QStringLiteral("transport"));
-    setAutoFillBackground(true);
+    setAutoFillBackground(false);
 
     m_tempo->setObjectName(QStringLiteral("tempo"));
     m_tempo->setRange(20.0, 999.0);
@@ -151,8 +155,8 @@ void TransportBar::setTheme(const Theme* theme)
     m_denominator->setTheme(theme);
     const int h = theme->metricInt(QStringLiteral("transport.height"), 28);
     setFixedHeight(h + 8);
-    const int pad = theme->metricInt(QStringLiteral("control.padding"), 4);
-    layout()->setContentsMargins(pad * 2, 4, pad * 2, 4);
+    const int pad = theme->metricInt(QStringLiteral("panel.padding"), 8);
+    layout()->setContentsMargins(pad, 4, pad, 4);
     layout()->setSpacing(qMax(1, theme->metricInt(QStringLiteral("transport.spacing"), 8) / 4));
     const int side = theme->metricInt(QStringLiteral("transport.button.size"), 22);
     for (FlatButton* b : {m_metronome, m_play, m_stop, m_record, m_loop}) {
@@ -162,10 +166,13 @@ void TransportBar::setTheme(const Theme* theme)
     m_numerator->setFixedWidth(theme->metricInt(QStringLiteral("control.height"), 20) + 12);
     m_denominator->setFixedWidth(theme->metricInt(QStringLiteral("control.height"), 20) + 12);
     m_position->setFixedWidth(theme->metricInt(QStringLiteral("transport.tempo.width"), 96));
-    QPalette pal = palette();
-    pal.setColor(QPalette::Window, theme->color(QStringLiteral("panel")));
-    setPalette(pal);
     update();
+}
+
+void TransportBar::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    paint::panel(p, *m_theme, rect(), m_theme->color(QStringLiteral("panel")));
 }
 
 void TransportBar::setTransportAvailable(bool available)

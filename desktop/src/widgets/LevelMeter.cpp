@@ -3,6 +3,7 @@
 #include "Theme.h"
 
 #include <QPainter>
+#include <QPainterPath>
 
 namespace nylon {
 
@@ -106,10 +107,17 @@ void LevelMeter::paintEvent(QPaintEvent*)
     const QColor clip = m_theme->color(QStringLiteral("meter.clip"));
     const int top = clipH + 2;
     const int barH = qMax(1, height() - top);
+    p.setRenderHint(QPainter::Antialiasing, true);
     for (int ch = 0; ch < channelCount(); ++ch) {
         const int x = 1 + ch * (w + 1);
-        p.fillRect(QRect(x, 0, w, clipH), m_clip.at(ch) ? clip : background);
-        p.fillRect(QRect(x, top, w, barH), background);
+        QPainterPath clipPath;
+        clipPath.addRoundedRect(QRectF(x, 0, w, clipH), 1.5, 1.5);
+        p.fillPath(clipPath, m_clip.at(ch) ? clip : background);
+        QPainterPath barPath;
+        barPath.addRoundedRect(QRectF(x, top, w, barH), w / 2.0, w / 2.0);
+        p.fillPath(barPath, background);
+        p.save();
+        p.setClipPath(barPath);
         const int rmsH = static_cast<int>(fraction(m_rms.at(ch)) * barH);
         if (rmsH > 0) {
             p.fillRect(QRect(x, top + barH - rmsH, w, rmsH), rms);
@@ -118,6 +126,7 @@ void LevelMeter::paintEvent(QPaintEvent*)
         if (m_peak.at(ch) > m_floor) {
             p.fillRect(QRect(x, qMax(top, peakY - 1), w, 1), peak);
         }
+        p.restore();
     }
 }
 

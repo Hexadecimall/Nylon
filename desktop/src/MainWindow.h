@@ -19,6 +19,7 @@ class SessionView;
 class StartScreen;
 class Theme;
 class ThemeManager;
+class TitleBar;
 class TransportBar;
 
 class MainWindow : public QMainWindow {
@@ -35,6 +36,7 @@ public:
     DetailPanel* detail() const { return m_detail; }
     MixerSection* mixer() const { return m_mixer; }
     StartScreen* startScreen() const { return m_start; }
+    TitleBar* titleBar() const { return m_titleBar; }
 
     bool isStartScreenVisible() const;
     bool isSessionVisible() const;
@@ -50,9 +52,15 @@ public slots:
     void showPreferences();
     void renameSelectedTrack();
     void deleteSelectedTrack();
+    void toggleMaximized();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
 
 private:
     void buildMenus();
@@ -66,6 +74,7 @@ private:
 
     ProjectBridge* m_bridge;
     ThemeManager* m_themes;
+    TitleBar* m_titleBar = nullptr;
     QStackedWidget* m_root;
     StartScreen* m_start;
     QWidget* m_workspace = nullptr;
@@ -80,6 +89,9 @@ private:
     DetailPanel* m_detail = nullptr;
     QActionGroup* m_themeActions = nullptr;
     QMenu* m_recentMenu = nullptr;
+
+    Qt::Edges edgesAt(const QPoint& pos) const;
+    void updateResizeCursor(const QPoint& pos);
 };
 
 } // namespace nylon

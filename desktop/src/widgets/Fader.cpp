@@ -4,6 +4,7 @@
 
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QtMath>
 
 namespace nylon {
@@ -120,21 +121,30 @@ void Fader::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     const Theme* t = theme();
+    p.setRenderHint(QPainter::Antialiasing, true);
     const QRect track = trackRect();
-    p.fillRect(track, t->color(QStringLiteral("fader.track")));
+    const double tr = track.width() / 2.0;
+    QPainterPath trackPath;
+    trackPath.addRoundedRect(QRectF(track), tr, tr);
+    p.fillPath(trackPath, t->color(QStringLiteral("fader.track")));
 
     // Fill from the bottom up to the handle.
     const QRect handle = handleRect();
     const QRect fill(track.x(), handle.center().y(), track.width(), track.bottom() - handle.center().y() + 1);
+    p.save();
+    p.setClipPath(trackPath);
     p.fillRect(fill, isEnabled() ? t->color(QStringLiteral("fader.fill")) : t->color(QStringLiteral("control.disabled")));
+    p.restore();
 
     // Unity mark.
     const double unity = positionForDecibels(0.0, minimum(), maximum());
     const int unityY = track.bottom() - static_cast<int>(qRound(unity * track.height()));
     p.fillRect(QRect(track.x() - 2, unityY, track.width() + 4, 1), t->color(QStringLiteral("text.secondary")));
 
-    p.fillRect(handle, isEnabled() ? t->color(QStringLiteral("fader.handle")) : t->color(QStringLiteral("text.disabled")));
-    p.fillRect(QRect(handle.x(), handle.center().y(), handle.width(), 1), t->color(QStringLiteral("background")));
+    QPainterPath handlePath;
+    handlePath.addRoundedRect(QRectF(handle), 3, 3);
+    p.fillPath(handlePath, isEnabled() ? t->color(QStringLiteral("fader.handle")) : t->color(QStringLiteral("text.disabled")));
+    p.fillRect(QRect(handle.x() + 2, handle.center().y(), handle.width() - 4, 1), t->color(QStringLiteral("background")));
 
     if (m_showScale) {
         p.setPen(t->color(QStringLiteral("text.secondary")));

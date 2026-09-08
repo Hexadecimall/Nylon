@@ -1,6 +1,7 @@
 #include "ArrangementView.h"
 
 #include "LayoutMath.h"
+#include "PanelPaint.h"
 #include "ProjectBridge.h"
 #include "Theme.h"
 
@@ -110,8 +111,10 @@ void ArrangementView::resizeEvent(QResizeEvent* event)
 void ArrangementView::paintEvent(QPaintEvent* event)
 {
     QPainter p(viewport());
-    p.fillRect(event->rect(), m_theme->color(QStringLiteral("background")));
+    paint::panel(p, *m_theme, viewport()->rect(), m_theme->color(QStringLiteral("panel")));
+    p.setClipPath(paint::clip(*m_theme, viewport()->rect().adjusted(1, 1, -1, -1)));
     p.setFont(font());
+    Q_UNUSED(event);
 
     const int sep = separator();
     const QColor sepColor = m_theme->color(QStringLiteral("separator"));

@@ -38,7 +38,7 @@ jobs:
           -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
       - run: cmake --build target/desktop --parallel 3
-      - run: ctest --test-dir target/desktop --output-on-failure
+      - run: ctest --test-dir target/desktop --output-on-failure --timeout 600
       - name: Verify both architectures are present
         run: |
           lipo -info target/desktop/Nylon.app/Contents/MacOS/Nylon | tee /dev/stderr | grep -q 'x86_64 arm64\|arm64 x86_64'
@@ -70,7 +70,7 @@ jobs:
       - run: cargo build --locked --release
       - run: cmake -S desktop -B target/desktop -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build target/desktop --parallel 2
-      - run: ctest --test-dir target/desktop --output-on-failure
+      - run: ctest --test-dir target/desktop --output-on-failure --timeout 600
       - name: Package
         run: |
           mkdir -p target/package
@@ -122,7 +122,7 @@ jobs:
           -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}"
           -DQT_HOST_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64"
       - run: cmake --build target/desktop --config Release --parallel 2
-      - run: ctest --test-dir target/desktop -C Release --output-on-failure
+      - run: ctest --test-dir target/desktop -C Release --output-on-failure --timeout 600
       - name: Deploy Qt runtime
         run: |
           mkdir -p target/package

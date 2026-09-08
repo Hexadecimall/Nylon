@@ -1,6 +1,7 @@
 #include "SessionView.h"
 
 #include "LayoutMath.h"
+#include "PanelPaint.h"
 #include "ProjectBridge.h"
 #include "Theme.h"
 
@@ -195,8 +196,11 @@ void SessionView::resizeEvent(QResizeEvent* event)
 void SessionView::paintEvent(QPaintEvent* event)
 {
     QPainter p(viewport());
-    p.fillRect(event->rect(), m_theme->color(QStringLiteral("background")));
+    paint::panel(p, *m_theme, viewport()->rect(), m_theme->color(QStringLiteral("panel")));
+    p.setClipPath(paint::clip(*m_theme, viewport()->rect().adjusted(1, 1, -1, -1)));
+    p.setRenderHint(QPainter::Antialiasing, true);
     p.setFont(font());
+    Q_UNUSED(event);
 
     const int sep = separator();
     const QColor sepColor = m_theme->color(QStringLiteral("separator"));
@@ -253,11 +257,11 @@ void SessionView::paintEvent(QPaintEvent* event)
             for (qint64 s = firstScene; s <= lastScene; ++s) {
                 const int y = static_cast<int>(gridTop + s * (sh + sep) - scrollY);
                 const bool hovered = t == m_hoverTrack && s == m_hoverScene;
-                p.fillRect(QRect(x, y, sw, sh), hovered ? slotHover : slotColor);
-                p.fillRect(QRect(x + stopInset, y + (sh - stopSize) / 2, stopSize, stopSize), stopColor);
+                p.fillPath(paint::rounded(*m_theme, QRectF(x + 1, y + 1, sw - 2, sh - 2)), hovered ? slotHover : slotColor);
+                p.fillPath(paint::rounded(*m_theme, QRectF(x + stopInset + 1, y + (sh - stopSize) / 2, stopSize, stopSize)), stopColor);
             }
-            const int columnBottom = static_cast<int>(qMin<qint64>(gridTop + gridHeight - scrollY, viewH));
-            p.fillRect(QRect(x + sw, headerY, sep, columnBottom - headerY), sepColor);
+            Q_UNUSED(gridHeight);
+            Q_UNUSED(sepColor);
         }
     }
 
@@ -274,21 +278,17 @@ void SessionView::paintEvent(QPaintEvent* event)
         for (qint64 s = firstScene; s <= lastScene; ++s) {
             const int y = static_cast<int>(gridTop + s * (sh + sep) - scrollY);
             const QRect slot(mx, y, mw, sh);
-            p.fillRect(slot, panel);
+            p.fillPath(paint::rounded(*m_theme, QRectF(slot).adjusted(1, 1, -1, -1)), slotColor);
             p.setPen(secondary);
             p.drawText(slot.adjusted(labelInset, 0, -textInset, 0), Qt::AlignLeft | Qt::AlignVCenter,
                 QString::number(s + 1));
             p.fillRect(QRect(mx + stopInset, y + (sh - stopSize) / 2, stopSize, stopSize), stopColor);
         }
-        p.fillRect(QRect(mx - sep, headerY, sep, viewH - headerY), sepColor);
+        Q_UNUSED(headerY);
     }
 
-    // Row separators across the visible width.
+    // Header underline across the visible width.
     p.fillRect(QRect(0, static_cast<int>(hh - scrollY), viewW, sep), sepColor);
-    for (qint64 s = firstScene; s <= lastScene; ++s) {
-        const int y = static_cast<int>(gridTop + s * (sh + sep) + sh - scrollY);
-        p.fillRect(QRect(0, y, viewW, sep), sepColor);
-    }
 }
 
 } // namespace nylon

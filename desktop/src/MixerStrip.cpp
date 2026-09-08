@@ -8,8 +8,11 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include "PanelPaint.h"
+
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QVBoxLayout>
 
 #include <limits>
@@ -55,7 +58,7 @@ MixerStrip::MixerStrip(const Theme* theme, Kind kind, QWidget* parent)
     m_pan->setStatusTip(tr("Pan. Drag up or down; double-click to center."));
 
     m_fader->setStatusTip(tr("Track volume in dB. Double-click resets to 0 dB."));
-    m_fader->setShowScale(kind == Kind::Master);
+    m_fader->setShowScale(false);
     m_meter->setStatusTip(tr("Output level."));
     m_volume->setAlignment(Qt::AlignCenter);
     m_volume->setObjectName(QStringLiteral("secondary"));
@@ -201,7 +204,7 @@ void MixerStrip::setInteractive(bool interactive)
 
 QSize MixerStrip::sizeHint() const
 {
-    const int w = m_kind == Kind::Master ? m_theme->metricInt(QStringLiteral("session.master.width"), 72) + 40
+    const int w = m_kind == Kind::Master ? m_theme->metricInt(QStringLiteral("session.master.width"), 72)
                                          : m_theme->metricInt(QStringLiteral("session.slot.width"), 96);
     return QSize(w, m_theme->metricInt(QStringLiteral("mixer.height"), 170));
 }
@@ -217,14 +220,21 @@ void MixerStrip::mousePressEvent(QMouseEvent* event)
 void MixerStrip::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    p.fillRect(rect(), m_selected ? m_theme->color(QStringLiteral("raised"))
-                                  : m_theme->color(QStringLiteral("mixer.background")));
-    const int band = m_theme->metricInt(QStringLiteral("session.header.band"), 2);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QRect card = rect().adjusted(1, 1, -1, -1);
+    const QPainterPath shape = paint::rounded(*m_theme, QRectF(card).adjusted(0.5, 0.5, -0.5, -0.5), false);
+    p.fillPath(shape, m_selected ? m_theme->color(QStringLiteral("raised"))
+                                 : m_theme->color(QStringLiteral("mixer.background")));
+    const int band = m_theme->metricInt(QStringLiteral("session.header.band"), 2) + 1;
     if (m_color.isValid()) {
-        p.fillRect(QRect(0, 0, width(), band), m_color);
+        p.save();
+        p.setClipPath(shape);
+        p.fillRect(QRect(card.x(), card.y(), card.width(), band), m_color);
+        p.restore();
     }
-    const int sep = qBound(0, m_theme->metricInt(QStringLiteral("separator"), 1), 4);
-    p.fillRect(QRect(width() - sep, 0, sep, height()), m_theme->color(QStringLiteral("separator")));
+    p.setPen(QPen(m_selected ? m_theme->color(QStringLiteral("accent")) : m_theme->color(QStringLiteral("panel.border")), 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(shape);
 }
 
 } // namespace nylon

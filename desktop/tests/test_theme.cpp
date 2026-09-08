@@ -220,7 +220,9 @@ void TestTheme::styleSheetUsesTokens()
     const QString css = t.styleSheet();
     QVERIFY(css.contains(t.color(QStringLiteral("background")).name(QColor::HexArgb)));
     QVERIFY(css.contains(t.color(QStringLiteral("accent")).name(QColor::HexArgb)));
-    QVERIFY(css.contains(QStringLiteral("border-radius: 0")));
+    QVERIFY(css.contains(QStringLiteral("border-radius: %1px").arg(t.metricInt(QStringLiteral("radius.small")))));
+    QVERIFY(css.contains(QStringLiteral("border-radius: %1px").arg(t.metricInt(QStringLiteral("radius")))));
+    QVERIFY(!css.contains(QStringLiteral("border-radius: 0")));
     QVERIFY(!css.contains(QLatin1Char('%')));
 
     // Metrics that reach the style sheet are clamped to renderable sizes.

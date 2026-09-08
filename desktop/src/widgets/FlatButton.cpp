@@ -2,6 +2,8 @@
 
 #include "Theme.h"
 
+#include "PanelPaint.h"
+
 #include <QPainter>
 #include <QPainterPath>
 
@@ -124,9 +126,12 @@ void FlatButton::paintEvent(QPaintEvent*)
     } else if (m_hover) {
         fill = m_theme->color(QStringLiteral("control.hover"));
     }
-    p.fillRect(r, fill);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QPainterPath shape = paint::rounded(*m_theme, QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5));
+    p.fillPath(shape, fill);
     p.setPen(QPen(m_theme->color(QStringLiteral("control.border")), sep));
-    p.drawRect(r.adjusted(0, 0, -1, -1));
+    p.setBrush(Qt::NoBrush);
+    p.drawPath(shape);
 
     if (m_glyph != Glyph::None) {
         const int inset = qMax(3, r.height() / 4);

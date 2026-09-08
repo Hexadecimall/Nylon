@@ -5,6 +5,7 @@
 #include "MixerSection.h"
 #include "MixerStrip.h"
 #include "StartScreen.h"
+#include "TitleBar.h"
 #include "widgets/Fader.h"
 #include "widgets/FlatButton.h"
 #include "widgets/Knob.h"
@@ -49,6 +50,7 @@ private slots:
     void menusAreInWindowAndComplete();
     void selectionFlowsBetweenGridMixerAndDetail();
     void browserShowsLibraryCategories();
+    void framelessWindowWithTitleBar();
 
 private:
     ThemeManager m_themes;
@@ -75,7 +77,8 @@ void TestViews::emptyStateWhenNoTracks()
     // Painting the empty state must not fail.
     const QImage img = w.sessionView()->viewport()->grab().toImage();
     QVERIFY(!img.isNull());
-    QCOMPARE(img.pixelColor(2, img.height() - 3), m_themes.theme().color(QStringLiteral("background")));
+    // Inside the rounded panel outline the grid shows the panel color.
+    QCOMPARE(img.pixelColor(12, img.height() - 12), m_themes.theme().color(QStringLiteral("panel")));
 }
 
 void TestViews::addTrackButtonGrowsBothViews()
@@ -98,7 +101,8 @@ void TestViews::addTrackButtonGrowsBothViews()
     const QRect slot = w.sessionView()->slotRect(2, 0);
     QVERIFY(!slot.isEmpty());
     const QImage img = w.sessionView()->viewport()->grab().toImage();
-    QCOMPARE(img.pixelColor(slot.center().x(), 0), m_themes.theme().trackColor(2));
+    // The color band sits just inside the panel outline.
+    QCOMPARE(img.pixelColor(slot.center().x(), 1), m_themes.theme().trackColor(bridge.trackColorIndex(2)));
     QCOMPARE(img.pixelColor(slot.center()), m_themes.theme().color(QStringLiteral("session.slot")));
 }
 
@@ -367,9 +371,10 @@ void TestViews::menusAreInWindowAndComplete()
 {
     ProjectBridge bridge;
     MainWindow w(&bridge, &m_themes);
-    QVERIFY(!w.menuBar()->isNativeMenuBar());
+    QMenuBar* bar = w.titleBar()->menuBar();
+    QVERIFY(!bar->isNativeMenuBar());
     QStringList titles;
-    for (QAction* a : w.menuBar()->actions()) {
+    for (QAction* a : bar->actions()) {
         titles.append(a->text().remove(QLatin1Char('&')));
     }
     QCOMPARE(titles, (QStringList{QStringLiteral("File"), QStringLiteral("Edit"), QStringLiteral("Create"),
@@ -516,6 +521,49 @@ void TestViews::browserShowsLibraryCategories()
     w.action(QStringLiteral("actionToggleBrowser"))->toggle();
     QVERIFY(b->isVisible());
     QStandardPaths::setTestModeEnabled(false);
+}
+
+void TestViews::framelessWindowWithTitleBar()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    QVERIFY(w.windowFlags() & Qt::FramelessWindowHint);
+    QVERIFY(w.testAttribute(Qt::WA_TranslucentBackground));
+    TitleBar* bar = w.titleBar();
+    QVERIFY(bar);
+    QCOMPARE(bar->height(), m_themes.theme().metricInt(QStringLiteral("titlebar.height")));
+    QVERIFY(bar->menuBar());
+    QVERIFY(bar->menuBar()->isVisibleTo(bar));
+    QVERIFY(bar->menuBar()->actions().size() >= 6);
+    QCOMPARE(bar->title(), QStringLiteral("Nylon"));
+    w.newProject();
+    QVERIFY(bar->title().startsWith(QStringLiteral("Untitled")));
+    QVERIFY(!bar->closeRect().isEmpty());
+    QVERIFY(bar->closeRect().x() < bar->minimizeRect().x());
+    QVERIFY(bar->minimizeRect().x() < bar->zoomRect().x());
+
+    QSignalSpy zoom(bar, &TitleBar::zoomRequested);
+    QSignalSpy minimize(bar, &TitleBar::minimizeRequested);
+    QSignalSpy close(bar, &TitleBar::closeRequested);
+    QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->zoomRect().center());
+    QCOMPARE(zoom.count(), 1);
+    QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->minimizeRect().center());
+    QCOMPARE(minimize.count(), 1);
+    QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, bar->closeRect().center());
+    QCOMPARE(close.count(), 1);
+    // Double-clicking the empty part of the bar toggles maximize.
+    QTest::mouseDClick(bar, Qt::LeftButton, Qt::NoModifier, QPoint(bar->width() / 2, bar->height() / 2));
+    QCOMPARE(zoom.count(), 2);
+
+    // The window paints rounded: the very corner pixel stays transparent
+    // while a pixel just inside is the background.
+    const QImage img = w.grab().toImage();
+    QVERIFY(img.pixelColor(0, 0).alpha() < 255 || img.pixelColor(0, 0) != m_themes.theme().color(QStringLiteral("titlebar.background")));
+    // Just inside the outline, above the window controls, the title band shows.
+    const int r = m_themes.theme().metricInt(QStringLiteral("radius"));
+    QCOMPARE(img.pixelColor(r + 4, 3), m_themes.theme().color(QStringLiteral("titlebar.background")));
 }
 
 QTEST_MAIN(TestViews)
