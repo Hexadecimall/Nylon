@@ -109,3 +109,91 @@ fn long_history_round_trips() {
     assert!(!project.redo());
     assert_eq!(*final_state, *project.snapshot());
 }
+
+#[test]
+fn mixer_edits_are_validated_and_undoable() {
+    let mut project = Project::new();
+    project
+        .apply(&[Command::CreateTrack {
+            name: "Bus".into(),
+            kind: TrackKind::Audio,
+        }])
+        .unwrap();
+    let id = project.snapshot().tracks()[0].id();
+    project
+        .apply(&[
+            Command::SetTrackVolume { id, db: -12.0 },
+            Command::SetTrackPan { id, pan: -0.5 },
+            Command::SetTrackMute { id, enabled: true },
+            Command::SetTrackSolo { id, enabled: true },
+            Command::SetTrackArm { id, enabled: true },
+            Command::SetTrackColor { id, index: 7 },
+        ])
+        .unwrap();
+    let snapshot = project.snapshot();
+    let track = &snapshot.tracks()[0];
+    assert_eq!(track.volume_db(), -12.0);
+    assert_eq!(track.pan(), -0.5);
+    assert!(track.muted() && track.solo() && track.armed());
+    assert_eq!(track.color_index(), 7);
+    assert!(project.undo());
+    assert_eq!(project.snapshot().tracks()[0].volume_db(), 0.0);
+    assert!(!project.snapshot().tracks()[0].muted());
+    assert!(project.redo());
+    for db in [f64::NAN, f64::INFINITY, -121.0, 6.01] {
+        assert!(
+            project
+                .apply(&[Command::SetTrackVolume { id, db }])
+                .is_err()
+        );
+    }
+    for pan in [f64::NAN, f64::INFINITY, -1.01, 1.01] {
+        assert!(project.apply(&[Command::SetTrackPan { id, pan }]).is_err());
+    }
+    assert!(
+        project
+            .apply(&[Command::SetTrackColor { id, index: 16 }])
+            .is_err()
+    );
+    assert_eq!(*project.snapshot(), *snapshot);
+    project
+        .apply(&[Command::SetTrackVolume {
+            id,
+            db: f64::NEG_INFINITY,
+        }])
+        .unwrap();
+    assert_eq!(
+        project.snapshot().tracks()[0].volume_db(),
+        f64::NEG_INFINITY
+    );
+}
+
+#[test]
+fn session_settings_validate_before_publishing() {
+    let mut project = Project::new();
+    project
+        .apply(&[
+            Command::SetTimeSignature {
+                numerator: 7,
+                denominator: 8,
+            },
+            Command::SetSampleRate(96000),
+        ])
+        .unwrap();
+    assert_eq!(project.snapshot().time_signature(), (7, 8));
+    assert_eq!(project.snapshot().sample_rate(), 96000);
+    for (numerator, denominator) in [(0, 4), (65, 4), (4, 0), (4, 3), (4, 128)] {
+        assert!(
+            project
+                .apply(&[Command::SetTimeSignature {
+                    numerator,
+                    denominator
+                }])
+                .is_err()
+        );
+    }
+    assert!(project.apply(&[Command::SetSampleRate(0)]).is_err());
+    assert!(project.undo());
+    assert_eq!(project.snapshot().time_signature(), (4, 4));
+    assert_eq!(project.snapshot().sample_rate(), 48000);
+}
