@@ -50,6 +50,8 @@ public slots:
 signals:
     void trackSelected(int track);
     void locateRequested(double beats);
+    // The row under the last track was clicked.
+    void addTrackRequested();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -67,6 +69,8 @@ private:
     int pixelsPerBar() const;
     int trackAt(int y) const;
     QRect headerRect(int track) const;
+    // Row under the last track that offers to add another one.
+    QRect addTrackRect() const;
     // Applies a volume drag at a point inside the header.
     void dragVolume(int track, int x);
 

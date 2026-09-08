@@ -341,6 +341,11 @@ void MainWindow::buildWorkspace()
     connect(m_transport, &TransportBar::arrangementRequested, this, &MainWindow::showArrangement);
     connect(m_transport, &TransportBar::playRequested, this, &MainWindow::startPlayback);
     connect(m_transport, &TransportBar::stopRequested, this, &MainWindow::stopPlayback);
+    connect(m_arrangement, &ArrangementView::addTrackRequested, this, [this] {
+        if (QAction* add = action(QStringLiteral("actionAddTrack"))) {
+            add->trigger();
+        }
+    });
     connect(m_arrangement, &ArrangementView::locateRequested, this, [this](double beats) {
         m_bridge->locate(beats);
         m_transport->showPosition(beats);

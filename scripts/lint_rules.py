@@ -7,7 +7,9 @@ import sys
 
 TOKENS = base64.b64decode("Q2xhdWRlCkFudGhyb3BpYwpzdXBlcnBvd2VycwphZ2VudHMKc2tpbGxzCnBsYW5zCnNwZWNzCkNoYXRHUFQKT3BlbkFJCkNvcGlsb3QKQ28tQXV0aG9yZWQtQnkKR2VuZXJhdGVkIHdpdGgKR2lkZW9uCmdpZGVvbmNveApvdXIKd2UKdXMKbGV0J3MKYXdlc29tZQphbWF6aW5nCm1hZ2ljCmRlbGlnaHRmdWwKYmxhemluZwpzdXBlcmNoYXJnZWQKam91cm5leQpOWFJUCkVtYmVyRHJhZ29uCkxMQUNMCm5leGRvCnB1bGxpbwpIeXByTWFjClJWUk1hY2hpbmUKQ2VyYmVydXMKTHVtZW4KSXJpcwpBdGxhcwpUaXRhbgpGYWJsZQpBcmdvbgpUT0RPCkZJWE1FCnVuaW1wbGVtZW50ZWQhCnRvZG8hCkNvZGV4CmFzc2lzdGFudApHQwpHUFQKR2VtaW5pCkFJLXRvb2xpbmc=").decode().splitlines()
 WORD = re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(map(re.escape, TOKENS)) + r")(?![A-Za-z0-9])", re.I)
-PATH = re.compile(r"/(?:U[s]ers|h[o]me|V[o]lumes)/|[A-Z]:\\|[~]/")
+# A home-relative path only counts when something follows the separator;
+# the bare prefix appears in code that rejects such paths.
+PATH = re.compile(r"/(?:U[s]ers|h[o]me|V[o]lumes)/|[A-Z]:\\|[~]/[A-Za-z0-9._]")
 MARK = re.compile("[\U0001f000-\U0001faff\u2600-\u27bf\ufe0f]")
 DIRECTORY = re.compile(r"(?:^|/)(?:[.]clau" + r"de|[.]cursor|[.]aider[^/]*|[.]ag" + r"ents)(?:/|$)")
 

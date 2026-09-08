@@ -3,6 +3,7 @@
 #include "PanelPaint.h"
 #include "Theme.h"
 
+#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -70,7 +71,8 @@ QSize Fader::minimumSizeHint() const
 
 QRect Fader::trackRect() const
 {
-    const int w = theme()->metricInt(QStringLiteral("fader.width"), 14);
+    // The groove is narrow; the cap that rides it is the wide part.
+    const int w = qMax(3, theme()->metricInt(QStringLiteral("fader.width"), 14) / 3);
     const int handleH = theme()->metricInt(QStringLiteral("fader.handle.height"), 8);
     const int x = m_showScale ? 4 : (width() - w) / 2;
     return QRect(x, handleH / 2 + 2, w, qMax(1, height() - handleH - 4));
@@ -79,10 +81,11 @@ QRect Fader::trackRect() const
 QRect Fader::handleRect() const
 {
     const QRect track = trackRect();
-    const int handleH = theme()->metricInt(QStringLiteral("fader.handle.height"), 8);
+    const int handleH = qMax(10, theme()->metricInt(QStringLiteral("fader.handle.height"), 8) + 6);
+    const int handleW = qMax(handleH + 4, theme()->metricInt(QStringLiteral("fader.width"), 14) + 4);
     const double pos = positionForDecibels(value(), minimum(), maximum());
     const int y = track.bottom() - static_cast<int>(qRound(pos * track.height()));
-    return QRect(track.x() - 2, y - handleH / 2, track.width() + 4, handleH);
+    return QRect(track.center().x() - handleW / 2, y - handleH / 2, handleW, handleH);
 }
 
 double Fader::positionAtY(int y) const
@@ -129,12 +132,20 @@ void Fader::paintEvent(QPaintEvent*)
     trackPath.addRoundedRect(QRectF(track), tr, tr);
     paint::control(p, *t, trackPath, t->color(QStringLiteral("fader.track")), true);
 
-    // Fill from the bottom up to the handle.
+    // Fill from the bottom up to the cap.
     const QRect handle = handleRect();
     const QRect fill(track.x(), handle.center().y(), track.width(), track.bottom() - handle.center().y() + 1);
     p.save();
     p.setClipPath(trackPath);
-    p.fillRect(fill, isEnabled() ? t->color(QStringLiteral("fader.fill")) : t->color(QStringLiteral("control.disabled")));
+    if (isEnabled()) {
+        const QColor base = t->color(QStringLiteral("fader.fill"));
+        QLinearGradient level(QPointF(0, fill.bottom()), QPointF(0, fill.top()));
+        level.setColorAt(0.0, base.darker(120));
+        level.setColorAt(1.0, base.lighter(120));
+        p.fillRect(fill, level);
+    } else {
+        p.fillRect(fill, t->color(QStringLiteral("control.disabled")));
+    }
     p.restore();
 
     // Unity mark.
@@ -142,10 +153,24 @@ void Fader::paintEvent(QPaintEvent*)
     const int unityY = track.bottom() - static_cast<int>(qRound(unity * track.height()));
     p.fillRect(QRect(track.x() - 2, unityY, track.width() + 4, 1), t->color(QStringLiteral("text.secondary")));
 
+    // The cap: a shadow under it, a lit face, and a grip line across the
+    // middle that shows exactly where it reads.
+    QPainterPath shadow;
+    shadow.addRoundedRect(QRectF(handle).translated(0, 1.5), 3, 3);
+    QColor shade = t->color(QStringLiteral("control.border"));
+    shade.setAlpha(140);
+    p.fillPath(shadow, shade);
+
     QPainterPath handlePath;
     handlePath.addRoundedRect(QRectF(handle).adjusted(0.5, 0.5, -0.5, -0.5), 3, 3);
-    paint::control(p, *t, handlePath, isEnabled() ? t->color(QStringLiteral("fader.handle")) : t->color(QStringLiteral("text.disabled")));
-    p.fillRect(QRect(handle.x() + 3, handle.center().y(), handle.width() - 6, 1), t->color(QStringLiteral("fader.track")));
+    paint::control(p, *t, handlePath,
+        isEnabled() ? t->color(QStringLiteral("fader.handle")) : t->color(QStringLiteral("text.disabled")));
+    const QColor groove = t->color(QStringLiteral("fader.track"));
+    p.fillRect(QRect(handle.x() + 3, handle.center().y(), handle.width() - 6, 1), groove);
+    QColor grip = groove;
+    grip.setAlpha(90);
+    p.fillRect(QRect(handle.x() + 5, handle.center().y() - 3, handle.width() - 10, 1), grip);
+    p.fillRect(QRect(handle.x() + 5, handle.center().y() + 3, handle.width() - 10, 1), grip);
 
     if (m_showScale) {
         p.setPen(t->color(QStringLiteral("text.secondary")));

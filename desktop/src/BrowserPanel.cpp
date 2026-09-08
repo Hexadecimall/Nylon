@@ -2,6 +2,7 @@
 
 #include "PanelPaint.h"
 #include "Theme.h"
+#include "widgets/Icons.h"
 
 #include <QPaintEvent>
 #include <QPainter>
@@ -32,19 +33,31 @@ const char* const kSettingsKey = "library/root";
 struct Category {
     const char* name;
     const char* folder;
+    Icon icon;
 };
 
 const Category kCategories[] = {
-    {"Sounds", "Sounds"},
-    {"Drums", "Drums"},
-    {"Instruments", "Instruments"},
-    {"Audio Effects", "Audio Effects"},
-    {"MIDI Effects", "MIDI Effects"},
-    {"Plug-Ins", "Plug-Ins"},
-    {"Clips", "Clips"},
-    {"Samples", "Samples"},
-    {"Grooves", "Grooves"},
+    {"Sounds", "Sounds", Icon::Waveform},
+    {"Drums", "Drums", Icon::Drum},
+    {"Instruments", "Instruments", Icon::Instrument},
+    {"Audio Effects", "Audio Effects", Icon::Effect},
+    {"MIDI Effects", "MIDI Effects", Icon::Notes},
+    {"Plug-Ins", "Plug-Ins", Icon::Plug},
+    {"Clips", "Clips", Icon::Clip},
+    {"Samples", "Samples", Icon::Sample},
+    {"Grooves", "Grooves", Icon::Groove},
 };
+
+// Icon for one of the folders outside the library, by its label.
+Icon iconForPlace(const QString& name)
+{
+    if (name == QObject::tr("Home")) return Icon::Home;
+    if (name == QObject::tr("Music")) return Icon::Music;
+    if (name == QObject::tr("Downloads")) return Icon::Download;
+    if (name == QObject::tr("Desktop")) return Icon::Desktop;
+    if (name == QObject::tr("Documents")) return Icon::Document;
+    return Icon::Folder;
+}
 
 } // namespace
 
@@ -173,8 +186,14 @@ void BrowserPanel::setTheme(const Theme* theme)
     const int rowHeight = qMax(22, m_theme->metricInt(QStringLiteral("control.height"), 24));
     const int categoryCount = static_cast<int>(std::size(kCategories));
     const int pad = m_theme->metricInt(QStringLiteral("panel.padding"), 8);
+    const QColor glyph = m_theme->color(QStringLiteral("text.secondary"));
+    const int iconSide = qMax(12, rowHeight - 8);
+    const qreal ratio = devicePixelRatioF();
+    m_categories->setIconSize(QSize(iconSide, iconSide));
+    m_places->setIconSize(QSize(iconSide, iconSide));
     for (int index = 0; index < categoryCount; ++index) {
         m_categories->item(index)->setSizeHint(QSize(qMax(64, browserWidth - pad * 2), rowHeight));
+        m_categories->item(index)->setIcon(iconFor(kCategories[index].icon, glyph, iconSide, ratio));
     }
     // The list is exactly as tall as its rows, so the section below it
     // starts right after the last one.
@@ -182,6 +201,7 @@ void BrowserPanel::setTheme(const Theme* theme)
     const int placeCount = m_places->count();
     for (int index = 0; index < placeCount; ++index) {
         m_places->item(index)->setSizeHint(QSize(qMax(64, browserWidth - pad * 2), rowHeight));
+        m_places->item(index)->setIcon(iconFor(iconForPlace(m_places->item(index)->text()), glyph, iconSide, ratio));
     }
     m_places->setFixedHeight(placeCount * rowHeight + 2);
     layout()->setContentsMargins(pad, pad, pad, pad);

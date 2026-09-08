@@ -4,6 +4,7 @@
 #include "PanelPaint.h"
 #include "ProjectBridge.h"
 #include "Theme.h"
+#include "widgets/Icons.h"
 #include "widgets/Fader.h"
 
 #include <QPaintEvent>
@@ -246,6 +247,18 @@ void ArrangementView::dragVolume(int track, int x)
     viewport()->update();
 }
 
+QRect ArrangementView::addTrackRect() const
+{
+    const int sep = separator();
+    const qint64 bottom = rulerHeight() + sep + qint64(laneCount()) * (laneHeight() + sep)
+        - verticalScrollBar()->value();
+    if (!fitsCoordinate(bottom) || bottom >= viewport()->height()) {
+        return QRect();
+    }
+    const int height = qMin(qMax(24, laneHeight() / 2), viewport()->height() - static_cast<int>(bottom));
+    return QRect(0, static_cast<int>(bottom), headerWidth(), height);
+}
+
 void ArrangementView::selectTrack(int track)
 {
     track = qBound(-1, track, laneCount() - 1);
@@ -301,6 +314,12 @@ void ArrangementView::mousePressEvent(QMouseEvent* event)
             / scale;
         setPlayheadBeats(beats);
         emit locateRequested(m_playheadBeats);
+        event->accept();
+        return;
+    }
+    const QRect adder = addTrackRect();
+    if (!adder.isNull() && adder.contains(point)) {
+        emit addTrackRequested();
         event->accept();
         return;
     }
@@ -592,6 +611,20 @@ void ArrangementView::paintEvent(QPaintEvent* event)
 
             p.fillRect(QRect(hw, header.top(), sep, header.height()), sepColor);
         }
+    }
+
+    // An invitation to add a track, which is what the space under the
+    // last one is for.
+    const QRect adder = addTrackRect();
+    if (!adder.isNull() && adder.height() >= 20) {
+        p.fillRect(adder, panel);
+        const QRect glyph(adder.left() + kHeaderMargin + 2, adder.center().y() - 6, 12, 12);
+        paintIcon(p, Icon::Plus, QRectF(glyph), secondary);
+        p.setPen(secondary);
+        p.drawText(adder.adjusted(glyph.right() + kHeaderGap, 0, -kHeaderMargin, 0),
+            Qt::AlignLeft | Qt::AlignVCenter, tr("Add track"));
+        p.fillRect(QRect(hw, adder.top(), sep, adder.height()), sepColor);
+        p.fillRect(QRect(0, adder.bottom(), viewW, sep), sepColor);
     }
 
     // Ruler with bar numbers, pinned to the top.

@@ -39,12 +39,30 @@ inline void panel(QPainter& p, const Theme& theme, const QRect& rect, const QCol
     p.restore();
 }
 
-// Fills a control shape with a flat surface and one-pixel outline.
+// Fills a control shape and outlines it. A raised control is lit from the
+// top; a sunken one is shaded there instead, which is what makes a groove
+// read as a groove and a cap read as a cap.
 inline void control(QPainter& p, const Theme& theme, const QPainterPath& shape, const QColor& base, bool sunken = false)
 {
+    const int depth = qBound(0, theme.metricInt(QStringLiteral("depth"), 0), 60);
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
-    p.fillPath(shape, sunken ? base.darker(108) : base);
+    if (depth == 0) {
+        p.fillPath(shape, sunken ? base.darker(108) : base);
+    } else {
+        const QRectF box = shape.boundingRect();
+        QLinearGradient face(box.topLeft(), QPointF(box.left(), box.bottom()));
+        if (sunken) {
+            face.setColorAt(0.0, base.darker(100 + depth));
+            face.setColorAt(0.45, base.darker(100 + depth / 3));
+            face.setColorAt(1.0, base.lighter(100 + depth / 3));
+        } else {
+            face.setColorAt(0.0, base.lighter(100 + depth));
+            face.setColorAt(0.55, base);
+            face.setColorAt(1.0, base.darker(100 + depth / 2));
+        }
+        p.fillPath(shape, face);
+    }
     p.restore();
     p.setPen(QPen(theme.color(QStringLiteral("control.border")), 1));
     p.setBrush(Qt::NoBrush);

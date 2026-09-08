@@ -46,6 +46,8 @@ add_library(nylon_desktop STATIC
     src/widgets/LevelMeter.h
     src/widgets/FlatButton.cpp
     src/widgets/FlatButton.h
+    src/widgets/Icons.cpp
+    src/widgets/Icons.h
     src/widgets/ValueBox.cpp
     src/widgets/ValueBox.h
     src/widgets/LcdDisplay.cpp

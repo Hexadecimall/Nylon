@@ -2,6 +2,7 @@
 
 #include "Theme.h"
 
+#include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
 
@@ -108,23 +109,39 @@ void LevelMeter::paintEvent(QPaintEvent*)
     const int top = clipH + 2;
     const int barH = qMax(1, height() - top);
     p.setRenderHint(QPainter::Antialiasing, true);
+    // The scale runs green through amber into red, so a glance says how
+    // close the signal is to the ceiling without reading a number.
+    QLinearGradient scale(QPointF(0, top + barH), QPointF(0, top));
+    scale.setColorAt(0.0, rms.darker(115));
+    scale.setColorAt(fraction(-18.0), rms);
+    scale.setColorAt(fraction(-6.0), peak);
+    scale.setColorAt(1.0, clip);
+
     for (int ch = 0; ch < channelCount(); ++ch) {
         const int x = 1 + ch * (w + 1);
         QPainterPath clipPath;
         clipPath.addRoundedRect(QRectF(x, 0, w, clipH), 1.5, 1.5);
-        p.fillPath(clipPath, m_clip.at(ch) ? clip : background);
+        p.fillPath(clipPath, m_clip.at(ch) ? clip : background.lighter(130));
         QPainterPath barPath;
-        barPath.addRoundedRect(QRectF(x, top, w, barH), w / 2.0, w / 2.0);
+        barPath.addRoundedRect(QRectF(x, top, w, barH), 1.5, 1.5);
         p.fillPath(barPath, background);
         p.save();
         p.setClipPath(barPath);
         const int rmsH = static_cast<int>(fraction(m_rms.at(ch)) * barH);
         if (rmsH > 0) {
-            p.fillRect(QRect(x, top + barH - rmsH, w, rmsH), rms);
+            p.fillRect(QRect(x, top + barH - rmsH, w, rmsH), scale);
+        }
+        // Marks every twelve decibels, which keeps the bar readable when
+        // it is short.
+        p.setPen(QPen(background.lighter(160), 1));
+        for (double db = -12.0; db > m_floor; db -= 12.0) {
+            const int y = top + barH - static_cast<int>(fraction(db) * barH);
+            p.drawLine(x, y, x + w, y);
         }
         const int peakY = top + barH - static_cast<int>(fraction(m_peak.at(ch)) * barH);
         if (m_peak.at(ch) > m_floor) {
-            p.fillRect(QRect(x, qMax(top, peakY - 1), w, 1), peak);
+            p.fillRect(QRect(x, qMax(top, peakY - 1), w, 2),
+                m_peak.at(ch) >= -0.1 ? clip : m_theme->color(QStringLiteral("text.primary")));
         }
         p.restore();
     }

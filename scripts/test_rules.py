@@ -22,6 +22,10 @@ class RuleTests(unittest.TestCase):
                      "/" + "Volumes/disk", "C:" + chr(92) + "work", "~" + "/file"]:
             self.assertTrue(self.rejected(text))
 
+    def test_bare_home_prefix_is_allowed(self):
+        # Code that refuses home-relative paths has to name the prefix.
+        self.assertFalse(self.rejected('path.starts_with("~" + "/")'))
+
     def test_pictograph(self):
         self.assertTrue(self.rejected(chr(0x1F916)))
 
