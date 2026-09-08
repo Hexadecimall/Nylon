@@ -1,5 +1,7 @@
 //! Fixed-capacity, sample-accurate stereo rendering.
 
+pub mod playback;
+
 /// Maximum supported callback size in frames.
 pub const MAX_FRAMES: usize = 2048;
 /// Maximum parameter changes per callback.

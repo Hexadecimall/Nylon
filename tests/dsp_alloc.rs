@@ -183,6 +183,49 @@ fn mixing_a_block_performs_no_allocator_operations() {
 }
 
 #[test]
+fn the_playback_engine_renders_without_allocating() {
+    use nylon::engine::playback::{MixSettings, PlaybackEngine, TrackSettings};
+
+    let (mut engine, mut publisher) = PlaybackEngine::new(48_000.0);
+    let mut settings = MixSettings::new();
+    settings.set_track_count(16);
+    for index in 0..16 {
+        settings.set_track(
+            index,
+            TrackSettings {
+                volume_db: -3.0,
+                pan: 0.25,
+                muted: index % 5 == 0,
+                soloed: false,
+            },
+        );
+    }
+    assert!(publisher.publish(&settings));
+    let mut output = vec![[0.0_f32; 2]; BLOCK];
+    // One block before counting so the settings are taken up.
+    engine.render_block(&mut output, &[]);
+    engine.transport().play();
+
+    let operations = measure(|| {
+        for index in 0..64 {
+            // Publishing from the control thread and rendering from the
+            // audio thread both have to stay clear of the allocator.
+            if index % 8 == 0 {
+                let _ = publisher.publish(&settings);
+            }
+            engine.render_block(&mut output, &[]);
+            let _ = publisher.state();
+        }
+    });
+
+    assert_eq!(
+        operations, 0,
+        "{operations} allocator operations while the engine ran"
+    );
+    assert!(engine.transport().position_frames() > 0);
+}
+
+#[test]
 fn envelope_and_oscillator_state_changes_do_not_allocate() {
     let mut oscillator = Oscillator::new(Shape::Sine, 440.0, RATE);
     let mut envelope = Envelope::new(Settings::default(), RATE);
