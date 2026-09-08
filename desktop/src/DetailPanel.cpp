@@ -6,11 +6,14 @@
 
 #include <QPaintEvent>
 #include <QPainter>
+#include "DeviceChain.h"
 #include "PianoRoll.h"
 #include "widgets/FlatButton.h"
 
 #include <QHBoxLayout>
 #include <QFormLayout>
+#include <QHBoxLayout>
+#include <QPair>
 #include <QLabel>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -35,7 +38,7 @@ DetailPanel::DetailPanel(ProjectBridge* bridge, const Theme* theme, QWidget* par
     , m_clipPage(new QWidget(this))
     , m_clipTitle(new QLabel(this))
     , m_pianoRoll(new PianoRoll(bridge, theme, this))
-    , m_deviceEmpty(new QLabel(this))
+    , m_devices(new DeviceChain(theme, this))
 {
     setObjectName(QStringLiteral("detail"));
     setAutoFillBackground(false);
@@ -55,9 +58,6 @@ DetailPanel::DetailPanel(ProjectBridge* bridge, const Theme* theme, QWidget* par
     m_clipEmpty->setObjectName(QStringLiteral("secondary"));
     m_clipEmpty->setAlignment(Qt::AlignCenter);
     m_clipEmpty->setWordWrap(true);
-    m_deviceEmpty->setObjectName(QStringLiteral("secondary"));
-    m_deviceEmpty->setAlignment(Qt::AlignCenter);
-    m_deviceEmpty->setWordWrap(true);
     // Clip page: title row over the piano roll, or the empty label.
     m_clipTitle->setObjectName(QStringLiteral("secondary"));
     auto* clipLayout = new QVBoxLayout(m_clipPage);
@@ -68,7 +68,7 @@ DetailPanel::DetailPanel(ProjectBridge* bridge, const Theme* theme, QWidget* par
     clipLayout->addWidget(m_clipEmpty, 1);
     connect(m_pianoRoll, &PianoRoll::message, this, [this](const QString& text) { m_clipTitle->setText(text); });
     m_stack->addWidget(m_clipPage);
-    m_stack->addWidget(m_deviceEmpty);
+    m_stack->addWidget(m_devices);
 
     auto* header = new QHBoxLayout;
     header->setContentsMargins(0, 0, 0, 0);
@@ -78,16 +78,27 @@ DetailPanel::DetailPanel(ProjectBridge* bridge, const Theme* theme, QWidget* par
     header->addSpacing(8);
     header->addWidget(m_title, 1);
 
-    auto* summaryLayout = new QFormLayout(m_summary);
-    summaryLayout->setContentsMargins(0, 10, 0, 10);
-    summaryLayout->setHorizontalSpacing(12);
-    summaryLayout->setVerticalSpacing(6);
-    summaryLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    summaryLayout->addRow(tr("Type"), m_kind);
-    summaryLayout->addRow(tr("Volume"), m_volume);
-    summaryLayout->addRow(tr("Pan"), m_pan);
-    summaryLayout->addRow(tr("State"), m_state);
-    summaryLayout->addRow(tr("Color"), m_color);
+    // The summary reads across rather than down, so the devices below it
+    // get the height.
+    auto* summaryLayout = new QHBoxLayout(m_summary);
+    summaryLayout->setContentsMargins(10, 6, 10, 6);
+    summaryLayout->setSpacing(6);
+    const QPair<QString, QLabel*> fields[] = {
+        {tr("Type"), m_kind},
+        {tr("Volume"), m_volume},
+        {tr("Pan"), m_pan},
+        {tr("State"), m_state},
+        {tr("Colour"), m_color},
+    };
+    for (const auto& field : fields) {
+        auto* caption = new QLabel(field.first, m_summary);
+        caption->setObjectName(QStringLiteral("sectionLabel"));
+        summaryLayout->addWidget(caption);
+        field.second->setObjectName(QStringLiteral("secondary"));
+        summaryLayout->addWidget(field.second);
+        summaryLayout->addSpacing(10);
+    }
+    summaryLayout->addStretch(1);
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -109,6 +120,7 @@ void DetailPanel::setTheme(const Theme* theme)
     m_theme = theme;
     m_clipTab->setTheme(theme);
     m_deviceTab->setTheme(theme);
+    m_devices->setTheme(theme);
     m_pianoRoll->setTheme(theme);
     const int pad = m_theme->metricInt(QStringLiteral("panel.padding"), 8);
     layout()->setContentsMargins(pad, pad, pad, pad);
@@ -159,7 +171,7 @@ void DetailPanel::refresh()
         m_title->setText(tr("No track selected"));
         m_summary->hide();
         m_clipEmpty->setText(tr("Select a clip slot to edit its clip."));
-        m_deviceEmpty->setText(tr("Select a track to see its devices."));
+        m_devices->setTrack(QString(), QColor(), false);
         return;
     }
     const quint64 track = static_cast<quint64>(m_track);
@@ -178,7 +190,10 @@ void DetailPanel::refresh()
     m_state->setText(states.isEmpty() ? tr("Active") : states.join(QStringLiteral(" / ")));
     m_color->setText(tr("Palette %1").arg(m_bridge->trackColorIndex(track) + 1));
     m_clipEmpty->setText(tr("%1 has no clip in the selected slot.").arg(m_trackName));
-    m_deviceEmpty->setText(tr("%1 has no devices.\nDrop an instrument or effect here from the browser.").arg(m_trackName));
+    const int colorIndex = m_bridge->trackColorIndex(track);
+    m_devices->setTrack(m_trackName,
+        m_theme->trackColor(colorIndex >= 0 ? colorIndex : m_track),
+        m_bridge->trackKind(track) == ProjectBridge::TrackKind::Midi);
     const bool hasClip = m_clipTrack >= 0 && m_clipScene >= 0
         && m_bridge->clipSlotOccupied(static_cast<quint64>(m_clipTrack), static_cast<quint64>(m_clipScene));
     m_pianoRoll->setVisible(hasClip);

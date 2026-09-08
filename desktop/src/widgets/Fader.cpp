@@ -74,7 +74,10 @@ QRect Fader::trackRect() const
     // The groove is narrow; the cap that rides it is the wide part.
     const int w = qMax(3, theme()->metricInt(QStringLiteral("fader.width"), 14) / 3);
     const int handleH = theme()->metricInt(QStringLiteral("fader.handle.height"), 8);
-    const int x = m_showScale ? 4 : (width() - w) / 2;
+    // With a scale the groove sits at the right of the widget and the
+    // numbers run down its left, which keeps them clear of the meter that
+    // follows the fader in a channel strip.
+    const int x = m_showScale ? qMax(0, width() - w - 2) : (width() - w) / 2;
     return QRect(x, handleH / 2 + 2, w, qMax(1, height() - handleH - 4));
 }
 
@@ -184,9 +187,9 @@ void Fader::paintEvent(QPaintEvent*)
             }
             const double pos = positionForDecibels(db, minimum(), maximum());
             const int y = track.bottom() - static_cast<int>(qRound(pos * track.height()));
-            p.fillRect(QRect(track.right() + 2, y, 3, 1), t->color(QStringLiteral("text.secondary")));
-            p.drawText(QRect(track.right() + 6, y - 6, width() - track.right() - 6, 12),
-                Qt::AlignLeft | Qt::AlignVCenter, QString::number(db, 'f', 0));
+            p.fillRect(QRect(track.left() - 4, y, 3, 1), t->color(QStringLiteral("text.secondary")));
+            p.drawText(QRect(0, y - 6, track.left() - 6, 12), Qt::AlignRight | Qt::AlignVCenter,
+                QString::number(db, 'f', 0));
         }
     }
 }

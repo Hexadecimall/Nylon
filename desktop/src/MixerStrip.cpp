@@ -261,9 +261,16 @@ void MixerStrip::paintEvent(QPaintEvent*)
         p.fillRect(QRect(card.x(), card.y(), card.width(), m_name->geometry().bottom() + 2), m_color);
         p.restore();
     }
-    // Status field below the title.
+    // The device slot below the title, drawn as an inset so an empty one
+    // reads as a place for something rather than as a gap.
     const QRect status = m_status->geometry().adjusted(2, 0, -2, 0);
-    p.fillPath(paint::rounded(*m_theme, QRectF(status)), m_theme->color(QStringLiteral("session.slot")));
+    paint::control(p, *m_theme, paint::rounded(*m_theme, QRectF(status)),
+        m_theme->color(QStringLiteral("session.slot")), true);
+    if (m_status->text().isEmpty()) {
+        p.setPen(m_theme->color(QStringLiteral("text.disabled")));
+        p.drawLine(status.center().x() - 4, status.center().y(), status.center().x() + 4,
+            status.center().y());
+    }
     p.setPen(QPen(m_selected ? m_theme->color(QStringLiteral("accent")) : m_theme->color(QStringLiteral("panel.border")), 1));
     p.setBrush(Qt::NoBrush);
     p.drawPath(shape);

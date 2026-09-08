@@ -48,6 +48,8 @@ add_library(nylon_desktop STATIC
     src/widgets/FlatButton.h
     src/widgets/Icons.cpp
     src/widgets/Icons.h
+    src/DeviceChain.cpp
+    src/DeviceChain.h
     src/widgets/ValueBox.cpp
     src/widgets/ValueBox.h
     src/widgets/LcdDisplay.cpp

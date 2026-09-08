@@ -7,6 +7,8 @@ class QStackedWidget;
 
 namespace nylon {
 
+class DeviceChain;
+
 class FlatButton;
 class PianoRoll;
 class ProjectBridge;
@@ -29,6 +31,7 @@ public:
     int selectedClipTrack() const { return m_clipTrack; }
     int selectedClipScene() const { return m_clipScene; }
     PianoRoll* pianoRoll() const { return m_pianoRoll; }
+    DeviceChain* deviceChain() const { return m_devices; }
     Page page() const { return m_page; }
     QString headerText() const;
 
@@ -59,7 +62,7 @@ private:
     QWidget* m_clipPage;
     QLabel* m_clipTitle;
     PianoRoll* m_pianoRoll;
-    QLabel* m_deviceEmpty;
+    DeviceChain* m_devices;
     int m_clipTrack = -1;
     int m_clipScene = -1;
     Page m_page = Page::Device;
