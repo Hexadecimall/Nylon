@@ -213,7 +213,10 @@ void TestViews::themeSwitchRepaintsWithNewTokens()
     const QImage img = w.arrangementView()->viewport()->grab().toImage();
     const QRect lane = w.arrangementView()->laneRect(0);
     QVERIFY(!lane.isEmpty());
-    QCOMPARE(img.pixelColor(lane.center()), m_themes.theme().color(QStringLiteral("arrangement.lane")));
+    // Sample between grid lines; the lane center can coincide with a beat
+    // line when platform font metrics change the viewport width.
+    QCOMPARE(img.pixelColor(lane.left() + 3, lane.center().y()),
+        m_themes.theme().color(QStringLiteral("arrangement.lane")));
     // The track header carries a narrow color strip.
     QCOMPARE(img.pixelColor(8, lane.y() + 10), m_themes.theme().trackColor(bridge.trackColorIndex(0)));
     QVERIFY(m_themes.load(QStringLiteral("nylon")));

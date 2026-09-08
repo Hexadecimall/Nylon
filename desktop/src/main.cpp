@@ -4,6 +4,7 @@
 #include "ThemeManager.h"
 
 #include <QApplication>
+#include <QAction>
 #include <QCommandLineParser>
 #include <QMessageBox>
 #include <QSettings>
@@ -34,7 +35,7 @@ int main(int argc, char** argv)
     const QCommandLineOption screenshotOption(QStringLiteral("screenshot"),
         QStringLiteral("Write a PNG of the main window to <file> and exit."), QStringLiteral("file"));
     const QCommandLineOption viewOption(QStringLiteral("view"),
-        QStringLiteral("Initial view: session or arrangement."), QStringLiteral("name"), QStringLiteral("session"));
+        QStringLiteral("Initial view: session or arrangement."), QStringLiteral("name"), QStringLiteral("arrangement"));
     parser.addOption(themeOption);
     parser.addOption(workspaceOption);
     parser.addOption(startOption);
@@ -72,19 +73,41 @@ int main(int argc, char** argv)
         return 2;
     }
     nylon::MainWindow window(&bridge, &themes);
-    if (!parser.isSet(startOption) && (parser.isSet(workspaceOption) || parser.isSet(screenshotOption) || tracks > 0)) {
-        window.newProject();
+    if (parser.isSet(startOption)) {
+        window.showStartScreen();
+    } else if (tracks > 0) {
+        if (!bridge.reset()) {
+            std::fprintf(stderr, "the core rejected resetting the project\n");
+            return 1;
+        }
         for (int i = 0; i < tracks; ++i) {
             if (!bridge.addTrack()) {
                 std::fprintf(stderr, "the core rejected adding track %d\n", i + 1);
                 return 1;
             }
         }
+        window.showSession();
+    } else if (parser.isSet(workspaceOption)) {
+        window.newProject();
+    } else {
+        window.newProject();
+        if (!bridge.addTrack(nylon::ProjectBridge::TrackKind::Audio)
+            || !bridge.addTrack(nylon::ProjectBridge::TrackKind::Midi)) {
+            std::fprintf(stderr, "the core rejected the default tracks\n");
+            return 1;
+        }
+        window.selectTrack(0);
+        window.showArrangement();
+        if (QAction* mixer = window.action(QStringLiteral("actionToggleMixer"))) {
+            mixer->trigger();
+        }
     }
     const QString view = parser.value(viewOption).toLower();
     if (view == QLatin1String("arrangement")) {
         window.showArrangement();
-    } else if (view != QLatin1String("session")) {
+    } else if (view == QLatin1String("session")) {
+        window.showSession();
+    } else {
         std::fprintf(stderr, "--view expects 'session' or 'arrangement'\n");
         return 2;
     }
@@ -95,7 +118,7 @@ int main(int argc, char** argv)
         return 1;
     }
     window.show();
-    if (tracks > 0) {
+    if (!parser.isSet(startOption) && bridge.trackCount() > 0) {
         window.selectTrack(0);
     }
 
