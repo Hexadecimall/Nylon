@@ -17,7 +17,7 @@
 #include "TransportBar.h"
 
 #include <QAction>
-#include <QAction>
+#include <QLabel>
 #include <QMenuBar>
 #include <QStatusBar>
 #include <QSplitter>
@@ -186,9 +186,13 @@ void TestViews::viewSwitchButtonsAndToggle()
     QVERIFY(QTest::qWaitForWindowExposed(&w));
     w.newProject();
     QVERIFY(w.isSessionVisible());
+    auto* context = w.findChild<QLabel*>(QStringLiteral("workspaceContext"));
+    QVERIFY(context);
+    QVERIFY(context->text().startsWith(QStringLiteral("SESSION")));
     QVERIFY(w.transport()->sessionButton()->isChecked());
     w.transport()->arrangementButton()->click();
     QVERIFY(!w.isSessionVisible());
+    QVERIFY(context->text().startsWith(QStringLiteral("ARRANGEMENT")));
     QVERIFY(w.transport()->arrangementButton()->isChecked());
     QVERIFY(!w.transport()->sessionButton()->isChecked());
     w.toggleView();

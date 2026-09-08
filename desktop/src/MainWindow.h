@@ -6,6 +6,7 @@
 class QAction;
 class QActionGroup;
 class QMenu;
+class QLabel;
 class QSplitter;
 class QStackedWidget;
 
@@ -85,6 +86,7 @@ private:
     QString trackName(int index) const;
     void updateEditActions();
     void updateWindowTitle();
+    void updateWorkspaceContext();
     void rebuildRecentMenu();
     void showLowerWidget(QWidget* widget);
     void hideLowerWidget(QWidget* widget);
@@ -112,6 +114,7 @@ private:
     FlatButton* m_browserToggle = nullptr;
     FlatButton* m_mixerToggle = nullptr;
     FlatButton* m_editorToggle = nullptr;
+    QLabel* m_workspaceContext = nullptr;
     QActionGroup* m_themeActions = nullptr;
     QMenu* m_recentMenu = nullptr;
     QSize m_workspaceSize{1440, 900};

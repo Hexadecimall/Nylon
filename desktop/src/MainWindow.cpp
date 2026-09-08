@@ -306,9 +306,9 @@ void MainWindow::buildWorkspace()
     auto* viewBarLayout = new QHBoxLayout(viewBar);
     viewBarLayout->setContentsMargins(4, 2, 4, 2);
     viewBarLayout->setSpacing(3);
-    auto* ready = new QLabel(tr("Ready"), viewBar);
-    ready->setObjectName(QStringLiteral("secondary"));
-    viewBarLayout->addWidget(ready);
+    m_workspaceContext = new QLabel(viewBar);
+    m_workspaceContext->setObjectName(QStringLiteral("workspaceContext"));
+    viewBarLayout->addWidget(m_workspaceContext);
     viewBarLayout->addStretch(1);
     viewBarLayout->addWidget(m_browserToggle);
     viewBarLayout->addWidget(m_editorToggle);
@@ -390,6 +390,7 @@ void MainWindow::buildWorkspace()
             }
         }
         updateEditActions();
+        updateWorkspaceContext();
     });
 }
 
@@ -626,6 +627,7 @@ void MainWindow::showSession()
     m_root->setCurrentWidget(m_workspace);
     m_views->setCurrentIndex(0);
     m_transport->showSessionActive(true);
+    updateWorkspaceContext();
 }
 
 void MainWindow::showArrangement()
@@ -633,6 +635,7 @@ void MainWindow::showArrangement()
     m_root->setCurrentWidget(m_workspace);
     m_views->setCurrentIndex(1);
     m_transport->showSessionActive(false);
+    updateWorkspaceContext();
 }
 
 void MainWindow::toggleView()
@@ -655,6 +658,16 @@ void MainWindow::selectTrack(int index)
     m_detail->setSelectedTrack(index, index >= 0 ? trackName(index) : QString());
     m_detail->setSelectedClip(index, -1);
     updateEditActions();
+    updateWorkspaceContext();
+}
+
+void MainWindow::updateWorkspaceContext()
+{
+    if (!m_workspaceContext) return;
+    const QString view = isSessionVisible() ? tr("SESSION") : tr("ARRANGEMENT");
+    const int selected = m_detail ? m_detail->selectedTrack() : -1;
+    m_workspaceContext->setText(selected >= 0 ? tr("%1 / %2").arg(view, trackName(selected))
+                                              : tr("%1 / NO TRACK SELECTED").arg(view));
 }
 
 QList<QAction*> MainWindow::namedActions() const

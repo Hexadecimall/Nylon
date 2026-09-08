@@ -424,6 +424,7 @@ QString Theme::styleSheet() const
         "QLabel#startTitle { color: %TEXT; }"
         "QLabel#panelTitle { color: %TEXT; font-weight: 600; padding: %PADpx %PAD2px; }"
         "QLabel#sectionLabel { color: %SECONDARY; font-size: 10px; font-weight: 600; padding: %PADpx %PADpx 0 %PADpx; }"
+        "QLabel#workspaceContext { color: %SECONDARY; font-size: 10px; font-weight: 600; padding-left: %PADpx; }"
         "QWidget#viewBar, QWidget#lowerDockHeader { background: %PANEL; border-top: %SEPpx solid %SEPC; }"
         "QWidget#lowerDock { background: %PANEL; }"
         "QLabel#positionDisplay { background: %CTRLBG; border: %SEPpx solid %BORDER; border-radius: %RSMALLpx; padding: 0 %PADpx; }"
