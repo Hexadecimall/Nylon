@@ -31,6 +31,14 @@ Project& Project::operator=(Project&& other) noexcept
 }
 
 bool Project::reset() { return nylon_project_new_in_place(m_handle) != 0; }
+bool Project::save(const std::string& bundleDirectory) const
+{
+    return nylon_project_save(m_handle, bundleDirectory.c_str()) != 0;
+}
+bool Project::open(const std::string& bundleDirectory)
+{
+    return nylon_project_open(m_handle, bundleDirectory.c_str()) != 0;
+}
 
 double Project::tempo() const { return nylon_project_tempo(m_handle); }
 bool Project::setTempo(double bpm) { return nylon_project_set_tempo(m_handle, bpm) != 0; }

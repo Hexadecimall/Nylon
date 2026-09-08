@@ -3,6 +3,8 @@
 
 #include "nylon.h"
 
+#include <QFileInfo>
+#include <QTemporaryDir>
 #include <QtTest>
 #include <cmath>
 
@@ -22,6 +24,7 @@ private slots:
     void timeSignatureAndSampleRate();
     void resetClearsHistory();
     void cppBindingMatchesCInterface();
+    void saveAndOpenBundleRoundTrip();
 };
 
 void TestBridge::nullHandleIsRejectedByEveryFunction()
@@ -234,6 +237,47 @@ void TestBridge::cppBindingMatchesCInterface()
     QCOMPARE(moved.trackCount(), std::uint64_t(1));
     QVERIFY(moved.undo());
     QVERIFY(moved.canRedo());
+}
+
+void TestBridge::saveAndOpenBundleRoundTrip()
+{
+    QVERIFY(ProjectBridge::isPersistenceAvailable());
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString bundle = dir.path() + QStringLiteral("/song.nylon");
+
+    ProjectBridge a;
+    QVERIFY(a.bundlePath().isEmpty());
+    QVERIFY(a.setTempo(133.5));
+    QVERIFY(a.addTrack(ProjectBridge::TrackKind::Midi));
+    QVERIFY(a.setTrackName(0, QStringLiteral("Keys")));
+    QVERIFY(a.setTrackPan(0, -0.4));
+    QVERIFY(a.setTimeSignature(6, 8));
+    QVERIFY(a.save(bundle));
+    QCOMPARE(a.bundlePath(), bundle);
+    QVERIFY(QFileInfo(bundle).isDir());
+
+    ProjectBridge b;
+    QSignalSpy spy(&b, &ProjectBridge::changed);
+    QVERIFY(b.open(bundle));
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(b.bundlePath(), bundle);
+    QCOMPARE(b.tempo(), 133.5);
+    QCOMPARE(b.trackCount(), 1ull);
+    QCOMPARE(b.trackName(0), QStringLiteral("Keys"));
+    QCOMPARE(b.trackKind(0), ProjectBridge::TrackKind::Midi);
+    QCOMPARE(b.trackPan(0), -0.4);
+    QCOMPARE(b.timeSignatureNumerator(), 6);
+    // History travels with the bundle.
+    QVERIFY(b.canUndo());
+    QVERIFY(b.undo());
+    QCOMPARE(b.timeSignatureNumerator(), 4);
+
+    QVERIFY(!b.open(dir.path() + QStringLiteral("/missing.nylon")));
+    QCOMPARE(b.bundlePath(), bundle);
+    QVERIFY(!a.save(QString()));
+    QVERIFY(b.reset());
+    QVERIFY(b.bundlePath().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(TestBridge)

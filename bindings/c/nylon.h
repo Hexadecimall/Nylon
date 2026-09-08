@@ -48,6 +48,12 @@ int nylon_project_can_redo(const void* project);
  * its history. */
 int nylon_project_new_in_place(void* project);
 
+/* Writes the project as a bundle directory at the UTF-8 path, creating it
+ * as needed. Reading replaces the project's contents and history with the
+ * bundle's. Both return 0 on any I/O or format error. */
+int nylon_project_save(const void* project, const char* bundle_directory);
+int nylon_project_open(void* project, const char* bundle_directory);
+
 /* Track kinds: 0 audio, 1 MIDI, 2 return, 3 master, 4 group, 5 cue. */
 int nylon_project_add_track_kind(void* project, int kind);
 

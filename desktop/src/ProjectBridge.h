@@ -45,7 +45,10 @@ public:
     int trackColorIndex(quint64 index) const;
 
     // True once the core can read and write project bundles.
-    static bool isPersistenceAvailable() { return false; }
+    static bool isPersistenceAvailable() { return true; }
+    // Bundle directory of the last successful save or open; empty for an
+    // unsaved project.
+    QString bundlePath() const { return m_bundlePath; }
     // True once the core drives a transport from an audio backend.
     static bool isTransportAvailable() { return false; }
     // True once the core exposes per-track mixer state.
@@ -54,6 +57,9 @@ public:
 public slots:
     // Discards the current project and starts an empty one.
     bool reset();
+    // Bundle directory persistence. Both update bundlePath() on success.
+    bool save(const QString& bundleDirectory);
+    bool open(const QString& bundleDirectory);
     bool setTempo(double bpm);
     bool setTimeSignature(int numerator, int denominator);
     bool setSampleRate(unsigned int rate);
@@ -75,6 +81,7 @@ signals:
 
 private:
     Project m_project;
+    QString m_bundlePath;
 };
 
 } // namespace nylon

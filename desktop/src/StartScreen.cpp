@@ -103,7 +103,7 @@ StartScreen::StartScreen(const Theme* theme, QWidget* parent)
         emit recentProjectRequested(item->data(Qt::UserRole).toString());
     });
 
-    setPersistenceAvailable(false);
+    setPersistenceAvailable(true);
     setTheme(theme);
     reloadRecent();
 }

@@ -355,7 +355,7 @@ void TestViews::startScreenThenWorkspace()
     QVERIFY(QTest::qWaitForWindowExposed(&w));
     QVERIFY(w.isStartScreenVisible());
     QVERIFY(w.startScreen()->newButton()->isEnabled());
-    QVERIFY(!w.startScreen()->openButton()->isEnabled());
+    QVERIFY(w.startScreen()->openButton()->isEnabled());
     // The launcher is a compact centered card, not a canvas-wide layout.
     const QRect card = w.startScreen()->cardRect();
     QVERIFY(card.width() <= 700);
@@ -392,12 +392,14 @@ void TestViews::menusAreInWindowAndComplete()
         QVERIFY2(w.action(QLatin1String(name)), name);
     }
     // Everything the core cannot do yet is disabled and says why.
-    for (const char* name : {"actionOpen", "actionSave", "actionPlay", "actionCut"}) {
+    for (const char* name : {"actionPlay", "actionCut"}) {
         QAction* a = w.action(QLatin1String(name));
         QVERIFY2(!a->isEnabled(), name);
         QVERIFY2(!a->statusTip().isEmpty(), name);
     }
     QVERIFY(w.action(QStringLiteral("actionNew"))->isEnabled());
+    QVERIFY(w.action(QStringLiteral("actionOpen"))->isEnabled());
+    QVERIFY(w.action(QStringLiteral("actionSave"))->isEnabled());
     QVERIFY(w.action(QStringLiteral("actionAddTrack"))->isEnabled());
     QVERIFY(w.action(QStringLiteral("actionAddMidiTrack"))->isEnabled());
     QVERIFY(!w.action(QStringLiteral("actionUndo"))->isEnabled());

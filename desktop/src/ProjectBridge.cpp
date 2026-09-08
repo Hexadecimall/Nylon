@@ -24,8 +24,29 @@ ProjectBridge::ProjectBridge(QObject* parent)
 
 ProjectBridge::~ProjectBridge() = default;
 
+bool ProjectBridge::save(const QString& bundleDirectory)
+{
+    if (!m_project.save(bundleDirectory.toStdString())) {
+        return false;
+    }
+    m_bundlePath = bundleDirectory;
+    emit changed();
+    return true;
+}
+
+bool ProjectBridge::open(const QString& bundleDirectory)
+{
+    if (!m_project.open(bundleDirectory.toStdString())) {
+        return false;
+    }
+    m_bundlePath = bundleDirectory;
+    emit changed();
+    return true;
+}
+
 bool ProjectBridge::reset()
 {
+    m_bundlePath.clear();
     if (!m_project.valid()) {
         m_project = Project();
         if (!m_project.valid()) {

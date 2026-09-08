@@ -28,6 +28,9 @@ public:
 
     // Replaces the contents with an empty project and clears history.
     bool reset();
+    // Bundle directory persistence; paths are UTF-8.
+    bool save(const std::string& bundleDirectory) const;
+    bool open(const std::string& bundleDirectory);
 
     double tempo() const;
     bool setTempo(double bpm);
