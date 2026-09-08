@@ -10,6 +10,7 @@
 //! headroom use `f64` internally.
 
 pub mod biquad;
+pub mod compressor;
 pub mod db;
 pub mod delay;
 pub mod env;

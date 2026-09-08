@@ -5,6 +5,7 @@
 //! Storage that outlives a call is allocated before the flag goes up.
 
 use nylon::dsp::biquad::{Biquad, Coefficients, Kind};
+use nylon::dsp::compressor::{Compressor, Parameters as CompressorParameters};
 use nylon::dsp::delay::DelayLine;
 use nylon::dsp::env::{Envelope, Settings};
 use nylon::dsp::meter::Meter;
@@ -69,6 +70,7 @@ fn processing_a_block_performs_no_allocator_operations() {
     let mut smoother = OnePole::new(0.0, 0.01, RATE);
     let mut ramp = Ramp::new(0.0);
     let mut meter = Meter::with_defaults(RATE);
+    let mut compressor = Compressor::new(RATE, CompressorParameters::default());
     let mut line = DelayLine::new();
     let mut delay_buffer = vec![0.0_f32; 4_800];
     let mut block = vec![0.0_f32; BLOCK];
@@ -88,6 +90,9 @@ fn processing_a_block_performs_no_allocator_operations() {
         }
         meter.push_block(&block);
         filter.process_block(&mut block);
+        for frame in block.chunks_exact_mut(2) {
+            (frame[0], frame[1]) = compressor.process_stereo(frame[0], frame[1]);
+        }
         // Redesigning coefficients mid-block is a normal automation step.
         filter.set_coefficients(Coefficients::design(Kind::Peaking, 800.0, 1.5, 3.0, RATE));
         let _ = db::to_linear(-6.0);
