@@ -1,5 +1,8 @@
 #pragma once
 
+#include <QList>
+#include <QPair>
+#include <QString>
 #include <QWidget>
 
 class QLineEdit;
@@ -39,6 +42,10 @@ public:
 
     QLineEdit* searchField() const { return m_search; }
     QListWidget* categoryList() const { return m_categories; }
+    QListWidget* placeList() const { return m_places; }
+    // Folders outside the library that the browser offers, in display
+    // order. Only those that exist on this machine are listed.
+    static QList<QPair<QString, QString>> places();
     QTreeView* tree() const { return m_tree; }
 
 public slots:
@@ -57,10 +64,14 @@ private:
     void ensureLibraryLayout();
     void updateEmptyState();
     void onCategoryChanged();
+    void onPlaceChanged();
+    // Points the tree at a folder and updates the location line.
+    void showFolder(const QString& path, const QString& label);
 
     const Theme* m_theme;
     QLineEdit* m_search;
     QListWidget* m_categories;
+    QListWidget* m_places;
     QTreeView* m_tree;
     QFileSystemModel* m_model;
     QSortFilterProxyModel* m_proxy;

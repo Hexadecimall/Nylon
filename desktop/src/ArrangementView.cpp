@@ -28,6 +28,12 @@ constexpr int kHeaderBandWidth = 12;
 constexpr int kHeaderBadgeWidth = 52;
 constexpr int kHeaderReadoutWidth = 54;
 constexpr int kHeaderSliderMinimum = 24;
+// Width of the level strip down the right edge of a header, and the level
+// it treats as silence.
+constexpr int kMeterWidth = 3;
+constexpr double kMeterFloorDb = -60.0;
+// Tracks a header meter is kept for. Past this the strip is not drawn.
+constexpr int MaximumMeters = 4096;
 // Alpha of the wash over the selected lane and over every other bar.
 constexpr int kSelectedLaneWash = 12;
 constexpr int kAlternateBarWash = 60;
@@ -35,6 +41,32 @@ constexpr int kAlternateBarWash = 60;
 constexpr double kHeaderMinimumDb = -70.0;
 constexpr double kHeaderMaximumDb = 6.0;
 const double kInfinity = std::numeric_limits<double>::infinity();
+// Draws the small mark that says what a track carries: a waveform for
+// audio, note heads for anything played from a keyboard.
+void paintKindMark(QPainter& p, const QRect& box, bool audio, const QColor& color)
+{
+    p.save();
+    p.setPen(Qt::NoPen);
+    p.setBrush(color);
+    if (audio) {
+        const int bars = 4;
+        const int width = qMax(1, box.width() / (2 * bars));
+        static const double heights[bars] = {0.45, 1.0, 0.65, 0.85};
+        for (int index = 0; index < bars; ++index) {
+            const int height = qMax(2, static_cast<int>(box.height() * heights[index]));
+            const int x = box.left() + index * 2 * width;
+            p.drawRect(QRect(x, box.center().y() - height / 2, width, height));
+        }
+    } else {
+        const int size = qMax(2, box.height() / 3);
+        p.drawRect(QRect(box.left(), box.bottom() - size, size + 1, size));
+        p.drawRect(QRect(box.left() + size + 2, box.top() + size / 2, size + 1, size));
+        p.drawRect(QRect(box.left() + size, box.top() + size / 2, 1, box.height() - size - size / 2));
+        p.drawRect(QRect(box.left() + 2 * size + 2, box.top() + size / 2, 1, box.height() - size - size / 2));
+    }
+    p.restore();
+}
+
 } // namespace
 
 ArrangementView::ArrangementView(ProjectBridge* bridge, const Theme* theme, QWidget* parent)
@@ -194,7 +226,7 @@ QRect ArrangementView::headerVolumeRect(int track) const
         return QRect();
     }
     const int left = last.right() + kHeaderGap + 1;
-    const int right = header.right() - kHeaderMargin - kHeaderReadoutWidth;
+    const int right = header.right() - kHeaderMargin - kHeaderReadoutWidth - kMeterWidth;
     if (right - left < kHeaderSliderMinimum) {
         return QRect();
     }
@@ -219,6 +251,31 @@ void ArrangementView::selectTrack(int track)
     track = qBound(-1, track, laneCount() - 1);
     if (m_selected == track) return;
     m_selected = track;
+    viewport()->update();
+}
+
+void ArrangementView::setTrackLevel(int track, double peakDb)
+{
+    if (track < 0 || track >= MaximumMeters) {
+        return;
+    }
+    while (m_levels.size() <= track) {
+        m_levels.append(kMeterFloorDb);
+    }
+    const double level = std::isfinite(peakDb) ? qBound(kMeterFloorDb, peakDb, 12.0) : kMeterFloorDb;
+    if (qFuzzyCompare(m_levels[track] + 1.0, level + 1.0)) {
+        return;
+    }
+    m_levels[track] = level;
+    viewport()->update();
+}
+
+void ArrangementView::clearTrackLevels()
+{
+    if (m_levels.isEmpty()) {
+        return;
+    }
+    m_levels.clear();
     viewport()->update();
 }
 
@@ -464,18 +521,20 @@ void ArrangementView::paintEvent(QPaintEvent* event)
             p.setPen(secondary);
             p.drawText(number, Qt::AlignLeft | Qt::AlignVCenter, QString::number(track + 1));
             const int numberWidth = p.fontMetrics().horizontalAdvance(QStringLiteral("00")) + kHeaderGap;
-            const QRect title = name.adjusted(numberWidth, 0, 0, 0);
+
+            // What the track carries, as a mark rather than a word.
+            const QRect mark(name.left() + numberWidth, name.center().y() - 5, 11, 10);
+            paintKindMark(p, mark, m_bridge->trackKind(index) == ProjectBridge::TrackKind::Audio,
+                selected ? primary : secondary);
+
+            const QRect title = name.adjusted(numberWidth + mark.width() + kHeaderGap, 0, 0, 0);
+            QFont titleFont = p.font();
+            titleFont.setWeight(QFont::DemiBold);
+            p.setFont(titleFont);
             p.setPen(primary);
             p.drawText(title, Qt::AlignLeft | Qt::AlignVCenter,
                 p.fontMetrics().elidedText(m_bridge->trackName(index), Qt::ElideRight, title.width()));
-
-            // Kind badge, right aligned on the first row.
-            const QRect badge(header.right() - kHeaderBadgeWidth - kHeaderMargin, name.top(),
-                kHeaderBadgeWidth, name.height());
-            p.fillPath(paint::rounded(*m_theme, QRectF(badge)), control);
-            p.setPen(secondary);
-            p.drawText(badge, Qt::AlignCenter,
-                ProjectBridge::kindName(m_bridge->trackKind(index)).toUpper());
+            p.setFont(font());
 
             const bool states[] = {m_bridge->trackMuted(index), m_bridge->trackSolo(index),
                 m_bridge->trackArmed(index)};
@@ -517,6 +576,19 @@ void ArrangementView::paintEvent(QPaintEvent* event)
                 headerStateRect(track, 0).top(), kHeaderReadoutWidth, headerStateRect(track, 0).height());
             p.drawText(readout, Qt::AlignRight | Qt::AlignVCenter,
                 std::isinf(db) ? tr("-inf") : tr("%1 dB").arg(db, 0, 'f', 1));
+
+            // Output level down the inside edge, so a header shows whether
+            // the track is making sound without opening the mixer.
+            const QRect strip(header.right() - kMeterWidth, header.top() + 4, kMeterWidth,
+                header.height() - 8);
+            p.fillRect(strip, m_theme->color(QStringLiteral("meter.background")));
+            const double level = m_levels.value(track, kMeterFloorDb);
+            if (level > kMeterFloorDb) {
+                const double filled = (level - kMeterFloorDb) / (0.0 - kMeterFloorDb);
+                const int height = qBound(1, qRound(filled * strip.height()), strip.height());
+                p.fillRect(QRect(strip.left(), strip.bottom() - height + 1, strip.width(), height),
+                    m_theme->color(level > 0.0 ? QStringLiteral("meter.clip") : QStringLiteral("meter.rms")));
+            }
 
             p.fillRect(QRect(hw, header.top(), sep, header.height()), sepColor);
         }

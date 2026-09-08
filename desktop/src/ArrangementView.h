@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractScrollArea>
+#include <QList>
 
 namespace nylon {
 
@@ -41,6 +42,10 @@ public:
 public slots:
     void selectTrack(int track);
     void setPlayheadBeats(double beats);
+    // Output level for one track in decibels, drawn as a strip down the
+    // right edge of its header. Anything at or below the floor is silence.
+    void setTrackLevel(int track, double peakDb);
+    void clearTrackLevels();
 
 signals:
     void trackSelected(int track);
@@ -68,6 +73,8 @@ private:
     ProjectBridge* m_bridge;
     const Theme* m_theme;
     int m_selected = -1;
+    // Peak level per track in decibels, as last reported.
+    QList<double> m_levels;
     // Track whose volume slider is being dragged, or -1.
     int m_volumeDrag = -1;
     double m_playheadBeats = 0.0;

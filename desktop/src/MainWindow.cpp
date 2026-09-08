@@ -710,6 +710,8 @@ void MainWindow::pollAudio()
         if (m_bridge->trackLevels(static_cast<quint64>(index), levels)) {
             m_mixer->setTrackLevels(index, decibels(levels.peakLeft), decibels(levels.peakRight),
                 decibels(levels.rmsLeft), decibels(levels.rmsRight));
+            m_arrangement->setTrackLevel(index,
+                qMax(decibels(levels.peakLeft), decibels(levels.peakRight)));
         }
     }
     Levels master {};
