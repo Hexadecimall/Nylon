@@ -47,4 +47,4 @@ jobs:
           cache: true
       - run: cmake -S desktop -B target/desktop -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build target/desktop --config Release --parallel 2
-      - run: ctest --test-dir target/desktop -C Release --output-on-failure
+      - run: python3 -B scripts/qt_check.py
