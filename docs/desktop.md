@@ -56,6 +56,16 @@ project has no tracks.
 the status bar, and re-applies the theme whenever `ThemeManager` reports a
 change.
 
+## Commands and shortcuts
+
+Every menu entry is a named `QAction`. View > Command Palette (Ctrl+K or
+Ctrl+Shift+P) searches them by name with subsequence matching, shows the
+current shortcut, and triggers the highlighted entry; disabled entries are
+listed but inert. Preferences > Shortcuts edits the key of each action,
+refuses keys already in use, and restores defaults. Overrides live in the
+application settings under `shortcuts/<action name>` and are applied when
+the window is built.
+
 ## Tests
 
 Three Qt Test executables build alongside the application and run under
@@ -67,6 +77,9 @@ Three Qt Test executables build alongside the application and run under
   tempo range, undo/redo, and signal emission.
 - `test_views`: the assembled main window driven through its real controls,
   with pixel checks against theme tokens.
+- `test_widgets`: the custom controls (knob, fader, meter, button, value box).
+- `test_commands`: the command palette and shortcut overrides.
+- `test_layout`: the integer layout helpers.
 
 ## Portable layout
 
