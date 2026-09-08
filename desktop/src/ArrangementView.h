@@ -38,6 +38,7 @@ public slots:
 
 signals:
     void trackSelected(int track);
+    void locateRequested(double beats);
 
 protected:
     void paintEvent(QPaintEvent* event) override;

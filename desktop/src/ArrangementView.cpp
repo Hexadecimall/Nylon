@@ -162,6 +162,16 @@ void ArrangementView::mousePressEvent(QMouseEvent* event)
         return;
     }
     const QPoint point = event->position().toPoint();
+    if (point.y() < rulerHeight() && point.x() >= headerWidth() + separator()) {
+        const double scale = static_cast<double>(pixelsPerBar()) / static_cast<double>(beatsPerBar());
+        const double beats = (static_cast<double>(point.x() + horizontalScrollBar()->value()
+                                  - headerWidth() - separator()))
+            / scale;
+        setPlayheadBeats(beats);
+        emit locateRequested(m_playheadBeats);
+        event->accept();
+        return;
+    }
     const int track = trackAt(point.y());
     if (track < 0) return;
     selectTrack(track);

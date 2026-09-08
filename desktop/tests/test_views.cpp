@@ -214,6 +214,7 @@ void TestViews::themeSwitchRepaintsWithNewTokens()
     w.newProject();
     bridge.addTrack();
     w.showArrangement();
+    QCoreApplication::processEvents();
     QVERIFY(m_themes.load(QStringLiteral("graphite")));
     const QImage img = w.arrangementView()->viewport()->grab().toImage();
     const QRect lane = w.arrangementView()->laneRect(0);
@@ -705,6 +706,7 @@ void TestViews::arrangementGridFollowsTimeSignature()
     w.newProject();
     bridge.addTrack();
     w.showArrangement();
+    QCoreApplication::processEvents();
     ArrangementView* view = w.arrangementView();
     QCOMPARE(view->beatsPerBar(), 4);
     const nylon::Theme& t = m_themes.theme();
@@ -718,18 +720,26 @@ void TestViews::arrangementGridFollowsTimeSignature()
     const QColor grid = t.color(QStringLiteral("arrangement.grid"));
     const QColor gridBar = t.color(QStringLiteral("arrangement.grid.bar"));
     QImage img = view->viewport()->grab().toImage();
+    const auto pixelAt = [&img](int x, int y) {
+        const qreal scale = img.devicePixelRatio();
+        return img.pixelColor(qRound(static_cast<qreal>(x) * scale), qRound(static_cast<qreal>(y) * scale));
+    };
     // In 4/4 the second beat line sits a quarter bar in; in 3/4 a third.
-    QCOMPARE(img.pixelColor(x0, lane.center().y()), t.color(QStringLiteral("playhead")));
-    QCOMPARE(img.pixelColor(view->barX(1), lane.center().y()), gridBar);
-    QCOMPARE(img.pixelColor(x0 + ppb / 4, lane.center().y()), grid);
+    QCOMPARE(pixelAt(x0, lane.center().y()), t.color(QStringLiteral("playhead")));
+    QCOMPARE(pixelAt(view->barX(1), lane.center().y()), gridBar);
+    QCOMPARE(pixelAt(x0 + ppb / 4, lane.center().y()), grid);
     QVERIFY(bridge.setTimeSignature(3, 4));
     QCOMPARE(view->beatsPerBar(), 3);
     img = view->viewport()->grab().toImage();
-    QCOMPARE(img.pixelColor(x0 + ppb / 3, lane.center().y()), grid);
-    QVERIFY(img.pixelColor(x0 + ppb / 4, lane.center().y()) != grid);
+    QCOMPARE(pixelAt(x0 + ppb / 3, lane.center().y()), grid);
+    QVERIFY(pixelAt(x0 + ppb / 4, lane.center().y()) != grid);
     view->setPlayheadBeats(6.0);
     QCOMPARE(view->playheadBeats(), 6.0);
     QCOMPARE(view->playheadX(), x0 + ppb * 2);
+    QSignalSpy located(view, &ArrangementView::locateRequested);
+    QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x0 + ppb, 4));
+    QCOMPARE(located.count(), 1);
+    QCOMPARE(view->playheadBeats(), 3.0);
 }
 
 void TestViews::detailClipPageHostsThePianoRoll()
