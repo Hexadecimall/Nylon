@@ -66,6 +66,9 @@ private:
 
 void TestViews::initTestCase()
 {
+    QCoreApplication::setOrganizationName(QStringLiteral("Nylon"));
+    QCoreApplication::setApplicationName(QStringLiteral("Nylon"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
     QStandardPaths::setTestModeEnabled(true);
     QSettings().clear();
     QVERIFY(m_themes.load(QStringLiteral("nylon")));

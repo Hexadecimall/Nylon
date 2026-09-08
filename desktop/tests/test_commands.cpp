@@ -33,6 +33,11 @@ private:
 
 void TestCommands::initTestCase()
 {
+    // Settings need an identity and, on Windows, a file rather than the
+    // registry so the test-mode location is used.
+    QCoreApplication::setOrganizationName(QStringLiteral("Nylon"));
+    QCoreApplication::setApplicationName(QStringLiteral("Nylon"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
     QStandardPaths::setTestModeEnabled(true);
     QSettings().clear();
     QVERIFY(m_themes.load(QStringLiteral("nylon")));
