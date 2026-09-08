@@ -253,6 +253,27 @@ impl Transport {
         self.loop_range = range;
     }
 
+    /// The span `frames` would cover, without moving the playhead.
+    ///
+    /// Returns `(first beat, beats elapsed)`, matching what
+    /// [`advance`](Self::advance) reports, so a caller can schedule a
+    /// block before playing it.
+    #[must_use]
+    pub fn peek(&self, frames: usize) -> (f64, f64) {
+        let start = self.position_beats;
+        if !self.playing || frames == 0 {
+            return (start, 0.0);
+        }
+        let elapsed = frames as f64 / self.frames_per_beat();
+        if self.loop_range.is_active() {
+            let loop_end = self.loop_range.end_beats();
+            if start < loop_end && start + elapsed >= loop_end {
+                return (start, loop_end - start);
+            }
+        }
+        (start, elapsed)
+    }
+
     /// Advances by `frames`, returning the span of musical time the block
     /// covers as `(first beat, beats elapsed)`.
     ///
