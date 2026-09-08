@@ -136,7 +136,12 @@ void DetailPanel::setSelectedClip(int track, int scene)
         m_trackName = m_bridge->trackName(static_cast<quint64>(track));
     }
     m_pianoRoll->setClip(track, scene);
-    refresh();
+    if (scene >= 0) {
+        // Picking a slot brings up its editor, as clicking a clip does.
+        showPage(Page::Clip);
+    } else {
+        refresh();
+    }
 }
 
 void DetailPanel::showPage(Page page)
