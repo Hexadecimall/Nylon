@@ -42,7 +42,7 @@ fn native_mixer_controls_validate_and_restore_history() {
         assert_eq!(nylon_project_add_track_kind(handle, 1), 1);
         assert_eq!(nylon_track_kind(handle, 0), 1);
         assert_eq!(nylon_track_set_name(handle, 0, c"Lead".as_ptr()), 1);
-        let mut name = [0_i8; 32];
+        let mut name = [0 as std::ffi::c_char; 32];
         assert_eq!(
             nylon_track_name(handle, 0, name.as_mut_ptr(), name.len() as u64),
             4
