@@ -206,8 +206,8 @@ void TestViews::themeSwitchRepaintsWithNewTokens()
     const QRect lane = w.arrangementView()->laneRect(0);
     QVERIFY(!lane.isEmpty());
     QCOMPARE(img.pixelColor(lane.center()), m_themes.theme().color(QStringLiteral("arrangement.lane")));
-    // The lane's title bar carries the track color.
-    QCOMPARE(img.pixelColor(lane.x() / 2, lane.y() + 8), m_themes.theme().trackColor(bridge.trackColorIndex(0)));
+    // The track header carries a narrow color strip.
+    QCOMPARE(img.pixelColor(8, lane.y() + 10), m_themes.theme().trackColor(bridge.trackColorIndex(0)));
     QVERIFY(m_themes.load(QStringLiteral("nylon")));
 }
 
@@ -436,14 +436,17 @@ void TestViews::selectionFlowsBetweenGridMixerAndDetail()
         return QRect(w.mapFromGlobal(widget->mapToGlobal(QPoint())), widget->size());
     };
     const QRect sessionRect = windowRect(w.sessionView());
-    const QRect mixerRect = windowRect(w.mixer());
-    const QRect detailRect = windowRect(w.detail());
     const QRect browserRect = windowRect(w.browser());
     QVERIFY(browserRect.right() < sessionRect.left());
-    QVERIFY(detailRect.left() > sessionRect.right());
-    QVERIFY(mixerRect.top() > sessionRect.bottom());
-    QVERIFY(mixerRect.left() >= sessionRect.left());
-    QVERIFY(mixerRect.right() <= sessionRect.right());
+    QVERIFY(!w.isLowerDockVisible());
+    w.action(QStringLiteral("actionToggleMixer"))->setChecked(true);
+    QCoreApplication::processEvents();
+    QVERIFY(w.isLowerDockVisible());
+    const QRect mixerRect = windowRect(w.mixer());
+    const QRect resizedSessionRect = windowRect(w.sessionView());
+    QVERIFY(mixerRect.top() > resizedSessionRect.bottom());
+    QVERIFY(mixerRect.left() >= resizedSessionRect.left());
+    QVERIFY(mixerRect.right() <= resizedSessionRect.right());
     w.showArrangement();
     QCoreApplication::processEvents();
     QVERIFY(w.mixer()->isVisibleTo(&w));
@@ -701,24 +704,25 @@ void TestViews::arrangementGridFollowsTimeSignature()
 void TestViews::detailClipPageHostsThePianoRoll()
 {
     ProjectBridge bridge;
-    MainWindow w(&bridge, &m_themes);
-    w.show();
-    QVERIFY(QTest::qWaitForWindowExposed(&w));
-    w.newProject();
     QVERIFY(bridge.addTrack(ProjectBridge::TrackKind::Midi));
-    DetailPanel* detail = w.detail();
-    detail->setSelectedClip(0, 0);
-    QCOMPARE(detail->selectedClipTrack(), 0);
-    QCOMPARE(detail->selectedClipScene(), 0);
-    QCOMPARE(detail->selectedTrack(), 0);
-    QVERIFY(!detail->pianoRoll()->hasClip());
+    DetailPanel detail(&bridge, &m_themes.theme());
+    detail.resize(600, 300);
+    detail.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&detail));
+    detail.setSelectedClip(0, 0);
+    QCOMPARE(detail.selectedClipTrack(), 0);
+    QCOMPARE(detail.selectedClipScene(), 0);
+    QCOMPARE(detail.selectedTrack(), 0);
+    QVERIFY(!detail.pianoRoll()->hasClip());
     QVERIFY(bridge.sceneCount() >= 1 || bridge.createScene(QStringLiteral("Scene 1")));
     QVERIFY(bridge.createMidiClip(0, 0, 4.0));
-    QVERIFY(detail->pianoRoll()->hasClip());
-    QCOMPARE(detail->pianoRoll()->track(), qint64(0));
-    detail->setSelectedClip(0, -1);
-    QVERIFY(!detail->pianoRoll()->hasClip());
-    QCOMPARE(detail->selectedTrack(), 0);
+    QVERIFY(detail.pianoRoll()->hasClip());
+    QVERIFY(detail.pianoRoll()->isVisibleTo(&detail));
+    QCOMPARE(detail.pianoRoll()->track(), qint64(0));
+    detail.setSelectedClip(0, -1);
+    QVERIFY(!detail.pianoRoll()->hasClip());
+    QVERIFY(!detail.pianoRoll()->isVisibleTo(&detail));
+    QCOMPARE(detail.selectedTrack(), 0);
 }
 
 QTEST_MAIN(TestViews)

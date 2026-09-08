@@ -285,13 +285,23 @@ void SessionView::paintEvent(QPaintEvent* event)
                 const bool occupied = m_bridge->clipSlotOccupied(static_cast<quint64>(t), static_cast<quint64>(s));
                 const QColor fill = occupied ? trackColor : hovered ? slotHover : slotColor;
                 p.fillPath(paint::rounded(*m_theme, QRectF(x + 1, y + 1, sw - 2, sh - 2)), fill);
+                // Launch button at the left edge of every slot: a triangle,
+                // solid on a clip and dim on an empty slot. Launching itself
+                // waits for a transport.
+                const int triSize = qMax(5, sh / 2 - 1);
+                const QPointF triOrigin(x + stopInset + 2, y + (sh - triSize) / 2.0);
+                QPolygonF tri;
+                tri << triOrigin << triOrigin + QPointF(triSize * 0.9, triSize / 2.0) << triOrigin + QPointF(0, triSize);
+                p.setPen(Qt::NoPen);
+                p.setBrush(occupied ? m_theme->color(QStringLiteral("track.text")) : stopColor);
+                p.drawPolygon(tri);
+                const int labelInset = stopInset + triSize + textInset + 2;
                 if (occupied) {
                     p.setPen(m_theme->color(QStringLiteral("track.text")));
-                    p.drawText(QRect(x + textInset, y, sw - 2 * textInset, sh), Qt::AlignLeft | Qt::AlignVCenter,
-                        p.fontMetrics().elidedText(m_bridge->clipName(static_cast<quint64>(t), static_cast<quint64>(s)), Qt::ElideRight, sw - 2 * textInset));
-                } else {
-                    p.fillPath(paint::rounded(*m_theme, QRectF(x + stopInset + 1, y + (sh - stopSize) / 2, stopSize, stopSize)), stopColor);
+                    p.drawText(QRect(x + labelInset, y, sw - labelInset - textInset, sh), Qt::AlignLeft | Qt::AlignVCenter,
+                        p.fontMetrics().elidedText(m_bridge->clipName(static_cast<quint64>(t), static_cast<quint64>(s)), Qt::ElideRight, sw - labelInset - textInset));
                 }
+                Q_UNUSED(stopSize);
             }
             Q_UNUSED(gridHeight);
             Q_UNUSED(sepColor);
@@ -317,7 +327,14 @@ void SessionView::paintEvent(QPaintEvent* event)
                 static_cast<quint64>(s) < m_bridge->sceneCount()
                     ? m_bridge->sceneName(static_cast<quint64>(s))
                     : QString::number(s + 1));
-            p.fillRect(QRect(mx + stopInset, y + (sh - stopSize) / 2, stopSize, stopSize), stopColor);
+            // Scene launch triangle.
+            const int triSize = qMax(5, sh / 2 - 1);
+            const QPointF triOrigin(mx + stopInset + 2, y + (sh - triSize) / 2.0);
+            QPolygonF tri;
+            tri << triOrigin << triOrigin + QPointF(triSize * 0.9, triSize / 2.0) << triOrigin + QPointF(0, triSize);
+            p.setPen(Qt::NoPen);
+            p.setBrush(stopColor.lighter(140));
+            p.drawPolygon(tri);
         }
         Q_UNUSED(headerY);
     }
