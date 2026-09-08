@@ -17,14 +17,32 @@ def hazards(source):
             if FORBIDDEN.search(line.split("//", 1)[0])]
 
 
+def sources():
+    """Files that run inside the audio callback."""
+    yield pathlib.Path("src/engine.rs")
+    for path in sorted(pathlib.Path("src/dsp").glob("*.rs")):
+        yield path
+    yield pathlib.Path("src/dsp.rs")
+
+
+def strip_tests(source):
+    """Drops the test module, which may allocate freely."""
+    marker = source.find("#[cfg(test)]")
+    return source if marker < 0 else source[:marker]
+
+
 def main():
-    path = pathlib.Path("src/engine.rs")
-    hits = hazards(path.read_text())
-    for number in hits:
-        print(f"{path}:{number}: callback hazard")
-    if not hits:
+    failed = False
+    for path in sources():
+        if not path.exists():
+            continue
+        hits = hazards(strip_tests(path.read_text()))
+        for number in hits:
+            print(f"{path}:{number}: callback hazard")
+            failed = True
+    if not failed:
         print("Render kernel checks: pass")
-    return bool(hits)
+    return failed
 
 
 if __name__ == "__main__":
