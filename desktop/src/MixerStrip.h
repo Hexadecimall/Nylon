@@ -74,6 +74,7 @@ private:
     Fader* m_fader;
     LevelMeter* m_meter;
     QLabel* m_volume;
+    QLabel* m_status = nullptr;
     bool m_syncing = false;
 };
 

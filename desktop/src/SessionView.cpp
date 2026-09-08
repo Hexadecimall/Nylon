@@ -68,7 +68,7 @@ int SessionView::slotHeight() const
 
 int SessionView::headerHeight() const
 {
-    return m_theme->metricInt(QStringLiteral("control.height"), 20) + 2;
+    return m_theme->metricInt(QStringLiteral("control.height"), 20) + 4;
 }
 
 int SessionView::masterWidth() const
@@ -243,17 +243,23 @@ void SessionView::paintEvent(QPaintEvent* event)
     if (visibleRange(columns, sw + sep, sw + sep, 0, scrollX, viewW, &firstCol, &lastCol)) {
         for (qint64 t = firstCol; t <= lastCol; ++t) {
             const int x = static_cast<int>(t * (sw + sep) - scrollX);
+            // Title bar filled with the track color, as in a session mixer.
             const QRect header(x, headerY, sw, hh);
-            p.fillRect(header, panel);
-            if (t == m_selected) {
-                p.fillRect(header, selection);
-            }
             const int colorIndex = m_bridge->trackColorIndex(static_cast<quint64>(t));
-            p.fillRect(QRect(x, headerY, sw, band),
-                m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16)));
-            p.setPen(primary);
-            p.drawText(header.adjusted(textInset, band, -textInset, 0), Qt::AlignLeft | Qt::AlignVCenter,
+            const QColor trackColor = m_theme->trackColor(colorIndex >= 0 ? colorIndex : static_cast<int>(t % 16));
+            p.fillPath(paint::rounded(*m_theme, QRectF(header).adjusted(1, 1, -1, 0)), trackColor);
+            if (t == m_selected) {
+                p.setPen(QPen(m_theme->color(QStringLiteral("text.primary")), 2));
+                p.setBrush(Qt::NoBrush);
+                p.drawPath(paint::rounded(*m_theme, QRectF(header).adjusted(1.5, 1.5, -1.5, -0.5)));
+            }
+            p.setPen(m_theme->color(QStringLiteral("track.text")));
+            p.drawText(header.adjusted(textInset, 0, -textInset, 0), Qt::AlignLeft | Qt::AlignVCenter,
                 p.fontMetrics().elidedText(m_bridge->trackName(static_cast<quint64>(t)), Qt::ElideRight, sw - 2 * textInset));
+            Q_UNUSED(band);
+            Q_UNUSED(panel);
+            Q_UNUSED(primary);
+            Q_UNUSED(selection);
             for (qint64 s = firstScene; s <= lastScene; ++s) {
                 const int y = static_cast<int>(gridTop + s * (sh + sep) - scrollY);
                 const bool hovered = t == m_hoverTrack && s == m_hoverScene;

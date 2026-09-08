@@ -186,8 +186,7 @@ void TestTheme::trackColorsCycle()
 void TestTheme::builtinThemesAreComplete()
 {
     const QStringList names = ThemeManager::builtinNames();
-    QCOMPARE(names, (QStringList{QStringLiteral("graphite"), QStringLiteral("nylon"),
-        QStringLiteral("paper"), QStringLiteral("slate")}));
+    QCOMPARE(names, (QStringList{QStringLiteral("graphite"), QStringLiteral("nylon"), QStringLiteral("slate")}));
     for (const QString& name : names) {
         QStringList errors;
         const Theme t = Theme::fromFile(QStringLiteral(":/themes/%1.theme").arg(name), &errors);
@@ -299,7 +298,7 @@ void TestTheme::managerKeepsCurrentThemeOnFailure()
 {
     ThemeManager m;
     QVERIFY(!m.reload());
-    QVERIFY(m.load(QStringLiteral("paper")));
+    QVERIFY(m.load(QStringLiteral("graphite")));
     const QColor before = m.theme().color(QStringLiteral("background"));
     QVERIFY(!m.load(QString()));
     QCOMPARE(m.theme().color(QStringLiteral("background")), before);

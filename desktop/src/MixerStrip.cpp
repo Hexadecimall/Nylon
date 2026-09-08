@@ -63,9 +63,17 @@ MixerStrip::MixerStrip(const Theme* theme, Kind kind, QWidget* parent)
     m_volume->setAlignment(Qt::AlignCenter);
     m_volume->setObjectName(QStringLiteral("secondary"));
 
-    auto* buttons = new QHBoxLayout;
+    // Session mixer order: status, pan, then the fader and meter with the
+    // activator, solo, and arm stacked beside them.
+    m_status = new QLabel(this);
+    m_status->setObjectName(QStringLiteral("stripStatus"));
+    m_status->setAlignment(Qt::AlignCenter);
+    m_status->setStatusTip(tr("Track status: shows the playing clip once playback exists."));
+
+    auto* buttons = new QVBoxLayout;
     buttons->setContentsMargins(0, 0, 0, 0);
-    buttons->setSpacing(2);
+    buttons->setSpacing(3);
+    buttons->addStretch(1);
     buttons->addWidget(m_activator);
     if (kind == Kind::Track) {
         buttons->addWidget(m_solo);
@@ -74,19 +82,21 @@ MixerStrip::MixerStrip(const Theme* theme, Kind kind, QWidget* parent)
         m_solo->hide();
         m_arm->hide();
     }
+    buttons->addStretch(1);
 
     auto* faderRow = new QHBoxLayout;
     faderRow->setContentsMargins(0, 0, 0, 0);
-    faderRow->setSpacing(2);
+    faderRow->setSpacing(4);
     faderRow->addStretch(1);
     faderRow->addWidget(m_fader);
     faderRow->addWidget(m_meter);
+    faderRow->addLayout(buttons);
     faderRow->addStretch(1);
 
     auto* layout = new QVBoxLayout(this);
     layout->setSpacing(3);
     layout->addWidget(m_name);
-    layout->addLayout(buttons);
+    layout->addWidget(m_status);
     layout->addWidget(m_pan, 0, Qt::AlignHCenter);
     layout->addLayout(faderRow, 1);
     layout->addWidget(m_volume);
@@ -139,10 +149,12 @@ void MixerStrip::setTheme(const Theme* theme)
     m_fader->setTheme(theme);
     m_meter->setTheme(theme);
     const int h = m_theme->metricInt(QStringLiteral("strip.button.height"), 16);
-    m_activator->setFixedHeight(h);
-    m_solo->setFixedHeight(h);
-    m_arm->setFixedHeight(h);
-    m_arm->setFixedWidth(h + 4);
+    const int bw = h + 14;
+    m_activator->setFixedSize(bw, h + 2);
+    m_solo->setFixedSize(bw, h + 2);
+    m_arm->setFixedSize(bw, h + 2);
+    m_name->setFixedHeight(m_theme->metricInt(QStringLiteral("control.height"), 20));
+    m_status->setFixedHeight(m_theme->metricInt(QStringLiteral("strip.button.height"), 16));
     const int pad = m_theme->metricInt(QStringLiteral("control.padding"), 4);
     layout()->setContentsMargins(pad, pad + 3, pad, pad);
     updateGeometry();
@@ -167,6 +179,10 @@ QString MixerStrip::name() const
 void MixerStrip::setColor(const QColor& color)
 {
     m_color = color;
+    QPalette pal = m_name->palette();
+    pal.setColor(QPalette::WindowText, color.isValid() ? m_theme->color(QStringLiteral("track.text"))
+                                                       : m_theme->color(QStringLiteral("text.primary")));
+    m_name->setPalette(pal);
     update();
 }
 
@@ -225,13 +241,16 @@ void MixerStrip::paintEvent(QPaintEvent*)
     const QPainterPath shape = paint::rounded(*m_theme, QRectF(card).adjusted(0.5, 0.5, -0.5, -0.5), false);
     p.fillPath(shape, m_selected ? m_theme->color(QStringLiteral("raised"))
                                  : m_theme->color(QStringLiteral("mixer.background")));
-    const int band = m_theme->metricInt(QStringLiteral("session.header.band"), 2) + 1;
+    // Title bar in the track color, matching the grid header above it.
     if (m_color.isValid()) {
         p.save();
         p.setClipPath(shape);
-        p.fillRect(QRect(card.x(), card.y(), card.width(), band), m_color);
+        p.fillRect(QRect(card.x(), card.y(), card.width(), m_name->geometry().bottom() + 2), m_color);
         p.restore();
     }
+    // Status field below the title.
+    const QRect status = m_status->geometry().adjusted(2, 0, -2, 0);
+    p.fillPath(paint::rounded(*m_theme, QRectF(status)), m_theme->color(QStringLiteral("session.slot")));
     p.setPen(QPen(m_selected ? m_theme->color(QStringLiteral("accent")) : m_theme->color(QStringLiteral("panel.border")), 1));
     p.setBrush(Qt::NoBrush);
     p.drawPath(shape);

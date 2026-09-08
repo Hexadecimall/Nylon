@@ -1,6 +1,6 @@
 # Theme format
 
-Themes are plain-text files with the `.theme` extension. The four shipped
+Themes are plain-text files with the `.theme` extension. The three shipped
 themes live in `themes/` and are compiled into the application. A file with
 the same name in the user theme directory overrides the built-in copy and is
 reloaded when it changes on disk. The user theme directory is
@@ -75,6 +75,7 @@ active.
 | `knob.arc` | Knob value arc |
 | `meter.background` | Meter background |
 | `clip.empty.hover` | Hovered empty clip slot |
+| `track.text` | Text drawn on a track-colored title bar |
 | `window.border` | Outline of the frameless window |
 | `titlebar.background` | Title bar band |
 | `panel.border` | Outline of rounded panels |
@@ -140,6 +141,5 @@ content past that extent is not reachable by scrolling.
 | `nylon.theme` | Default. Near-black slate base, neutral greys, single blue accent, 10 px panel radius. |
 | `slate.theme` | Mid-grey base for brighter rooms. |
 | `graphite.theme` | Darker than Nylon. |
-| `paper.theme` | Light base with dark text. Track colors are darkened for legibility. |
 
 Every shipped theme defines the same key set; `test_theme` enforces this.

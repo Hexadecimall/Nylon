@@ -109,8 +109,10 @@ void TestViews::addTrackButtonGrowsBothViews()
     const QRect slot = w.sessionView()->slotRect(2, 0);
     QVERIFY(!slot.isEmpty());
     const QImage img = w.sessionView()->viewport()->grab().toImage();
-    // The color band sits just inside the panel outline.
-    QCOMPARE(img.pixelColor(slot.center().x(), 1), m_themes.theme().trackColor(bridge.trackColorIndex(2)));
+    // The title bar is filled with the track color; sample its middle,
+    // away from the selection outline and the name text.
+    const int headerMid = (slot.y() - 2) / 2;
+    QCOMPARE(img.pixelColor(slot.right() - 6, headerMid), m_themes.theme().trackColor(bridge.trackColorIndex(2)));
     QCOMPARE(img.pixelColor(slot.center()), m_themes.theme().color(QStringLiteral("session.slot")));
 }
 
@@ -197,7 +199,7 @@ void TestViews::themeSwitchRepaintsWithNewTokens()
     w.newProject();
     bridge.addTrack();
     w.showArrangement();
-    QVERIFY(m_themes.load(QStringLiteral("paper")));
+    QVERIFY(m_themes.load(QStringLiteral("graphite")));
     const QImage img = w.arrangementView()->viewport()->grab().toImage();
     const QRect lane = w.arrangementView()->laneRect(0);
     QVERIFY(!lane.isEmpty());

@@ -213,7 +213,7 @@ const QStringList& Theme::requiredColors()
         for (const char* extra : {"state.on", "state.solo", "state.arm", "state.play", "state.record",
                  "state.loop", "browser.background", "browser.selection", "browser.header",
                  "detail.background", "mixer.background", "fader.track", "fader.fill", "fader.handle",
-                 "knob.track", "knob.arc", "meter.background", "clip.empty.hover", "window.border",
+                 "knob.track", "knob.arc", "meter.background", "clip.empty.hover", "track.text", "window.border",
                  "titlebar.background", "panel.border", "window.control.close", "window.control.minimize",
                  "window.control.zoom"}) {
             k.append(QString::fromLatin1(extra));
@@ -415,7 +415,7 @@ QString Theme::styleSheet() const
         "QLabel#positionDisplay { background: %CTRLBG; border: %SEPpx solid %BORDER; border-radius: %RSMALLpx; padding: 0 %PADpx; }"
         "QLabel#positionDisplay:disabled { color: %DISABLED; }"
         "QLabel#detailTitle { color: %TEXT; padding-left: %PADpx; }"
-        "QLabel#stripName { color: %TEXT; }"
+        "QLabel#stripName { color: palette(window-text); }"
         "QSplitter::handle { background: %SEPC; }")
         .replace(QLatin1String("%MENUW"), QString::number(ctrlH * 11))
         .replace(QLatin1String("%BROWSERBG"), c("browser.background"))
