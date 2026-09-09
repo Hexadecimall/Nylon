@@ -11,8 +11,10 @@ use nylon::dsp::saturator::{
 use nylon::engine::device::{DeviceConfig, DeviceKind};
 use nylon::engine::voice::Patch;
 use nylon::persistence::PersistenceError;
+use nylon::plugin::Format as PluginFormat;
 use nylon::project::{
-    AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, Project, TrackKind,
+    AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, PluginDevice,
+    Project, TrackKind,
 };
 use nylon::routing::EdgeKind;
 
@@ -178,6 +180,18 @@ fn session() -> Project {
                     },
                 },
             },
+            Command::AddPluginDevice {
+                track: id,
+                enabled: false,
+                plugin: PluginDevice::new(
+                    PluginFormat::Clap,
+                    "Effect.clap",
+                    "app.nylon.effect",
+                    160,
+                    vec![4, 5, 6, 7],
+                )
+                .unwrap(),
+            },
             Command::SetTimeSignature {
                 numerator: 7,
                 denominator: 8,
@@ -300,7 +314,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 15;
+    future[4] = 16;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

@@ -230,6 +230,12 @@ underrun, queue-drop, and worker-failure counters expose its health. State save
 and load commands transfer opaque plugin state with a 256 MiB limit. State I/O
 never enters an audio callback.
 
+Project device chains store native processors and external plugins in one order.
+Each plugin record contains its format, portable package name, stable identifier,
+reported latency, enabled state, and opaque state bytes. Plugin state uses shared
+immutable storage so command snapshots do not copy the payload. Device moves,
+bypass changes, state replacement, undo, and persistence preserve mixed chains.
+
 ## Benchmarks
 
 The render benchmark reports nanoseconds per 256-frame stereo block after warmup.

@@ -53,8 +53,11 @@ Header: `bindings/cpp/nylon.hpp`, library `nyloncpp` (built by
 `bindings/cpp/CMakeLists.txt`; link it with `-lnyloncpp` plus the core).
 `nylon::Project` is a move-only owner of a project handle with one method
 per project C function, `std::string` for names, and `nylon::MidiNote` /
-`nylon::BeatRange` value types. `nylon::TrackDevice` carries a typed device,
+`nylon::BeatRange` value types. `nylon::TrackDevice` carries a typed native device,
 its enabled state, and sixteen fixed parameter slots across the ABI.
+`nylon::TrackPluginDevice` carries an external plugin package name, identifier,
+format, reported latency, enabled state, and opaque state bytes. Device indexes
+address the shared ordered chain for move, delete, and bypass operations.
 Device kinds include utility, equalizer, compressor, delay, limiter, saturator,
 gate, chorus, reverb, auto filter, and phaser.
 `nylon::InstrumentPatch` configures both oscillators, sub and noise levels,
@@ -124,6 +127,7 @@ nylon-control --project Session.nylon add-device 0 delay 0.25 0.4 0.3
 nylon-control --project Session.nylon add-device 0 limiter -0.3 0.1 0.005
 nylon-control --project Session.nylon add-device 0 saturator 9 -4 0.75 diode 4x on
 nylon-control --project Session.nylon add-device 0 gate -32 8 0.002 0.04 0.15 on
+nylon-control --project Session.nylon add-plugin 0 clap Effect.clap app.nylon.effect 96 on
 nylon-control --project Session.nylon track-devices 0
 nylon-control --project Session.nylon set-device-enabled 0 1 off
 nylon-control --project Session.nylon set-automation 0 volume 0 -12 linear 4 0 smooth

@@ -74,6 +74,11 @@ def main():
             call("delete-device", "0", "1")
             devices = call("track-devices", "0")["devices"]
             assert len(devices) == 1 and devices[0]["kind"] == "chorus", devices
+            call("add-plugin", "0", "clap", "Effect.clap", "app.nylon.effect", "64", "on")
+            devices = call("track-devices", "0")["devices"]
+            assert devices[1]["kind"] == "plugin" and devices[1]["latencyFrames"] == 64, devices
+            call("set-device-enabled", "0", "1", "off")
+            assert call("track-devices", "0")["devices"][1]["enabled"] is False
             call("add-device", "0", "reverb", "0.6", "31", "0.35", "0.7", "0.02", "1", "0.3", succeeds=False)
             call("create-midi-clip", "0", "0", "4")
             call("add-note", "0", "0", "60", "80", "0.22", "0.5")

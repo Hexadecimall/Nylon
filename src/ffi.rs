@@ -21,15 +21,15 @@ use crate::engine::device::DeviceKind as TrackDeviceKind;
 use crate::engine::voice::Patch;
 use crate::media::import_wave;
 use crate::mixer::Levels;
-use crate::plugin::Catalog as PluginCatalog;
 use crate::plugin::bridge::Bridge as ClapBridge;
 use crate::plugin::clap::{
     Instance as ClapInstance, NoteEvent as ClapNoteEvent, ParameterEvent as ClapParameterEvent,
 };
 use crate::plugin::worker::Client as ClapWorker;
+use crate::plugin::{Catalog as PluginCatalog, Format as PluginFormat};
 use crate::project::{
-    AutomationCurve, AutomationParameter, AutomationPoint, ClipId, Command, MidiNote, Project,
-    SceneId, TrackId, TrackKind,
+    AutomationCurve, AutomationParameter, AutomationPoint, ClipId, Command, MidiNote, PluginDevice,
+    Project, SceneId, TrackId, TrackKind,
 };
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingGraph};
 #[cfg(platform_audio)]
@@ -965,6 +965,302 @@ pub unsafe extern "C" fn nylon_track_device_count(handle: *const Project, track:
         .map_or(0, |track| track.devices().len() as u64)
 }
 
+/// Returns zero for a native processor, one for a plugin, or minus one for an invalid index.
+///
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_device_type(
+    handle: *const Project,
+    track: u64,
+    device: u64,
+) -> i32 {
+    let (Ok(track), Ok(device)) = (usize::try_from(track), usize::try_from(device)) else {
+        return -1;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    (unsafe { handle.as_ref() })
+        .and_then(|project| project.current.tracks.get(track))
+        .and_then(|track| track.devices().get(device))
+        .map_or(-1, |device| i32::from(device.plugin().is_some()))
+}
+
+/// Returns zero or one, or minus one for an invalid index.
+///
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_device_enabled(
+    handle: *const Project,
+    track: u64,
+    device: u64,
+) -> i32 {
+    let (Ok(track), Ok(device)) = (usize::try_from(track), usize::try_from(device)) else {
+        return -1;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    (unsafe { handle.as_ref() })
+        .and_then(|project| project.current.tracks.get(track))
+        .and_then(|track| track.devices().get(device))
+        .map_or(-1, |device| i32::from(device.enabled()))
+}
+
+/// # Safety
+/// A non-null handle must be exclusively accessible.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_device_set_enabled(
+    handle: *mut Project,
+    track: u64,
+    index: u64,
+    enabled: i32,
+) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let (Ok(track), Ok(index), Some(enabled)) = (
+        usize::try_from(track),
+        usize::try_from(index),
+        match enabled {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        },
+    ) else {
+        return 0;
+    };
+    let Some(id) = project
+        .current
+        .tracks
+        .get(track)
+        .and_then(|track| track.devices().get(index))
+        .map(|device| device.id())
+    else {
+        return 0;
+    };
+    project
+        .apply(&[Command::SetDeviceEnabled { id, enabled }])
+        .is_ok()
+        .into()
+}
+
+fn plugin_at(project: &Project, track: u64, device: u64) -> Option<&PluginDevice> {
+    let track = usize::try_from(track).ok()?;
+    let device = usize::try_from(device).ok()?;
+    project
+        .current
+        .tracks
+        .get(track)?
+        .devices()
+        .get(device)?
+        .plugin()
+}
+
+/// Returns the plugin format code, or minus one for a native or invalid device.
+///
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_plugin_format(
+    handle: *const Project,
+    track: u64,
+    device: u64,
+) -> i32 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    (unsafe { handle.as_ref() })
+        .and_then(|project| plugin_at(project, track, device))
+        .map_or(-1, |plugin| plugin.format().code())
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_plugin_latency(
+    handle: *const Project,
+    track: u64,
+    device: u64,
+) -> u32 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    (unsafe { handle.as_ref() })
+        .and_then(|project| plugin_at(project, track, device))
+        .map_or(0, PluginDevice::latency_frames)
+}
+
+macro_rules! plugin_text {
+    ($name:ident, $field:ident) => {
+        /// Copies plugin text and returns its byte length excluding the terminator.
+        ///
+        /// # Safety
+        /// The handle must be live. A non-null buffer must hold `capacity` bytes.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(
+            handle: *const Project,
+            track: u64,
+            device: u64,
+            buffer: *mut c_char,
+            capacity: u64,
+        ) -> u64 {
+            // SAFETY: Handle validity and access exclusion are required by the interface.
+            (unsafe { handle.as_ref() })
+                .and_then(|project| plugin_at(project, track, device))
+                .map_or(0, |plugin| copy_text(plugin.$field(), buffer, capacity))
+        }
+    };
+}
+
+plugin_text!(nylon_track_plugin_package, package);
+plugin_text!(nylon_track_plugin_identifier, identifier);
+
+/// Copies plugin state and returns its full byte length.
+///
+/// # Safety
+/// The handle must be live. A non-null buffer must hold `capacity` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_plugin_state(
+    handle: *const Project,
+    track: u64,
+    device: u64,
+    buffer: *mut u8,
+    capacity: u64,
+) -> u64 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(plugin) =
+        (unsafe { handle.as_ref() }).and_then(|project| plugin_at(project, track, device))
+    else {
+        return 0;
+    };
+    if !buffer.is_null() {
+        let count = plugin
+            .state()
+            .len()
+            .min(usize::try_from(capacity).unwrap_or(usize::MAX));
+        // SAFETY: The caller supplies writable nonoverlapping storage.
+        unsafe { std::ptr::copy_nonoverlapping(plugin.state().as_ptr(), buffer, count) };
+    }
+    plugin.state().len() as u64
+}
+
+/// Adds an external plugin at the end of a track chain.
+///
+/// # Safety
+/// Strings must be terminated. State must address `state_length` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_plugin_add(
+    handle: *mut Project,
+    track: u64,
+    format: i32,
+    package: *const c_char,
+    identifier: *const c_char,
+    latency_frames: u32,
+    state: *const u8,
+    state_length: u64,
+    enabled: i32,
+) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    if package.is_null() || identifier.is_null() || (state.is_null() && state_length != 0) {
+        return 0;
+    }
+    let (Ok(track), Ok(state_length)) = (usize::try_from(track), usize::try_from(state_length))
+    else {
+        return 0;
+    };
+    let Some(track_id) = project.current.tracks.get(track).map(|track| track.id()) else {
+        return 0;
+    };
+    let Some(format) = (match format {
+        0 => Some(PluginFormat::Vst3),
+        1 => Some(PluginFormat::AudioUnit),
+        2 => Some(PluginFormat::Clap),
+        3 => Some(PluginFormat::Lv2),
+        _ => None,
+    }) else {
+        return 0;
+    };
+    let Some(enabled) = (match enabled {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }) else {
+        return 0;
+    };
+    // SAFETY: The interface requires both pointers to address terminated strings.
+    let (Ok(package), Ok(identifier)) = (unsafe {
+        (
+            CStr::from_ptr(package).to_str(),
+            CStr::from_ptr(identifier).to_str(),
+        )
+    }) else {
+        return 0;
+    };
+    let state = if state_length == 0 {
+        &[]
+    } else {
+        // SAFETY: The interface requires state_length readable bytes.
+        unsafe { std::slice::from_raw_parts(state, state_length) }
+    };
+    let Ok(plugin) = PluginDevice::new(format, package, identifier, latency_frames, state) else {
+        return 0;
+    };
+    project
+        .apply(&[Command::AddPluginDevice {
+            track: track_id,
+            enabled,
+            plugin,
+        }])
+        .is_ok()
+        .into()
+}
+
+/// Replaces the opaque state stored for one plugin device.
+///
+/// # Safety
+/// The project must be exclusive. State must address `state_length` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_plugin_set_state(
+    handle: *mut Project,
+    track: u64,
+    index: u64,
+    state: *const u8,
+    state_length: u64,
+) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let (Ok(track), Ok(index), Ok(state_length)) = (
+        usize::try_from(track),
+        usize::try_from(index),
+        usize::try_from(state_length),
+    ) else {
+        return 0;
+    };
+    if state.is_null() && state_length != 0 {
+        return 0;
+    }
+    let Some(id) = project
+        .current
+        .tracks
+        .get(track)
+        .and_then(|track| track.devices().get(index))
+        .map(|device| device.id())
+    else {
+        return 0;
+    };
+    let state = if state_length == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: The interface requires state_length readable bytes.
+        unsafe { std::slice::from_raw_parts(state, state_length) }.to_vec()
+    };
+    project
+        .apply(&[Command::SetPluginState { id, state }])
+        .is_ok()
+        .into()
+}
+
 /// # Safety
 /// A non-null handle must be live. `out` must point to writable storage.
 #[unsafe(no_mangle)]
@@ -987,8 +1283,11 @@ pub unsafe extern "C" fn nylon_track_device_get(
     else {
         return 0;
     };
+    let Some(kind) = item.native_kind() else {
+        return 0;
+    };
     // SAFETY: The caller supplies writable storage for one record.
-    unsafe { out.write(native_track_device(item.kind(), item.enabled())) };
+    unsafe { out.write(native_track_device(kind, item.enabled())) };
     1
 }
 

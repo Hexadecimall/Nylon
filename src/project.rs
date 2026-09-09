@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
 use crate::engine::voice::Patch;
+use crate::plugin::{Format as PluginFormat, clap::MAX_STATE_BYTES};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
 
 /// Largest number of routes stored in one project snapshot.
@@ -108,10 +109,80 @@ pub struct RouteId(pub(crate) u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeviceId(pub(crate) u64);
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+pub const MAX_PLUGIN_TEXT_BYTES: usize = 1_024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginDevice {
+    format: PluginFormat,
+    package: String,
+    identifier: String,
+    latency_frames: u32,
+    state: Arc<[u8]>,
+}
+
+impl PluginDevice {
+    pub fn new(
+        format: PluginFormat,
+        package: impl Into<String>,
+        identifier: impl Into<String>,
+        latency_frames: u32,
+        state: impl Into<Arc<[u8]>>,
+    ) -> Result<Self, ProjectError> {
+        let value = Self {
+            format,
+            package: package.into(),
+            identifier: identifier.into(),
+            latency_frames,
+            state: state.into(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn format(&self) -> PluginFormat {
+        self.format
+    }
+    pub fn package(&self) -> &str {
+        &self.package
+    }
+    pub fn identifier(&self) -> &str {
+        &self.identifier
+    }
+    pub fn latency_frames(&self) -> u32 {
+        self.latency_frames
+    }
+    pub fn state(&self) -> &[u8] {
+        &self.state
+    }
+    fn validate(&self) -> Result<(), ProjectError> {
+        if self.package.is_empty()
+            || self.package.len() > MAX_PLUGIN_TEXT_BYTES
+            || self.package == "."
+            || self.package == ".."
+            || self.package.contains('/')
+            || self.package.contains('\\')
+            || self.identifier.is_empty()
+            || self.identifier.len() > MAX_PLUGIN_TEXT_BYTES
+            || self.identifier.contains('\0')
+            || self.state.len() > MAX_STATE_BYTES
+        {
+            return Err(ProjectError::InvalidDevice);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DeviceProcessor {
+    Native(DeviceKind),
+    Plugin(PluginDevice),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Device {
     pub(crate) id: DeviceId,
-    pub(crate) config: DeviceConfig,
+    pub(crate) enabled: bool,
+    pub(crate) processor: DeviceProcessor,
 }
 
 impl Device {
@@ -119,13 +190,40 @@ impl Device {
         self.id
     }
     pub fn enabled(&self) -> bool {
-        self.config.enabled
+        self.enabled
     }
-    pub fn kind(&self) -> DeviceKind {
-        self.config.kind
+    pub fn native_kind(&self) -> Option<DeviceKind> {
+        match &self.processor {
+            DeviceProcessor::Native(kind) => Some(*kind),
+            DeviceProcessor::Plugin(_) => None,
+        }
     }
-    pub fn config(&self) -> DeviceConfig {
-        self.config
+    pub fn native_config(&self) -> Option<DeviceConfig> {
+        self.native_kind().map(|kind| DeviceConfig {
+            enabled: self.enabled,
+            kind,
+        })
+    }
+    pub fn plugin(&self) -> Option<&PluginDevice> {
+        match &self.processor {
+            DeviceProcessor::Native(_) => None,
+            DeviceProcessor::Plugin(plugin) => Some(plugin),
+        }
+    }
+    pub fn latency_frames(&self, sample_rate: f32) -> Result<u32, ProjectError> {
+        match &self.processor {
+            DeviceProcessor::Native(kind) => DeviceConfig {
+                enabled: self.enabled,
+                kind: *kind,
+            }
+            .latency_frames(sample_rate)
+            .map_err(|_| ProjectError::InvalidDevice),
+            DeviceProcessor::Plugin(plugin) => Ok(if self.enabled {
+                plugin.latency_frames
+            } else {
+                0
+            }),
+        }
     }
 }
 
@@ -415,7 +513,6 @@ impl Snapshot {
                         total
                             .checked_add(
                                 device
-                                    .config
                                     .latency_frames(self.sample_rate as f32)
                                     .map_err(|_| RoutingError::LatencyOverflow)?,
                             )
@@ -504,6 +601,11 @@ pub enum Command {
         track: TrackId,
         config: DeviceConfig,
     },
+    AddPluginDevice {
+        track: TrackId,
+        enabled: bool,
+        plugin: PluginDevice,
+    },
     DeleteDevice(DeviceId),
     MoveDevice {
         id: DeviceId,
@@ -516,6 +618,10 @@ pub enum Command {
     SetDeviceKind {
         id: DeviceId,
         kind: DeviceKind,
+    },
+    SetPluginState {
+        id: DeviceId,
+        state: Vec<u8>,
     },
     SetAutomation {
         track: TrackId,
@@ -836,7 +942,26 @@ impl Project {
                     next_id = next_identifier(next_id)?;
                     target.devices.push(Device {
                         id,
-                        config: *config,
+                        enabled: config.enabled,
+                        processor: DeviceProcessor::Native(config.kind),
+                    });
+                }
+                Command::AddPluginDevice {
+                    track,
+                    enabled,
+                    plugin,
+                } => {
+                    plugin.validate()?;
+                    let target = snapshot.track_mut(*track)?;
+                    if target.devices.len() == MAX_DEVICES {
+                        return Err(ProjectError::DeviceCapacity);
+                    }
+                    let id = DeviceId(next_id);
+                    next_id = next_identifier(next_id)?;
+                    target.devices.push(Device {
+                        id,
+                        enabled: *enabled,
+                        processor: DeviceProcessor::Plugin(plugin.clone()),
                     });
                 }
                 Command::DeleteDevice(id) => {
@@ -878,7 +1003,7 @@ impl Project {
                         .flat_map(|track| &mut track.devices)
                         .find(|device| device.id == *id)
                         .ok_or(ProjectError::MissingDevice)?;
-                    device.config.enabled = *enabled;
+                    device.enabled = *enabled;
                 }
                 Command::SetDeviceKind { id, kind } => {
                     DeviceConfig {
@@ -893,7 +1018,25 @@ impl Project {
                         .flat_map(|track| &mut track.devices)
                         .find(|device| device.id == *id)
                         .ok_or(ProjectError::MissingDevice)?;
-                    device.config.kind = *kind;
+                    let DeviceProcessor::Native(current) = &mut device.processor else {
+                        return Err(ProjectError::InvalidDevice);
+                    };
+                    *current = *kind;
+                }
+                Command::SetPluginState { id, state } => {
+                    if state.len() > MAX_STATE_BYTES {
+                        return Err(ProjectError::InvalidDevice);
+                    }
+                    let device = snapshot
+                        .tracks
+                        .iter_mut()
+                        .flat_map(|track| &mut track.devices)
+                        .find(|device| device.id == *id)
+                        .ok_or(ProjectError::MissingDevice)?;
+                    let DeviceProcessor::Plugin(plugin) = &mut device.processor else {
+                        return Err(ProjectError::InvalidDevice);
+                    };
+                    plugin.state = Arc::from(state.as_slice());
                 }
                 Command::SetAutomation {
                     track,
@@ -984,7 +1127,11 @@ impl Project {
                         .tracks
                         .iter()
                         .flat_map(|track| &track.devices)
-                        .any(|device| device.config.validate(*rate as f32).is_err())
+                        .any(|device| {
+                            device
+                                .native_config()
+                                .is_some_and(|config| config.validate(*rate as f32).is_err())
+                        })
                     {
                         return Err(ProjectError::InvalidDevice);
                     }

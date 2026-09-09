@@ -601,7 +601,7 @@ NylonTrackDevice nativeDevice(const TrackDevice& device)
     return result;
 }
 
-TrackDevice trackDevice(const NylonTrackDevice& device)
+TrackDevice cppTrackDevice(const NylonTrackDevice& device)
 {
     TrackDevice result;
     result.kind = static_cast<DeviceKind>(device.kind);
@@ -653,9 +653,50 @@ std::vector<TrackDevice> Project::trackDevices(std::uint64_t track) const
     for (std::uint64_t index = 0; index < count; ++index) {
         NylonTrackDevice device{};
         if (!nylon_track_device_get(m_handle, track, index, &device)) return {};
-        result.push_back(trackDevice(device));
+        result.push_back(cppTrackDevice(device));
     }
     return result;
+}
+
+std::uint64_t Project::trackDeviceCount(std::uint64_t track) const
+{
+    return nylon_track_device_count(m_handle, track);
+}
+
+int Project::trackDeviceType(std::uint64_t track, std::uint64_t index) const
+{
+    return nylon_track_device_type(m_handle, track, index);
+}
+
+bool Project::trackDevice(std::uint64_t track, std::uint64_t index, TrackDevice& device) const
+{
+    NylonTrackDevice native{};
+    if (!nylon_track_device_get(m_handle, track, index, &native)) return false;
+    device = cppTrackDevice(native);
+    return true;
+}
+
+bool Project::trackPluginDevice(
+    std::uint64_t track, std::uint64_t index, TrackPluginDevice& device) const
+{
+    const auto format = nylon_track_plugin_format(m_handle, track, index);
+    if (format < 0) return false;
+    const auto packageLength = nylon_track_plugin_package(m_handle, track, index, nullptr, 0);
+    const auto identifierLength
+        = nylon_track_plugin_identifier(m_handle, track, index, nullptr, 0);
+    std::vector<char> package(static_cast<std::size_t>(packageLength) + 1);
+    std::vector<char> identifier(static_cast<std::size_t>(identifierLength) + 1);
+    nylon_track_plugin_package(m_handle, track, index, package.data(), package.size());
+    nylon_track_plugin_identifier(m_handle, track, index, identifier.data(), identifier.size());
+    const auto stateLength = nylon_track_plugin_state(m_handle, track, index, nullptr, 0);
+    std::vector<std::uint8_t> state(static_cast<std::size_t>(stateLength));
+    if (stateLength != 0)
+        nylon_track_plugin_state(m_handle, track, index, state.data(), state.size());
+    device = {static_cast<PluginFormat>(format),
+        nylon_track_device_enabled(m_handle, track, index) == 1,
+        package.data(), identifier.data(),
+        nylon_track_plugin_latency(m_handle, track, index), std::move(state)};
+    return true;
 }
 
 bool Project::addTrackDevice(std::uint64_t track, const TrackDevice& device)
@@ -664,11 +705,33 @@ bool Project::addTrackDevice(std::uint64_t track, const TrackDevice& device)
     return nylon_track_device_add(m_handle, track, &native) != 0;
 }
 
+bool Project::addTrackPlugin(std::uint64_t track, const TrackPluginDevice& device)
+{
+    return nylon_track_plugin_add(m_handle, track, static_cast<int>(device.format),
+               device.package.c_str(), device.identifier.c_str(), device.latencyFrames,
+               device.state.empty() ? nullptr : device.state.data(), device.state.size(),
+               device.enabled ? 1 : 0)
+        != 0;
+}
+
 bool Project::setTrackDevice(
     std::uint64_t track, std::uint64_t index, const TrackDevice& device)
 {
     const auto native = nativeDevice(device);
     return nylon_track_device_set(m_handle, track, index, &native) != 0;
+}
+
+bool Project::setTrackDeviceEnabled(std::uint64_t track, std::uint64_t index, bool enabled)
+{
+    return nylon_track_device_set_enabled(m_handle, track, index, enabled ? 1 : 0) != 0;
+}
+
+bool Project::setTrackPluginState(std::uint64_t track, std::uint64_t index,
+    const std::vector<std::uint8_t>& state)
+{
+    return nylon_track_plugin_set_state(m_handle, track, index,
+               state.empty() ? nullptr : state.data(), state.size())
+        != 0;
 }
 
 bool Project::deleteTrackDevice(std::uint64_t track, std::uint64_t index)

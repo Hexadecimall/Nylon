@@ -253,6 +253,10 @@ int nylon_track_instrument_set(
 
 unsigned long long nylon_track_device_count(
     const void* project, unsigned long long track);
+int nylon_track_device_type(const void* project, unsigned long long track,
+    unsigned long long device);
+int nylon_track_device_enabled(const void* project, unsigned long long track,
+    unsigned long long device);
 int nylon_track_device_get(const void* project, unsigned long long track,
     unsigned long long device, NylonTrackDevice* out);
 int nylon_track_device_add(
@@ -263,6 +267,27 @@ int nylon_track_device_delete(
     void* project, unsigned long long track, unsigned long long index);
 int nylon_track_device_move(void* project, unsigned long long track,
     unsigned long long from, unsigned long long to);
+int nylon_track_device_set_enabled(void* project, unsigned long long track,
+    unsigned long long device, int enabled);
+int nylon_track_plugin_format(const void* project, unsigned long long track,
+    unsigned long long device);
+unsigned int nylon_track_plugin_latency(const void* project, unsigned long long track,
+    unsigned long long device);
+unsigned long long nylon_track_plugin_package(const void* project,
+    unsigned long long track, unsigned long long device, char* buffer,
+    unsigned long long capacity);
+unsigned long long nylon_track_plugin_identifier(const void* project,
+    unsigned long long track, unsigned long long device, char* buffer,
+    unsigned long long capacity);
+unsigned long long nylon_track_plugin_state(const void* project,
+    unsigned long long track, unsigned long long device, unsigned char* buffer,
+    unsigned long long capacity);
+int nylon_track_plugin_add(void* project, unsigned long long track, int format,
+    const char* package, const char* identifier, unsigned int latency_frames,
+    const unsigned char* state, unsigned long long state_length, int enabled);
+int nylon_track_plugin_set_state(void* project, unsigned long long track,
+    unsigned long long device, const unsigned char* state,
+    unsigned long long state_length);
 
 unsigned long long nylon_track_automation_count(
     const void* project, unsigned long long track, int parameter);

@@ -452,6 +452,26 @@ QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
         {"enabled", device.enabled}, {"parameters", parameters}};
 }
 
+QJsonObject pluginDeviceJson(const nylon::TrackPluginDevice& device, std::uint64_t index)
+{
+    return {{"index", static_cast<double>(index)}, {"kind", "plugin"},
+        {"enabled", device.enabled}, {"format", pluginFormatName(device.format)},
+        {"package", QString::fromStdString(device.package)},
+        {"identifier", QString::fromStdString(device.identifier)},
+        {"latencyFrames", static_cast<double>(device.latencyFrames)},
+        {"stateBytes", static_cast<double>(device.state.size())}};
+}
+
+bool parsePluginFormat(const QString& text, nylon::PluginFormat& format)
+{
+    if (text == "vst3") format = nylon::PluginFormat::Vst3;
+    else if (text == "audio-unit" || text == "au") format = nylon::PluginFormat::AudioUnit;
+    else if (text == "clap") format = nylon::PluginFormat::Clap;
+    else if (text == "lv2") format = nylon::PluginFormat::Lv2;
+    else return false;
+    return true;
+}
+
 namespace {
 
 int remoteCommand(const QString& endpoint, const QStringList& positional)
@@ -736,9 +756,19 @@ int directCommand(
         if (!indexNumber(positional[1], track) || track >= project.trackCount())
             return fail("Invalid track index");
         QJsonArray devices;
-        const auto chain = project.trackDevices(track);
-        for (std::size_t index = 0; index < chain.size(); ++index)
-            devices.append(deviceJson(chain[index], index));
+        const auto count = project.trackDeviceCount(track);
+        for (std::uint64_t index = 0; index < count; ++index) {
+            if (project.trackDeviceType(track, index) == 0) {
+                nylon::TrackDevice device;
+                if (!project.trackDevice(track, index, device)) return fail("Invalid device chain");
+                devices.append(deviceJson(device, index));
+            } else {
+                nylon::TrackPluginDevice device;
+                if (!project.trackPluginDevice(track, index, device))
+                    return fail("Invalid device chain");
+                devices.append(pluginDeviceJson(device, index));
+            }
+        }
         return writeJson({{"ok", true}, {"track", static_cast<double>(track)},
             {"devices", devices}});
     }
@@ -997,6 +1027,22 @@ int directCommand(
         if (!indexNumber(positional[1], track) || !parseTrackDevice(positional, 2, device))
             return fail("Invalid track device");
         changed = project.addTrackDevice(track, device);
+    } else if (command == "add-plugin" && positional.size() == 7) {
+        std::uint64_t track = 0;
+        std::uint64_t latency = 0;
+        bool enabled = false;
+        nylon::TrackPluginDevice device;
+        if (!indexNumber(positional[1], track)
+            || !parsePluginFormat(positional[2], device.format)
+            || !indexNumber(positional[5], latency)
+            || latency > std::numeric_limits<std::uint32_t>::max()
+            || !flag(positional[6], enabled))
+            return fail("Invalid plugin device");
+        device.package = positional[3].toStdString();
+        device.identifier = positional[4].toStdString();
+        device.latencyFrames = static_cast<std::uint32_t>(latency);
+        device.enabled = enabled;
+        changed = project.addTrackPlugin(track, device);
     } else if (command == "set-device" && positional.size() >= 4) {
         std::uint64_t track = 0;
         std::uint64_t index = 0;
@@ -1004,9 +1050,9 @@ int directCommand(
         if (!indexNumber(positional[1], track) || !indexNumber(positional[2], index)
             || !parseTrackDevice(positional, 3, device))
             return fail("Invalid track device");
-        const auto chain = project.trackDevices(track);
-        if (index >= chain.size()) return fail("Invalid device index");
-        device.enabled = chain[static_cast<std::size_t>(index)].enabled;
+        nylon::TrackDevice current;
+        if (!project.trackDevice(track, index, current)) return fail("Invalid device index");
+        device.enabled = current.enabled;
         changed = project.setTrackDevice(track, index, device);
     } else if (command == "set-device-enabled" && positional.size() == 4) {
         std::uint64_t track = 0;
@@ -1015,10 +1061,7 @@ int directCommand(
         if (!indexNumber(positional[1], track) || !indexNumber(positional[2], index)
             || !flag(positional[3], enabled))
             return fail("Invalid device state");
-        auto chain = project.trackDevices(track);
-        if (index >= chain.size()) return fail("Invalid device index");
-        chain[static_cast<std::size_t>(index)].enabled = enabled;
-        changed = project.setTrackDevice(track, index, chain[static_cast<std::size_t>(index)]);
+        changed = project.setTrackDeviceEnabled(track, index, enabled);
     } else if (command == "move-device" && positional.size() == 4) {
         std::uint64_t track = 0;
         std::uint64_t from = 0;

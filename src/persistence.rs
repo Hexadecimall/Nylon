@@ -16,10 +16,11 @@ use crate::dsp::saturator::{
 };
 use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
 use crate::engine::voice::Patch;
+use crate::plugin::Format as PluginFormat;
 use crate::project::{
     self, ArrangementPlacement, AudioClip, AutomationCurve, AutomationLane, AutomationParameter,
-    AutomationPoint, ClipId, Device, DeviceId, MidiClip, MidiNote, Project, Route, RouteId, Scene,
-    SceneId, Snapshot, Track, TrackId, TrackKind,
+    AutomationPoint, ClipId, Device, DeviceId, DeviceProcessor, MidiClip, MidiNote, PluginDevice,
+    Project, Route, RouteId, Scene, SceneId, Snapshot, Track, TrackId, TrackKind,
 };
 use crate::routing::EdgeKind;
 use std::collections::HashSet;
@@ -32,7 +33,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 14;
+const VERSION: u32 = 15;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -86,164 +87,177 @@ impl Encoder {
             self.count(track.devices.len())?;
             for device in &track.devices {
                 self.bytes(&device.id.0.to_le_bytes())?;
-                self.bytes(&[u8::from(device.config.enabled)])?;
-                match device.config.kind {
-                    DeviceKind::Utility {
-                        gain_db,
-                        width,
-                        balance,
-                    } => {
-                        self.bytes(&[0])?;
-                        for value in [gain_db, width, balance] {
-                            self.bytes(&value.to_le_bytes())?;
+                self.bytes(&[u8::from(device.enabled)])?;
+                match &device.processor {
+                    DeviceProcessor::Native(kind) => match *kind {
+                        DeviceKind::Utility {
+                            gain_db,
+                            width,
+                            balance,
+                        } => {
+                            self.bytes(&[0])?;
+                            for value in [gain_db, width, balance] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::Equalizer {
-                        kind,
-                        frequency,
-                        q,
-                        gain_db,
-                    } => {
-                        self.bytes(&[1, filter_code(kind)])?;
-                        for value in [frequency, q, gain_db] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::Equalizer {
+                            kind,
+                            frequency,
+                            q,
+                            gain_db,
+                        } => {
+                            self.bytes(&[1, filter_code(kind)])?;
+                            for value in [frequency, q, gain_db] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::Compressor {
-                        parameters,
-                        external_sidechain,
-                    } => {
-                        self.bytes(&[2, u8::from(external_sidechain)])?;
-                        for value in [
-                            parameters.threshold_db,
-                            parameters.ratio,
-                            parameters.knee_db,
-                            parameters.attack_seconds,
-                            parameters.release_seconds,
-                            parameters.makeup_db,
-                        ] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::Compressor {
+                            parameters,
+                            external_sidechain,
+                        } => {
+                            self.bytes(&[2, u8::from(external_sidechain)])?;
+                            for value in [
+                                parameters.threshold_db,
+                                parameters.ratio,
+                                parameters.knee_db,
+                                parameters.attack_seconds,
+                                parameters.release_seconds,
+                                parameters.makeup_db,
+                            ] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::StereoDelay {
-                        delay_seconds,
-                        feedback,
-                        mix,
-                    } => {
-                        self.bytes(&[3])?;
-                        for value in [delay_seconds, feedback, mix] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::StereoDelay {
+                            delay_seconds,
+                            feedback,
+                            mix,
+                        } => {
+                            self.bytes(&[3])?;
+                            for value in [delay_seconds, feedback, mix] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::Limiter { parameters } => {
-                        self.bytes(&[4])?;
-                        for value in [
-                            parameters.ceiling_db,
-                            parameters.release_seconds,
-                            parameters.lookahead_seconds,
-                        ] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::Limiter { parameters } => {
+                            self.bytes(&[4])?;
+                            for value in [
+                                parameters.ceiling_db,
+                                parameters.release_seconds,
+                                parameters.lookahead_seconds,
+                            ] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::Saturator { parameters } => {
-                        self.bytes(&[
-                            5,
-                            match parameters.curve {
-                                SaturatorCurve::SoftClip => 0,
-                                SaturatorCurve::Tanh => 1,
-                                SaturatorCurve::HardClip => 2,
-                                SaturatorCurve::Diode => 3,
-                            },
-                            match parameters.oversampling {
-                                SaturatorOversampling::One => 0,
-                                SaturatorOversampling::Two => 1,
-                                SaturatorOversampling::Four => 2,
-                            },
-                            u8::from(parameters.dc_filter),
-                        ])?;
-                        for value in [parameters.drive_db, parameters.output_db, parameters.mix] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::Saturator { parameters } => {
+                            self.bytes(&[
+                                5,
+                                match parameters.curve {
+                                    SaturatorCurve::SoftClip => 0,
+                                    SaturatorCurve::Tanh => 1,
+                                    SaturatorCurve::HardClip => 2,
+                                    SaturatorCurve::Diode => 3,
+                                },
+                                match parameters.oversampling {
+                                    SaturatorOversampling::One => 0,
+                                    SaturatorOversampling::Two => 1,
+                                    SaturatorOversampling::Four => 2,
+                                },
+                                u8::from(parameters.dc_filter),
+                            ])?;
+                            for value in [parameters.drive_db, parameters.output_db, parameters.mix]
+                            {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::Gate { parameters } => {
-                        self.bytes(&[6, u8::from(parameters.external_sidechain)])?;
-                        for value in [
-                            parameters.threshold_db,
-                            parameters.hysteresis_db,
-                            parameters.attack_seconds,
-                            parameters.hold_seconds,
-                            parameters.release_seconds,
-                        ] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::Gate { parameters } => {
+                            self.bytes(&[6, u8::from(parameters.external_sidechain)])?;
+                            for value in [
+                                parameters.threshold_db,
+                                parameters.hysteresis_db,
+                                parameters.attack_seconds,
+                                parameters.hold_seconds,
+                                parameters.release_seconds,
+                            ] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::Chorus { parameters } => {
-                        self.bytes(&[7])?;
-                        for value in [
-                            parameters.rate_hz,
-                            parameters.center_seconds,
-                            parameters.depth_seconds,
-                            parameters.feedback,
-                            parameters.mix,
-                            parameters.stereo_phase,
-                        ] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::Chorus { parameters } => {
+                            self.bytes(&[7])?;
+                            for value in [
+                                parameters.rate_hz,
+                                parameters.center_seconds,
+                                parameters.depth_seconds,
+                                parameters.feedback,
+                                parameters.mix,
+                                parameters.stereo_phase,
+                            ] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::Reverb { parameters } => {
-                        self.bytes(&[8])?;
-                        for value in [
-                            parameters.size,
-                            parameters.decay_seconds,
-                            parameters.damping,
-                            parameters.diffusion,
-                            parameters.pre_delay_seconds,
-                            parameters.width,
-                            parameters.mix,
-                        ] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::Reverb { parameters } => {
+                            self.bytes(&[8])?;
+                            for value in [
+                                parameters.size,
+                                parameters.decay_seconds,
+                                parameters.damping,
+                                parameters.diffusion,
+                                parameters.pre_delay_seconds,
+                                parameters.width,
+                                parameters.mix,
+                            ] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::AutoFilter {
-                        parameters,
-                        external_sidechain,
-                    } => {
-                        self.bytes(&[
-                            9,
-                            match parameters.mode {
-                                AutoFilterMode::LowPass => 0,
-                                AutoFilterMode::HighPass => 1,
-                                AutoFilterMode::BandPass => 2,
-                                AutoFilterMode::Notch => 3,
-                            },
-                            u8::from(external_sidechain),
-                        ])?;
-                        for value in [
-                            parameters.cutoff_hz,
-                            parameters.resonance,
-                            parameters.drive_db,
-                            parameters.envelope_amount_octaves,
-                            parameters.envelope_attack_seconds,
-                            parameters.envelope_release_seconds,
-                            parameters.lfo_rate_hz,
-                            parameters.lfo_amount_octaves,
-                            parameters.mix,
-                        ] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::AutoFilter {
+                            parameters,
+                            external_sidechain,
+                        } => {
+                            self.bytes(&[
+                                9,
+                                match parameters.mode {
+                                    AutoFilterMode::LowPass => 0,
+                                    AutoFilterMode::HighPass => 1,
+                                    AutoFilterMode::BandPass => 2,
+                                    AutoFilterMode::Notch => 3,
+                                },
+                                u8::from(external_sidechain),
+                            ])?;
+                            for value in [
+                                parameters.cutoff_hz,
+                                parameters.resonance,
+                                parameters.drive_db,
+                                parameters.envelope_amount_octaves,
+                                parameters.envelope_attack_seconds,
+                                parameters.envelope_release_seconds,
+                                parameters.lfo_rate_hz,
+                                parameters.lfo_amount_octaves,
+                                parameters.mix,
+                            ] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
-                    }
-                    DeviceKind::Phaser { parameters } => {
-                        self.bytes(&[10, parameters.stages])?;
-                        for value in [
-                            parameters.rate_hz,
-                            parameters.center_hz,
-                            parameters.depth_octaves,
-                            parameters.feedback,
-                            parameters.mix,
-                            parameters.stereo_phase,
-                        ] {
-                            self.bytes(&value.to_le_bytes())?;
+                        DeviceKind::Phaser { parameters } => {
+                            self.bytes(&[10, parameters.stages])?;
+                            for value in [
+                                parameters.rate_hz,
+                                parameters.center_hz,
+                                parameters.depth_octaves,
+                                parameters.feedback,
+                                parameters.mix,
+                                parameters.stereo_phase,
+                            ] {
+                                self.bytes(&value.to_le_bytes())?;
+                            }
                         }
+                    },
+                    DeviceProcessor::Plugin(plugin) => {
+                        self.bytes(&[255, plugin.format().code() as u8])?;
+                        self.bytes(&plugin.latency_frames().to_le_bytes())?;
+                        self.count(plugin.package().len())?;
+                        self.bytes(plugin.package().as_bytes())?;
+                        self.count(plugin.identifier().len())?;
+                        self.bytes(plugin.identifier().as_bytes())?;
+                        self.count(plugin.state().len())?;
+                        self.bytes(plugin.state())?;
                     }
                 }
             }
@@ -426,166 +440,200 @@ impl<'a> Decoder<'a> {
                     if device_id == 0 || device_id >= next_id || !ids.insert(device_id) {
                         return Err(PersistenceError::InvalidFormat);
                     }
-                    let kind = match self.array::<1>()?[0] {
-                        0 => DeviceKind::Utility {
-                            gain_db: f32::from_le_bytes(self.array()?),
-                            width: f32::from_le_bytes(self.array()?),
-                            balance: f32::from_le_bytes(self.array()?),
-                        },
-                        1 => DeviceKind::Equalizer {
-                            kind: filter_from_code(self.array::<1>()?[0])
-                                .ok_or(PersistenceError::InvalidFormat)?,
-                            frequency: f32::from_le_bytes(self.array()?),
-                            q: f32::from_le_bytes(self.array()?),
-                            gain_db: f32::from_le_bytes(self.array()?),
-                        },
-                        2 => {
-                            let external_sidechain = match self.array::<1>()?[0] {
-                                0 => false,
-                                1 => true,
-                                _ => return Err(PersistenceError::InvalidFormat),
-                            };
-                            DeviceKind::Compressor {
-                                parameters: CompressorParameters {
-                                    threshold_db: f32::from_le_bytes(self.array()?),
-                                    ratio: f32::from_le_bytes(self.array()?),
-                                    knee_db: f32::from_le_bytes(self.array()?),
-                                    attack_seconds: f32::from_le_bytes(self.array()?),
-                                    release_seconds: f32::from_le_bytes(self.array()?),
-                                    makeup_db: f32::from_le_bytes(self.array()?),
-                                },
-                                external_sidechain,
-                            }
+                    let processor_code = self.array::<1>()?[0];
+                    let processor = if processor_code == 255 && version >= 15 {
+                        let format = match self.array::<1>()?[0] {
+                            0 => PluginFormat::Vst3,
+                            1 => PluginFormat::AudioUnit,
+                            2 => PluginFormat::Clap,
+                            3 => PluginFormat::Lv2,
+                            _ => return Err(PersistenceError::InvalidFormat),
+                        };
+                        let latency_frames = u32::from_le_bytes(self.array()?);
+                        let package_length = self.count()?;
+                        if package_length > project::MAX_PLUGIN_TEXT_BYTES {
+                            return Err(PersistenceError::InvalidFormat);
                         }
-                        3 => DeviceKind::StereoDelay {
-                            delay_seconds: f32::from_le_bytes(self.array()?),
-                            feedback: f32::from_le_bytes(self.array()?),
-                            mix: f32::from_le_bytes(self.array()?),
-                        },
-                        4 => DeviceKind::Limiter {
-                            parameters: LimiterParameters {
-                                ceiling_db: f32::from_le_bytes(self.array()?),
-                                release_seconds: f32::from_le_bytes(self.array()?),
-                                lookahead_seconds: f32::from_le_bytes(self.array()?),
-                            },
-                        },
-                        5 if version >= 7 => {
-                            let curve = match self.array::<1>()?[0] {
-                                0 => SaturatorCurve::SoftClip,
-                                1 => SaturatorCurve::Tanh,
-                                2 => SaturatorCurve::HardClip,
-                                3 => SaturatorCurve::Diode,
-                                _ => return Err(PersistenceError::InvalidFormat),
-                            };
-                            let oversampling = match self.array::<1>()?[0] {
-                                0 => SaturatorOversampling::One,
-                                1 => SaturatorOversampling::Two,
-                                2 => SaturatorOversampling::Four,
-                                _ => return Err(PersistenceError::InvalidFormat),
-                            };
-                            let dc_filter = match self.array::<1>()?[0] {
-                                0 => false,
-                                1 => true,
-                                _ => return Err(PersistenceError::InvalidFormat),
-                            };
-                            DeviceKind::Saturator {
-                                parameters: SaturatorParameters {
-                                    drive_db: f32::from_le_bytes(self.array()?),
-                                    output_db: f32::from_le_bytes(self.array()?),
-                                    mix: f32::from_le_bytes(self.array()?),
-                                    curve,
-                                    oversampling,
-                                    dc_filter,
-                                },
-                            }
+                        let package = std::str::from_utf8(self.bytes(package_length)?)
+                            .map_err(|_| PersistenceError::InvalidFormat)?
+                            .to_owned();
+                        let identifier_length = self.count()?;
+                        if identifier_length > project::MAX_PLUGIN_TEXT_BYTES {
+                            return Err(PersistenceError::InvalidFormat);
                         }
-                        6 if version >= 8 => {
-                            let external_sidechain = match self.array::<1>()?[0] {
-                                0 => false,
-                                1 => true,
-                                _ => return Err(PersistenceError::InvalidFormat),
-                            };
-                            DeviceKind::Gate {
-                                parameters: GateParameters {
-                                    threshold_db: f32::from_le_bytes(self.array()?),
-                                    hysteresis_db: f32::from_le_bytes(self.array()?),
-                                    attack_seconds: f32::from_le_bytes(self.array()?),
-                                    hold_seconds: f32::from_le_bytes(self.array()?),
-                                    release_seconds: f32::from_le_bytes(self.array()?),
-                                    external_sidechain,
-                                },
-                            }
-                        }
-                        7 if version >= 11 => DeviceKind::Chorus {
-                            parameters: ChorusParameters {
-                                rate_hz: f32::from_le_bytes(self.array()?),
-                                center_seconds: f32::from_le_bytes(self.array()?),
-                                depth_seconds: f32::from_le_bytes(self.array()?),
-                                feedback: f32::from_le_bytes(self.array()?),
-                                mix: f32::from_le_bytes(self.array()?),
-                                stereo_phase: f32::from_le_bytes(self.array()?),
-                            },
-                        },
-                        8 if version >= 12 => DeviceKind::Reverb {
-                            parameters: ReverbParameters {
-                                size: f32::from_le_bytes(self.array()?),
-                                decay_seconds: f32::from_le_bytes(self.array()?),
-                                damping: f32::from_le_bytes(self.array()?),
-                                diffusion: f32::from_le_bytes(self.array()?),
-                                pre_delay_seconds: f32::from_le_bytes(self.array()?),
+                        let identifier = std::str::from_utf8(self.bytes(identifier_length)?)
+                            .map_err(|_| PersistenceError::InvalidFormat)?
+                            .to_owned();
+                        let state_length = self.count()?;
+                        let state = self.bytes(state_length)?.to_vec();
+                        let plugin =
+                            PluginDevice::new(format, package, identifier, latency_frames, state)
+                                .map_err(|_| PersistenceError::InvalidFormat)?;
+                        DeviceProcessor::Plugin(plugin)
+                    } else {
+                        let kind = match processor_code {
+                            0 => DeviceKind::Utility {
+                                gain_db: f32::from_le_bytes(self.array()?),
                                 width: f32::from_le_bytes(self.array()?),
-                                mix: f32::from_le_bytes(self.array()?),
+                                balance: f32::from_le_bytes(self.array()?),
                             },
-                        },
-                        9 if version >= 13 => {
-                            let mode = match self.array::<1>()?[0] {
-                                0 => AutoFilterMode::LowPass,
-                                1 => AutoFilterMode::HighPass,
-                                2 => AutoFilterMode::BandPass,
-                                3 => AutoFilterMode::Notch,
-                                _ => return Err(PersistenceError::InvalidFormat),
-                            };
-                            let external_sidechain = match self.array::<1>()?[0] {
-                                0 => false,
-                                1 => true,
-                                _ => return Err(PersistenceError::InvalidFormat),
-                            };
-                            DeviceKind::AutoFilter {
-                                parameters: AutoFilterParameters {
-                                    mode,
-                                    cutoff_hz: f32::from_le_bytes(self.array()?),
-                                    resonance: f32::from_le_bytes(self.array()?),
-                                    drive_db: f32::from_le_bytes(self.array()?),
-                                    envelope_amount_octaves: f32::from_le_bytes(self.array()?),
-                                    envelope_attack_seconds: f32::from_le_bytes(self.array()?),
-                                    envelope_release_seconds: f32::from_le_bytes(self.array()?),
-                                    lfo_rate_hz: f32::from_le_bytes(self.array()?),
-                                    lfo_amount_octaves: f32::from_le_bytes(self.array()?),
-                                    mix: f32::from_le_bytes(self.array()?),
-                                },
-                                external_sidechain,
+                            1 => DeviceKind::Equalizer {
+                                kind: filter_from_code(self.array::<1>()?[0])
+                                    .ok_or(PersistenceError::InvalidFormat)?,
+                                frequency: f32::from_le_bytes(self.array()?),
+                                q: f32::from_le_bytes(self.array()?),
+                                gain_db: f32::from_le_bytes(self.array()?),
+                            },
+                            2 => {
+                                let external_sidechain = match self.array::<1>()?[0] {
+                                    0 => false,
+                                    1 => true,
+                                    _ => return Err(PersistenceError::InvalidFormat),
+                                };
+                                DeviceKind::Compressor {
+                                    parameters: CompressorParameters {
+                                        threshold_db: f32::from_le_bytes(self.array()?),
+                                        ratio: f32::from_le_bytes(self.array()?),
+                                        knee_db: f32::from_le_bytes(self.array()?),
+                                        attack_seconds: f32::from_le_bytes(self.array()?),
+                                        release_seconds: f32::from_le_bytes(self.array()?),
+                                        makeup_db: f32::from_le_bytes(self.array()?),
+                                    },
+                                    external_sidechain,
+                                }
                             }
-                        }
-                        10 if version >= 14 => DeviceKind::Phaser {
-                            parameters: PhaserParameters {
-                                stages: self.array::<1>()?[0],
-                                rate_hz: f32::from_le_bytes(self.array()?),
-                                center_hz: f32::from_le_bytes(self.array()?),
-                                depth_octaves: f32::from_le_bytes(self.array()?),
+                            3 => DeviceKind::StereoDelay {
+                                delay_seconds: f32::from_le_bytes(self.array()?),
                                 feedback: f32::from_le_bytes(self.array()?),
                                 mix: f32::from_le_bytes(self.array()?),
-                                stereo_phase: f32::from_le_bytes(self.array()?),
                             },
-                        },
-                        _ => return Err(PersistenceError::InvalidFormat),
+                            4 => DeviceKind::Limiter {
+                                parameters: LimiterParameters {
+                                    ceiling_db: f32::from_le_bytes(self.array()?),
+                                    release_seconds: f32::from_le_bytes(self.array()?),
+                                    lookahead_seconds: f32::from_le_bytes(self.array()?),
+                                },
+                            },
+                            5 if version >= 7 => {
+                                let curve = match self.array::<1>()?[0] {
+                                    0 => SaturatorCurve::SoftClip,
+                                    1 => SaturatorCurve::Tanh,
+                                    2 => SaturatorCurve::HardClip,
+                                    3 => SaturatorCurve::Diode,
+                                    _ => return Err(PersistenceError::InvalidFormat),
+                                };
+                                let oversampling = match self.array::<1>()?[0] {
+                                    0 => SaturatorOversampling::One,
+                                    1 => SaturatorOversampling::Two,
+                                    2 => SaturatorOversampling::Four,
+                                    _ => return Err(PersistenceError::InvalidFormat),
+                                };
+                                let dc_filter = match self.array::<1>()?[0] {
+                                    0 => false,
+                                    1 => true,
+                                    _ => return Err(PersistenceError::InvalidFormat),
+                                };
+                                DeviceKind::Saturator {
+                                    parameters: SaturatorParameters {
+                                        drive_db: f32::from_le_bytes(self.array()?),
+                                        output_db: f32::from_le_bytes(self.array()?),
+                                        mix: f32::from_le_bytes(self.array()?),
+                                        curve,
+                                        oversampling,
+                                        dc_filter,
+                                    },
+                                }
+                            }
+                            6 if version >= 8 => {
+                                let external_sidechain = match self.array::<1>()?[0] {
+                                    0 => false,
+                                    1 => true,
+                                    _ => return Err(PersistenceError::InvalidFormat),
+                                };
+                                DeviceKind::Gate {
+                                    parameters: GateParameters {
+                                        threshold_db: f32::from_le_bytes(self.array()?),
+                                        hysteresis_db: f32::from_le_bytes(self.array()?),
+                                        attack_seconds: f32::from_le_bytes(self.array()?),
+                                        hold_seconds: f32::from_le_bytes(self.array()?),
+                                        release_seconds: f32::from_le_bytes(self.array()?),
+                                        external_sidechain,
+                                    },
+                                }
+                            }
+                            7 if version >= 11 => DeviceKind::Chorus {
+                                parameters: ChorusParameters {
+                                    rate_hz: f32::from_le_bytes(self.array()?),
+                                    center_seconds: f32::from_le_bytes(self.array()?),
+                                    depth_seconds: f32::from_le_bytes(self.array()?),
+                                    feedback: f32::from_le_bytes(self.array()?),
+                                    mix: f32::from_le_bytes(self.array()?),
+                                    stereo_phase: f32::from_le_bytes(self.array()?),
+                                },
+                            },
+                            8 if version >= 12 => DeviceKind::Reverb {
+                                parameters: ReverbParameters {
+                                    size: f32::from_le_bytes(self.array()?),
+                                    decay_seconds: f32::from_le_bytes(self.array()?),
+                                    damping: f32::from_le_bytes(self.array()?),
+                                    diffusion: f32::from_le_bytes(self.array()?),
+                                    pre_delay_seconds: f32::from_le_bytes(self.array()?),
+                                    width: f32::from_le_bytes(self.array()?),
+                                    mix: f32::from_le_bytes(self.array()?),
+                                },
+                            },
+                            9 if version >= 13 => {
+                                let mode = match self.array::<1>()?[0] {
+                                    0 => AutoFilterMode::LowPass,
+                                    1 => AutoFilterMode::HighPass,
+                                    2 => AutoFilterMode::BandPass,
+                                    3 => AutoFilterMode::Notch,
+                                    _ => return Err(PersistenceError::InvalidFormat),
+                                };
+                                let external_sidechain = match self.array::<1>()?[0] {
+                                    0 => false,
+                                    1 => true,
+                                    _ => return Err(PersistenceError::InvalidFormat),
+                                };
+                                DeviceKind::AutoFilter {
+                                    parameters: AutoFilterParameters {
+                                        mode,
+                                        cutoff_hz: f32::from_le_bytes(self.array()?),
+                                        resonance: f32::from_le_bytes(self.array()?),
+                                        drive_db: f32::from_le_bytes(self.array()?),
+                                        envelope_amount_octaves: f32::from_le_bytes(self.array()?),
+                                        envelope_attack_seconds: f32::from_le_bytes(self.array()?),
+                                        envelope_release_seconds: f32::from_le_bytes(self.array()?),
+                                        lfo_rate_hz: f32::from_le_bytes(self.array()?),
+                                        lfo_amount_octaves: f32::from_le_bytes(self.array()?),
+                                        mix: f32::from_le_bytes(self.array()?),
+                                    },
+                                    external_sidechain,
+                                }
+                            }
+                            10 if version >= 14 => DeviceKind::Phaser {
+                                parameters: PhaserParameters {
+                                    stages: self.array::<1>()?[0],
+                                    rate_hz: f32::from_le_bytes(self.array()?),
+                                    center_hz: f32::from_le_bytes(self.array()?),
+                                    depth_octaves: f32::from_le_bytes(self.array()?),
+                                    feedback: f32::from_le_bytes(self.array()?),
+                                    mix: f32::from_le_bytes(self.array()?),
+                                    stereo_phase: f32::from_le_bytes(self.array()?),
+                                },
+                            },
+                            _ => return Err(PersistenceError::InvalidFormat),
+                        };
+                        let config = DeviceConfig { enabled, kind };
+                        config
+                            .validate(sample_rate as f32)
+                            .map_err(|_| PersistenceError::InvalidFormat)?;
+                        DeviceProcessor::Native(kind)
                     };
-                    let config = DeviceConfig { enabled, kind };
-                    config
-                        .validate(sample_rate as f32)
-                        .map_err(|_| PersistenceError::InvalidFormat)?;
                     devices.push(Device {
                         id: DeviceId(device_id),
-                        config,
+                        enabled,
+                        processor,
                     });
                 }
             }

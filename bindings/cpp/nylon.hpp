@@ -133,6 +133,15 @@ struct InstrumentPatch {
 enum class PluginFormat : int { Vst3 = 0, AudioUnit = 1, Clap = 2, Lv2 = 3 };
 enum class PluginState : int { Discovered = 0, Quarantined = 1 };
 
+struct TrackPluginDevice {
+    PluginFormat format{PluginFormat::Clap};
+    bool enabled{true};
+    std::string package;
+    std::string identifier;
+    std::uint32_t latencyFrames{};
+    std::vector<std::uint8_t> state;
+};
+
 struct PluginDescriptor {
     std::string id;
     std::string name;
@@ -421,9 +430,18 @@ public:
     bool setTrackInstrument(std::uint64_t track, const InstrumentPatch& patch);
 
     std::vector<TrackDevice> trackDevices(std::uint64_t track) const;
+    std::uint64_t trackDeviceCount(std::uint64_t track) const;
+    int trackDeviceType(std::uint64_t track, std::uint64_t index) const;
+    bool trackDevice(std::uint64_t track, std::uint64_t index, TrackDevice& device) const;
+    bool trackPluginDevice(
+        std::uint64_t track, std::uint64_t index, TrackPluginDevice& device) const;
     bool addTrackDevice(std::uint64_t track, const TrackDevice& device);
+    bool addTrackPlugin(std::uint64_t track, const TrackPluginDevice& device);
     bool setTrackDevice(
         std::uint64_t track, std::uint64_t index, const TrackDevice& device);
+    bool setTrackDeviceEnabled(std::uint64_t track, std::uint64_t index, bool enabled);
+    bool setTrackPluginState(std::uint64_t track, std::uint64_t index,
+        const std::vector<std::uint8_t>& state);
     bool deleteTrackDevice(std::uint64_t track, std::uint64_t index);
     bool moveTrackDevice(std::uint64_t track, std::uint64_t from, std::uint64_t to);
 

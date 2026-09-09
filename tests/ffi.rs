@@ -21,6 +21,66 @@ fn native_edit_cycle_uses_the_command_history() {
 }
 
 #[test]
+fn native_plugin_devices_preserve_metadata_state_and_shared_order() {
+    let handle = nylon_project_new();
+    let state = [1_u8, 3, 5, 7];
+    // SAFETY: This thread owns the project and all pointed-to storage.
+    unsafe {
+        assert_eq!(nylon_project_add_track(handle), 1);
+        assert_eq!(
+            nylon_track_plugin_add(
+                handle,
+                0,
+                2,
+                c"Effect.clap".as_ptr(),
+                c"app.nylon.effect".as_ptr(),
+                96,
+                state.as_ptr(),
+                state.len() as u64,
+                1,
+            ),
+            1
+        );
+        assert_eq!(nylon_track_device_count(handle, 0), 1);
+        assert_eq!(nylon_track_device_type(handle, 0, 0), 1);
+        assert_eq!(nylon_track_device_enabled(handle, 0, 0), 1);
+        assert_eq!(nylon_track_plugin_format(handle, 0, 0), 2);
+        assert_eq!(nylon_track_plugin_latency(handle, 0, 0), 96);
+        let mut package = [0 as std::ffi::c_char; 32];
+        assert_eq!(
+            nylon_track_plugin_package(handle, 0, 0, package.as_mut_ptr(), 32),
+            11
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(package.as_ptr()).to_bytes(),
+            b"Effect.clap"
+        );
+        let mut restored = [0_u8; 4];
+        assert_eq!(
+            nylon_track_plugin_state(handle, 0, 0, restored.as_mut_ptr(), 4),
+            4
+        );
+        assert_eq!(restored, state);
+        assert_eq!(nylon_track_device_set_enabled(handle, 0, 0, 0), 1);
+        assert_eq!(nylon_track_device_enabled(handle, 0, 0), 0);
+        assert_eq!(
+            nylon_track_plugin_set_state(handle, 0, 0, [9_u8, 8].as_ptr(), 2),
+            1
+        );
+        assert_eq!(
+            nylon_track_plugin_state(handle, 0, 0, std::ptr::null_mut(), 0),
+            2
+        );
+        assert_eq!(nylon_project_undo(handle), 1);
+        assert_eq!(
+            nylon_track_plugin_state(handle, 0, 0, std::ptr::null_mut(), 0),
+            4
+        );
+        nylon_project_free(handle);
+    }
+}
+
+#[test]
 fn null_handles_are_rejected() {
     // SAFETY: The interface explicitly accepts null as an invalid handle.
     unsafe {

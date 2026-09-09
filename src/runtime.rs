@@ -672,7 +672,6 @@ pub(crate) fn playback_routing(
                     total
                         .checked_add(
                             device
-                                .config()
                                 .latency_frames(sample_rate)
                                 .map_err(|_| RoutingError::LatencyOverflow)?,
                         )
@@ -723,7 +722,7 @@ pub(crate) fn playback_devices(snapshot: &Snapshot) -> Vec<Vec<DeviceConfig>> {
             track
                 .devices()
                 .iter()
-                .map(|device| device.config())
+                .filter_map(|device| device.native_config())
                 .collect()
         })
         .collect();

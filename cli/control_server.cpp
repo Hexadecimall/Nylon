@@ -237,6 +237,24 @@ public:
                 return error("Invalid track device");
             return commitEdit();
         }
+        if (command == "add-plugin" && args.size() == 6) {
+            std::uint64_t track = 0;
+            std::uint64_t latency = 0;
+            bool enabled = false;
+            nylon::TrackPluginDevice device;
+            if (!indexValue(args[0], track) || !args[1].isString() || !args[2].isString()
+                || !args[3].isString() || !indexValue(args[4], latency)
+                || latency > std::numeric_limits<std::uint32_t>::max()
+                || !flagValue(args[5], enabled)
+                || !parsePluginFormat(args[1].toString(), device.format))
+                return error("Invalid plugin device");
+            device.package = args[2].toString().toStdString();
+            device.identifier = args[3].toString().toStdString();
+            device.latencyFrames = static_cast<std::uint32_t>(latency);
+            device.enabled = enabled;
+            if (!m_project.addTrackPlugin(track, device)) return error("Invalid plugin device");
+            return commitEdit();
+        }
         if (command == "set-device" && args.size() >= 3) {
             std::uint64_t track = 0;
             std::uint64_t index = 0;
@@ -272,11 +290,7 @@ public:
             if (!indexValue(args[0], track) || !indexValue(args[1], index)
                 || !flagValue(args[2], enabled))
                 return error("Invalid track device state");
-            auto devices = m_project.trackDevices(track);
-            if (index >= static_cast<std::uint64_t>(devices.size()))
-                return error("Invalid track device state");
-            devices[static_cast<std::size_t>(index)].enabled = enabled;
-            if (!m_project.setTrackDevice(track, index, devices[static_cast<std::size_t>(index)]))
+            if (!m_project.setTrackDeviceEnabled(track, index, enabled))
                 return error("Invalid track device state");
             return commitEdit();
         }
@@ -448,9 +462,20 @@ private:
         if (!indexValue(args[0], track) || track >= m_project.trackCount())
             return error("Invalid track index");
         QJsonArray result;
-        const auto devices = m_project.trackDevices(track);
-        for (std::size_t index = 0; index < devices.size(); ++index)
-            result.append(deviceJson(devices[index], index));
+        const auto count = m_project.trackDeviceCount(track);
+        for (std::uint64_t index = 0; index < count; ++index) {
+            if (m_project.trackDeviceType(track, index) == 0) {
+                nylon::TrackDevice device;
+                if (!m_project.trackDevice(track, index, device))
+                    return error("Invalid track device");
+                result.append(deviceJson(device, index));
+            } else {
+                nylon::TrackPluginDevice device;
+                if (!m_project.trackPluginDevice(track, index, device))
+                    return error("Invalid track device");
+                result.append(pluginDeviceJson(device, index));
+            }
+        }
         return {{"ok", true}, {"devices", result}};
     }
 

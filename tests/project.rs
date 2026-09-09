@@ -1,8 +1,9 @@
 use nylon::engine::device::{DeviceConfig, DeviceKind};
 use nylon::engine::voice::Patch;
+use nylon::plugin::Format as PluginFormat;
 use nylon::project::{
-    AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, Project,
-    ProjectError, TrackKind,
+    AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, PluginDevice,
+    Project, ProjectError, TrackKind,
 };
 use nylon::routing::EdgeKind;
 
@@ -828,4 +829,80 @@ fn device_chains_are_validated_ordered_and_undoable() {
         Err(ProjectError::InvalidDevice)
     );
     assert_eq!(*project.snapshot(), *before);
+}
+
+#[test]
+fn plugin_devices_share_order_history_and_latency_with_native_devices() {
+    let mut project = Project::new();
+    project
+        .apply(&[Command::CreateTrack {
+            name: "Bus".into(),
+            kind: TrackKind::Audio,
+        }])
+        .unwrap();
+    let track = project.snapshot().tracks()[0].id();
+    let plugin = PluginDevice::new(
+        PluginFormat::Clap,
+        "Effect.clap",
+        "app.nylon.effect",
+        96,
+        vec![1, 2, 3],
+    )
+    .unwrap();
+    project
+        .apply(&[
+            Command::AddDevice {
+                track,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Utility {
+                        gain_db: 0.0,
+                        width: 1.0,
+                        balance: 0.0,
+                    },
+                },
+            },
+            Command::AddPluginDevice {
+                track,
+                enabled: true,
+                plugin,
+            },
+        ])
+        .unwrap();
+    let snapshot = project.snapshot();
+    let plugin_id = snapshot.tracks()[0].devices()[1].id();
+    assert_eq!(
+        snapshot.compiled_routing().unwrap().output_latency(0),
+        Some(96)
+    );
+    assert_eq!(
+        snapshot.tracks()[0].devices()[1].plugin().unwrap().state(),
+        &[1, 2, 3]
+    );
+    project
+        .apply(&[
+            Command::MoveDevice {
+                id: plugin_id,
+                index: 0,
+            },
+            Command::SetPluginState {
+                id: plugin_id,
+                state: vec![9, 8],
+            },
+        ])
+        .unwrap();
+    let changed = project.snapshot();
+    assert!(changed.tracks()[0].devices()[0].plugin().is_some());
+    assert_eq!(
+        changed.tracks()[0].devices()[0].plugin().unwrap().state(),
+        &[9, 8]
+    );
+    assert!(project.undo());
+    assert_eq!(
+        project.snapshot().tracks()[0].devices()[1]
+            .plugin()
+            .unwrap()
+            .state(),
+        &[1, 2, 3]
+    );
 }

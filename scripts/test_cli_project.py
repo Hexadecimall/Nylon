@@ -145,6 +145,15 @@ def main():
         assert phaser["kind"] == "phaser", phaser
         assert phaser["parameters"]["centerHz"] == 850, phaser
         assert phaser["parameters"]["stages"] == 10, phaser
+        call("add-plugin", "0", "clap", "Effect.clap", "app.nylon.effect", "96", "on")
+        plugin = call("track-devices", "0")["devices"][8]
+        assert plugin == {"enabled": True, "format": "clap", "identifier": "app.nylon.effect",
+                          "index": 8, "kind": "plugin", "latencyFrames": 96,
+                          "package": "Effect.clap", "stateBytes": 0}, plugin
+        call("set-device-enabled", "0", "8", "off")
+        assert call("track-devices", "0")["devices"][8]["enabled"] is False
+        call("move-device", "0", "8", "0")
+        assert call("track-devices", "0")["devices"][0]["kind"] == "plugin"
         call("add-device", "0", "delay", "0.2", "1", "0.5", succeeds=False)
         call("add-device", "0", "limiter", "-0.3", "0.1", "0.1", succeeds=False)
         call("add-device", "0", "saturator", "9", "-4", "0.75", "bad", "4x", "on", succeeds=False)
