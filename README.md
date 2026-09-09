@@ -57,12 +57,15 @@ nylon-control --endpoint nylon-live track-devices 0
 nylon-control --endpoint nylon-live launch-clip 0 0 1
 nylon-control --endpoint nylon-live stop-clip 0
 nylon-control --endpoint nylon-live quit
+nylon-control scan-plugins PluginDirectory AdditionalPluginDirectory
 ```
 
 The endpoint also accepts `launch-scene`, `set-tempo`, MIDI note listing and
 transforms, track volume, pan, mute, solo and arm edits, complete device-chain
 editing, `undo`, `redo`, `save`, `sync`, and `reload`.
 `--no-audio` starts the endpoint for project editing without a device.
+`scan-plugins` recursively catalogs VST3, Audio Unit, CLAP, and LV2 packages
+without loading their executable code.
 
 `cargo-deny` is a separate development prerequisite. CI installs version 0.20.2.
 The native compiler wrapper maps build and toolchain locations to relative

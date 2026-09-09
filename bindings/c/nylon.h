@@ -346,6 +346,30 @@ int nylon_arrangement_clip_remove(
 int nylon_arrangement_clip_set_range(void* project, unsigned long long track,
     unsigned long long index, double start_beats, double length_beats);
 
+/* Plugin discovery identifies packages without loading executable code.
+ * Formats: 0 VST3, 1 Audio Unit, 2 CLAP, 3 LV2.
+ * States: 0 discovered, 1 quarantined. Invalid indices return -1 for enum
+ * accessors and empty text for string accessors. */
+void* nylon_plugin_catalog_scan(const char* const* roots, unsigned long long root_count);
+void nylon_plugin_catalog_free(void* catalog);
+unsigned long long nylon_plugin_catalog_entry_count(const void* catalog);
+unsigned long long nylon_plugin_catalog_issue_count(const void* catalog);
+int nylon_plugin_catalog_entry_format(const void* catalog, unsigned long long index);
+int nylon_plugin_catalog_entry_state(const void* catalog, unsigned long long index);
+unsigned long long nylon_plugin_catalog_entry_path(const void* catalog,
+    unsigned long long index, char* buffer, unsigned long long capacity);
+unsigned long long nylon_plugin_catalog_entry_name(const void* catalog,
+    unsigned long long index, char* buffer, unsigned long long capacity);
+unsigned long long nylon_plugin_catalog_entry_reason(const void* catalog,
+    unsigned long long index, char* buffer, unsigned long long capacity);
+unsigned long long nylon_plugin_catalog_issue_path(const void* catalog,
+    unsigned long long index, char* buffer, unsigned long long capacity);
+unsigned long long nylon_plugin_catalog_issue_message(const void* catalog,
+    unsigned long long index, char* buffer, unsigned long long capacity);
+int nylon_plugin_catalog_quarantine(
+    void* catalog, unsigned long long index, const char* reason);
+int nylon_plugin_catalog_retry(void* catalog, unsigned long long index);
+
 /* Live audio is owned by a separate control-thread handle. The platform
  * stream remains open while the musical transport is stopped, allowing
  * meters and edits to continue crossing block boundaries. */

@@ -672,3 +672,43 @@ fn native_audio_clip_import_and_edits_are_exposed() {
     }
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn native_plugin_catalog_exposes_discovery_and_quarantine() {
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::path::PathBuf::from("target").join(format!("native-plugins-{tick}"));
+    std::fs::create_dir_all(root.join("Alpha.component")).unwrap();
+    std::fs::create_dir_all(root.join("Nested/Beta.vst3")).unwrap();
+    let root_text = std::ffi::CString::new(root.to_str().unwrap()).unwrap();
+    let missing_text = std::ffi::CString::new(root.join("missing").to_str().unwrap()).unwrap();
+    let roots = [root_text.as_ptr(), missing_text.as_ptr()];
+    // SAFETY: This thread owns every input string and the returned catalog handle.
+    unsafe {
+        let catalog = nylon_plugin_catalog_scan(roots.as_ptr(), roots.len() as u64);
+        assert!(!catalog.is_null());
+        assert_eq!(nylon_plugin_catalog_entry_count(catalog), 2);
+        assert_eq!(nylon_plugin_catalog_issue_count(catalog), 1);
+        assert_eq!(nylon_plugin_catalog_entry_format(catalog, 0), 1);
+        assert_eq!(nylon_plugin_catalog_entry_state(catalog, 0), 0);
+        let mut name = [0 as std::ffi::c_char; 32];
+        assert_eq!(
+            nylon_plugin_catalog_entry_name(catalog, 0, name.as_mut_ptr(), name.len() as u64),
+            5
+        );
+        assert_eq!(std::ffi::CStr::from_ptr(name.as_ptr()).to_bytes(), b"Alpha");
+        assert_eq!(
+            nylon_plugin_catalog_quarantine(catalog, 0, c"Probe process exited".as_ptr()),
+            1
+        );
+        assert_eq!(nylon_plugin_catalog_entry_state(catalog, 0), 1);
+        assert_eq!(nylon_plugin_catalog_retry(catalog, 0), 1);
+        assert_eq!(nylon_plugin_catalog_entry_state(catalog, 0), 0);
+        assert_eq!(nylon_plugin_catalog_entry_format(catalog, 3), -1);
+        nylon_plugin_catalog_free(catalog);
+        assert!(nylon_plugin_catalog_scan(std::ptr::null(), 1).is_null());
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

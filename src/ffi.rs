@@ -19,6 +19,7 @@ use crate::engine::device::DeviceKind as TrackDeviceKind;
 use crate::engine::voice::Patch;
 use crate::media::import_wave;
 use crate::mixer::Levels;
+use crate::plugin::Catalog as PluginCatalog;
 use crate::project::{
     AutomationCurve, AutomationParameter, AutomationPoint, ClipId, Command, MidiNote, Project,
     SceneId, TrackId, TrackKind,
@@ -32,6 +33,7 @@ use crate::runtime::{
 use crate::wave::Format;
 use std::ffi::{CStr, c_char};
 use std::fs::File;
+use std::path::PathBuf;
 
 /// Fixed-size audio-device record for the C interface.
 #[repr(C)]
@@ -3140,4 +3142,272 @@ pub unsafe extern "C" fn nylon_master_levels(
     let state = audio.state();
     *out = state.levels[state.track_count].into();
     1
+}
+
+const MAX_PLUGIN_SCAN_ROOTS: u64 = 1_024;
+
+/// # Safety
+/// `roots` must point to `root_count` readable terminated UTF-8 strings. The
+/// returned handle belongs to the calling control thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_scan(
+    roots: *const *const c_char,
+    root_count: u64,
+) -> *mut PluginCatalog {
+    if root_count > MAX_PLUGIN_SCAN_ROOTS || (root_count != 0 && roots.is_null()) {
+        return std::ptr::null_mut();
+    }
+    let Ok(count) = usize::try_from(root_count) else {
+        return std::ptr::null_mut();
+    };
+    let inputs: &[*const c_char] = if count == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller provides the pointer array described by the interface.
+        unsafe { std::slice::from_raw_parts(roots, count) }
+    };
+    let mut paths = Vec::with_capacity(count);
+    for input in inputs {
+        // SAFETY: Each element follows the string contract above.
+        let Some(path) = (unsafe { input_text(*input) }) else {
+            return std::ptr::null_mut();
+        };
+        if path.is_empty() {
+            return std::ptr::null_mut();
+        }
+        paths.push(PathBuf::from(path));
+    }
+    Box::into_raw(Box::new(PluginCatalog::scan(&paths)))
+}
+
+/// # Safety
+/// `catalog` must be null or a handle returned by `nylon_plugin_catalog_scan`
+/// that has not already been released.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_free(catalog: *mut PluginCatalog) {
+    if !catalog.is_null() {
+        // SAFETY: Ownership is transferred back by the interface contract.
+        drop(unsafe { Box::from_raw(catalog) });
+    }
+}
+
+/// # Safety
+/// The catalog must remain live and immutable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_entry_count(catalog: *const PluginCatalog) -> u64 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { catalog.as_ref() }.map_or(0, |value| value.entries().len() as u64)
+}
+
+/// # Safety
+/// The catalog must remain live and immutable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_issue_count(catalog: *const PluginCatalog) -> u64 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { catalog.as_ref() }.map_or(0, |value| value.issues().len() as u64)
+}
+
+/// # Safety
+/// The catalog must remain live and immutable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_entry_format(
+    catalog: *const PluginCatalog,
+    index: u64,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { catalog.as_ref() }
+        .and_then(|value| {
+            usize::try_from(index)
+                .ok()
+                .and_then(|i| value.entries().get(i))
+        })
+        .map_or(-1, |entry| entry.format().code())
+}
+
+/// # Safety
+/// The catalog must remain live and immutable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_entry_state(
+    catalog: *const PluginCatalog,
+    index: u64,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { catalog.as_ref() }
+        .and_then(|value| {
+            usize::try_from(index)
+                .ok()
+                .and_then(|i| value.entries().get(i))
+        })
+        .map_or(-1, |entry| entry.state().code())
+}
+
+fn plugin_entry_text(
+    catalog: *const PluginCatalog,
+    index: u64,
+    select: impl FnOnce(&crate::plugin::Entry) -> String,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    // SAFETY: Native callers keep handles live and immutable during the call.
+    let Some(entry) = (unsafe { catalog.as_ref() }).and_then(|value| {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| value.entries().get(i))
+    }) else {
+        return copy_text("", buffer, capacity);
+    };
+    copy_text(&select(entry), buffer, capacity)
+}
+
+/// # Safety
+/// The catalog must remain live and immutable. `buffer` must be null or point
+/// to `capacity` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_entry_path(
+    catalog: *const PluginCatalog,
+    index: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    plugin_entry_text(
+        catalog,
+        index,
+        |entry| entry.path().to_string_lossy().into_owned(),
+        buffer,
+        capacity,
+    )
+}
+
+/// # Safety
+/// The catalog must remain live and immutable. `buffer` must be null or point
+/// to `capacity` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_entry_name(
+    catalog: *const PluginCatalog,
+    index: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    plugin_entry_text(
+        catalog,
+        index,
+        |entry| entry.name().to_owned(),
+        buffer,
+        capacity,
+    )
+}
+
+/// # Safety
+/// The catalog must remain live and immutable. `buffer` must be null or point
+/// to `capacity` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_entry_reason(
+    catalog: *const PluginCatalog,
+    index: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    plugin_entry_text(
+        catalog,
+        index,
+        |entry| entry.quarantine_reason().to_owned(),
+        buffer,
+        capacity,
+    )
+}
+
+fn plugin_issue_text(
+    catalog: *const PluginCatalog,
+    index: u64,
+    select: impl FnOnce(&crate::plugin::ScanIssue) -> String,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    // SAFETY: Native callers keep handles live and immutable during the call.
+    let Some(issue) = (unsafe { catalog.as_ref() }).and_then(|value| {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| value.issues().get(i))
+    }) else {
+        return copy_text("", buffer, capacity);
+    };
+    copy_text(&select(issue), buffer, capacity)
+}
+
+/// # Safety
+/// The catalog must remain live and immutable. `buffer` must be null or point
+/// to `capacity` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_issue_path(
+    catalog: *const PluginCatalog,
+    index: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    plugin_issue_text(
+        catalog,
+        index,
+        |issue| issue.path().to_string_lossy().into_owned(),
+        buffer,
+        capacity,
+    )
+}
+
+/// # Safety
+/// The catalog must remain live and immutable. `buffer` must be null or point
+/// to `capacity` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_issue_message(
+    catalog: *const PluginCatalog,
+    index: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    plugin_issue_text(
+        catalog,
+        index,
+        |issue| issue.message().to_owned(),
+        buffer,
+        capacity,
+    )
+}
+
+/// # Safety
+/// The catalog must remain live and exclusive. `reason` must be a readable,
+/// terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_quarantine(
+    catalog: *mut PluginCatalog,
+    index: u64,
+    reason: *const c_char,
+) -> i32 {
+    // SAFETY: The caller provides a live exclusive handle.
+    let Some(catalog) = (unsafe { catalog.as_mut() }) else {
+        return 0;
+    };
+    // SAFETY: The caller provides the string described above.
+    let Some(reason) = (unsafe { input_text(reason) }) else {
+        return 0;
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return 0;
+    };
+    i32::from(catalog.quarantine(index, &reason).is_ok())
+}
+
+/// # Safety
+/// The catalog must remain live and exclusive for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_retry(
+    catalog: *mut PluginCatalog,
+    index: u64,
+) -> i32 {
+    // SAFETY: The caller provides a live exclusive handle.
+    let Some(catalog) = (unsafe { catalog.as_mut() }) else {
+        return 0;
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return 0;
+    };
+    i32::from(catalog.retry(index).is_ok())
 }

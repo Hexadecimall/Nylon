@@ -6,6 +6,82 @@
 
 namespace nylon {
 
+namespace {
+using CatalogTextGetter = decltype(&nylon_plugin_catalog_entry_path);
+
+std::string catalogText(
+    const void* catalog, std::uint64_t index, CatalogTextGetter getter)
+{
+    const auto needed = getter(catalog, index, nullptr, 0);
+    std::vector<char> bytes(static_cast<std::size_t>(needed) + 1U, '\0');
+    getter(catalog, index, bytes.data(), static_cast<unsigned long long>(bytes.size()));
+    return std::string(bytes.data(), static_cast<std::size_t>(needed));
+}
+} // namespace
+
+PluginCatalog::~PluginCatalog() { nylon_plugin_catalog_free(m_handle); }
+PluginCatalog::PluginCatalog(PluginCatalog&& other) noexcept
+    : m_handle(std::exchange(other.m_handle, nullptr))
+{
+}
+PluginCatalog& PluginCatalog::operator=(PluginCatalog&& other) noexcept
+{
+    if (this != &other) {
+        nylon_plugin_catalog_free(m_handle);
+        m_handle = std::exchange(other.m_handle, nullptr);
+    }
+    return *this;
+}
+
+PluginCatalog PluginCatalog::scan(const std::vector<std::string>& roots)
+{
+    std::vector<const char*> nativeRoots;
+    nativeRoots.reserve(roots.size());
+    for (const auto& root : roots) nativeRoots.push_back(root.c_str());
+    return PluginCatalog(nylon_plugin_catalog_scan(
+        nativeRoots.empty() ? nullptr : nativeRoots.data(),
+        static_cast<unsigned long long>(nativeRoots.size())));
+}
+
+std::vector<PluginInfo> PluginCatalog::entries() const
+{
+    const auto count = nylon_plugin_catalog_entry_count(m_handle);
+    std::vector<PluginInfo> result;
+    result.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t index = 0; index < count; ++index) {
+        const int format = nylon_plugin_catalog_entry_format(m_handle, index);
+        const int state = nylon_plugin_catalog_entry_state(m_handle, index);
+        if (format < 0 || state < 0) return {};
+        result.push_back({catalogText(m_handle, index, nylon_plugin_catalog_entry_path),
+            catalogText(m_handle, index, nylon_plugin_catalog_entry_name),
+            static_cast<PluginFormat>(format), static_cast<PluginState>(state),
+            catalogText(m_handle, index, nylon_plugin_catalog_entry_reason)});
+    }
+    return result;
+}
+
+std::vector<PluginScanIssue> PluginCatalog::issues() const
+{
+    const auto count = nylon_plugin_catalog_issue_count(m_handle);
+    std::vector<PluginScanIssue> result;
+    result.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t index = 0; index < count; ++index) {
+        result.push_back({catalogText(m_handle, index, nylon_plugin_catalog_issue_path),
+            catalogText(m_handle, index, nylon_plugin_catalog_issue_message)});
+    }
+    return result;
+}
+
+bool PluginCatalog::quarantine(std::uint64_t index, const std::string& reason)
+{
+    return nylon_plugin_catalog_quarantine(m_handle, index, reason.c_str()) != 0;
+}
+
+bool PluginCatalog::retry(std::uint64_t index)
+{
+    return nylon_plugin_catalog_retry(m_handle, index) != 0;
+}
+
 CompiledRouting::CompiledRouting() = default;
 CompiledRouting::CompiledRouting(void* handle)
     : m_handle(handle)

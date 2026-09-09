@@ -162,6 +162,22 @@ def main():
         )
         assert inputs.returncode == 0, (inputs.stdout, inputs.stderr)
         assert isinstance(json.loads(inputs.stdout)["devices"], list)
+        plugins = root / "plugins"
+        (plugins / "Alpha.component").mkdir(parents=True)
+        (plugins / "Nested" / "Beta.vst3").mkdir(parents=True)
+        (plugins / "Gamma.clap").write_bytes(b"binary")
+        scanned = subprocess.run(
+            [binary, "scan-plugins", str(plugins), str(root / "missing-plugins")],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert scanned.returncode == 0, (scanned.stdout, scanned.stderr)
+        catalog = json.loads(scanned.stdout)
+        assert [entry["name"] for entry in catalog["plugins"]] == ["Alpha", "Gamma", "Beta"], catalog
+        assert [entry["format"] for entry in catalog["plugins"]] == [
+            "audio-unit", "clap", "vst3"
+        ], catalog
+        assert all(entry["state"] == "discovered" for entry in catalog["plugins"]), catalog
+        assert len(catalog["issues"]) == 1, catalog
         print("Direct project CLI: pass")
 
 

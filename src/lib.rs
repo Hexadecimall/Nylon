@@ -10,6 +10,7 @@ pub mod latest;
 pub mod media;
 pub mod mixer;
 pub mod persistence;
+pub mod plugin;
 pub mod project;
 pub mod routing;
 pub mod runtime;

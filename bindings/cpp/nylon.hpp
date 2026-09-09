@@ -128,6 +128,47 @@ struct InstrumentPatch {
     float levelDb{-12.0F};
 };
 
+enum class PluginFormat : int { Vst3 = 0, AudioUnit = 1, Clap = 2, Lv2 = 3 };
+enum class PluginState : int { Discovered = 0, Quarantined = 1 };
+
+struct PluginInfo {
+    std::string path;
+    std::string name;
+    PluginFormat format;
+    PluginState state;
+    std::string quarantineReason;
+};
+
+struct PluginScanIssue {
+    std::string path;
+    std::string message;
+};
+
+class PluginCatalog {
+public:
+    PluginCatalog() = default;
+    ~PluginCatalog();
+    PluginCatalog(const PluginCatalog&) = delete;
+    PluginCatalog& operator=(const PluginCatalog&) = delete;
+    PluginCatalog(PluginCatalog&& other) noexcept;
+    PluginCatalog& operator=(PluginCatalog&& other) noexcept;
+
+    static PluginCatalog scan(const std::vector<std::string>& roots);
+    bool valid() const { return m_handle != nullptr; }
+    explicit operator bool() const { return valid(); }
+    std::vector<PluginInfo> entries() const;
+    std::vector<PluginScanIssue> issues() const;
+    bool quarantine(std::uint64_t index, const std::string& reason);
+    bool retry(std::uint64_t index);
+
+private:
+    explicit PluginCatalog(void* handle)
+        : m_handle(handle)
+    {
+    }
+    void* m_handle{};
+};
+
 class CompiledRouting {
 public:
     CompiledRouting();

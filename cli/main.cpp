@@ -101,6 +101,26 @@ QString trackKindName(nylon::TrackKind kind)
     return "audio";
 }
 
+QString pluginFormatName(nylon::PluginFormat format)
+{
+    switch (format) {
+    case nylon::PluginFormat::Vst3: return "vst3";
+    case nylon::PluginFormat::AudioUnit: return "audio-unit";
+    case nylon::PluginFormat::Clap: return "clap";
+    case nylon::PluginFormat::Lv2: return "lv2";
+    }
+    return "unknown";
+}
+
+QString pluginStateName(nylon::PluginState state)
+{
+    switch (state) {
+    case nylon::PluginState::Discovered: return "discovered";
+    case nylon::PluginState::Quarantined: return "quarantined";
+    }
+    return "unknown";
+}
+
 bool routingKind(const QString& text, nylon::RoutingKind& kind)
 {
     if (text == "main") kind = nylon::RoutingKind::Main;
@@ -429,11 +449,36 @@ int listDevices(bool input)
     return writeJson({{"ok", true}, {"devices", devices}});
 }
 
+int scanPlugins(const QStringList& roots)
+{
+    std::vector<std::string> nativeRoots;
+    nativeRoots.reserve(static_cast<std::size_t>(roots.size()));
+    for (const auto& root : roots) nativeRoots.push_back(root.toStdString());
+    auto catalog = nylon::PluginCatalog::scan(nativeRoots);
+    if (!catalog) return fail("Could not create the plugin catalog");
+    QJsonArray entries;
+    for (const auto& entry : catalog.entries()) {
+        entries.append(QJsonObject{{"path", QString::fromStdString(entry.path)},
+            {"name", QString::fromStdString(entry.name)},
+            {"format", pluginFormatName(entry.format)},
+            {"state", pluginStateName(entry.state)},
+            {"quarantineReason", QString::fromStdString(entry.quarantineReason)}});
+    }
+    QJsonArray issues;
+    for (const auto& issue : catalog.issues()) {
+        issues.append(QJsonObject{{"path", QString::fromStdString(issue.path)},
+            {"message", QString::fromStdString(issue.message)}});
+    }
+    return writeJson({{"ok", true}, {"plugins", entries}, {"issues", issues}});
+}
+
 int directCommand(const QString& bundle, const QStringList& positional)
 {
     const QString command = positional[0];
     if (command == "devices" && positional.size() == 1) return listDevices(false);
     if (command == "input-devices" && positional.size() == 1) return listDevices(true);
+    if (command == "scan-plugins" && positional.size() > 1)
+        return scanPlugins(positional.sliced(1));
     if (bundle.isEmpty()) return fail("A project bundle is required with --project");
     if (command == "recovery-status" && positional.size() == 1) {
         return writeJson({{"ok", true},
