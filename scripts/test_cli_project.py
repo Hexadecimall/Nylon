@@ -230,6 +230,42 @@ def main():
         crashed_entry = json.loads(crashed.stdout)["plugins"][0]
         assert crashed_entry["state"] == "quarantined", crashed_entry
         assert crashed_entry["quarantineReason"] == "Probe process crashed", crashed_entry
+        inspected = subprocess.run(
+            [binary, "--plugin-worker", plugin_worker, "plugin-info", clap_fixture,
+             "app.nylon.fixture", "48000", "64"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert inspected.returncode == 0, (inspected.stdout, inspected.stderr)
+        plugin_info = json.loads(inspected.stdout)
+        assert plugin_info == {
+            "inputAudioPorts": 1,
+            "inputNotePorts": 1,
+            "latencyFrames": 32,
+            "ok": True,
+            "parameters": [{
+                "default": 0.5,
+                "flags": 32,
+                "id": 7,
+                "maximum": 1,
+                "minimum": 0,
+                "module": "Output",
+                "name": "Gain",
+            }],
+        }, plugin_info
+        invalid_info = subprocess.run(
+            [binary, "--plugin-worker", plugin_worker, "plugin-info", clap_fixture,
+             "app.nylon.fixture", "48000", "8193"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert invalid_info.returncode != 0
+        assert json.loads(invalid_info.stdout)["error"] == "Invalid plugin block size"
+        crashed_info = subprocess.run(
+            [binary, "--plugin-worker", plugin_worker, "plugin-info", crash_fixture,
+             "app.nylon.fixture"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert crashed_info.returncode != 0
+        assert json.loads(crashed_info.stdout)["error"] == "Could not open the isolated plugin"
         processed = root / "processed.wav"
         plugin_render = subprocess.run(
             [binary, "--plugin-worker", plugin_worker, "process-plugin", clap_fixture,

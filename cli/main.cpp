@@ -621,6 +621,42 @@ int processClapFile(const QString& worker, const QStringList& positional)
     return writeJson({{"ok", true}, {"output", positional[4]}});
 }
 
+int inspectClap(const QString& worker, const QStringList& positional)
+{
+    if (worker.isEmpty()) return fail("Plugin worker executable is required");
+    double sampleRate = 48'000.0;
+    std::uint32_t blockFrames = 512;
+    if (positional.size() >= 4
+        && (!number(positional[3], sampleRate) || sampleRate <= 0.0))
+        return fail("Invalid plugin sample rate");
+    if (positional.size() == 5
+        && (!unsignedNumber(positional[4], blockFrames) || blockFrames == 0
+            || blockFrames > 8'192))
+        return fail("Invalid plugin block size");
+    auto plugin = nylon::ClapWorker::open(worker.toStdString(), positional[1].toStdString(),
+        positional[2].toStdString(), sampleRate, blockFrames);
+    if (!plugin) return fail("Could not open the isolated plugin");
+    std::uint32_t latency = 0;
+    if (!plugin.latency(latency)) return fail("Plugin latency is unavailable");
+    QJsonArray parameters;
+    for (const auto& parameter : plugin.parameters()) {
+        parameters.append(QJsonObject{
+            {"id", static_cast<double>(parameter.identifier)},
+            {"flags", static_cast<double>(parameter.flags)},
+            {"name", QString::fromStdString(parameter.name)},
+            {"module", QString::fromStdString(parameter.module)},
+            {"minimum", parameter.minimum},
+            {"maximum", parameter.maximum},
+            {"default", parameter.defaultValue},
+        });
+    }
+    return writeJson({{"ok", true},
+        {"latencyFrames", static_cast<double>(latency)},
+        {"inputAudioPorts", static_cast<double>(plugin.inputAudioPorts())},
+        {"inputNotePorts", static_cast<double>(plugin.inputNotePorts())},
+        {"parameters", parameters}});
+}
+
 int directCommand(
     const QString& bundle, const QStringList& positional, const QString& probeExecutable,
     const QString& workerExecutable)
@@ -634,6 +670,8 @@ int directCommand(
         return scanPlugins(positional.sliced(1), probeExecutable, true);
     if (command == "process-plugin" && (positional.size() == 5 || positional.size() == 6))
         return processClapFile(workerExecutable, positional);
+    if (command == "plugin-info" && positional.size() >= 3 && positional.size() <= 5)
+        return inspectClap(workerExecutable, positional);
     if (bundle.isEmpty()) return fail("A project bundle is required with --project");
     if (command == "recovery-status" && positional.size() == 1) {
         return writeJson({{"ok", true},

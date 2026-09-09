@@ -135,6 +135,7 @@ nylon-control --project Session.nylon recovery-status
 nylon-control --project Session.nylon recover
 nylon-control devices
 nylon-control input-devices
+nylon-control --plugin-worker nylon-plugin-worker plugin-info Effect.clap app.nylon.effect 48000 512
 ```
 
 Every reply is one JSON object. Direct edit commands save the bundle only

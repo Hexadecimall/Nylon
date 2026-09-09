@@ -59,6 +59,7 @@ nylon-control --endpoint nylon-live stop-clip 0
 nylon-control --endpoint nylon-live quit
 nylon-control scan-plugins PluginDirectory AdditionalPluginDirectory
 nylon-control --plugin-probe nylon-plugin-probe probe-plugins PluginDirectory
+nylon-control --plugin-worker nylon-plugin-worker plugin-info Effect.clap app.nylon.effect
 ```
 
 The endpoint also accepts `launch-scene`, `set-tempo`, MIDI note listing and
