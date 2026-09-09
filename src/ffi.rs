@@ -3837,6 +3837,74 @@ pub unsafe extern "C" fn nylon_clap_instance_latency(
 }
 
 /// # Safety
+/// The handle must remain live for this call. The returned state belongs to
+/// the caller and must be released with `nylon_clap_state_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_save_state(
+    instance: *const ClapInstance,
+) -> *mut Vec<u8> {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { instance.as_ref() }
+        .and_then(|instance| instance.save_state().ok())
+        .map(Box::new)
+        .map_or(std::ptr::null_mut(), Box::into_raw)
+}
+
+/// # Safety
+/// The instance must remain live and exclusive. Bytes must be null when length
+/// is zero or point to length readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_load_state(
+    instance: *mut ClapInstance,
+    bytes: *const u8,
+    length: u64,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    let Some(instance) = (unsafe { instance.as_mut() }) else {
+        return 0;
+    };
+    let Ok(length) = usize::try_from(length) else {
+        return 0;
+    };
+    if bytes.is_null() && length != 0 {
+        return 0;
+    }
+    let bytes = if length == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller supplies length readable bytes.
+        unsafe { std::slice::from_raw_parts(bytes, length) }
+    };
+    instance.load_state(bytes).is_ok().into()
+}
+
+/// # Safety
+/// The handle must be null or an owned state returned by the save function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_state_free(state: *mut Vec<u8>) {
+    if !state.is_null() {
+        // SAFETY: Ownership transfers back exactly once.
+        drop(unsafe { Box::from_raw(state) });
+    }
+}
+
+/// # Safety
+/// The state must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_state_size(state: *const Vec<u8>) -> u64 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { state.as_ref() }.map_or(0, |state| state.len() as u64)
+}
+
+/// # Safety
+/// The state must remain live until the returned region is no longer read.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_state_data(state: *const Vec<u8>) -> *const u8 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { state.as_ref() }.map_or(std::ptr::null(), |state| state.as_ptr())
+}
+
+/// # Safety
 /// The handle must remain live and exclusive for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nylon_clap_instance_reset(instance: *mut ClapInstance) -> i32 {
@@ -3858,4 +3926,9 @@ pub unsafe extern "C" fn nylon_clap_instance_take_requests(instance: *const Clap
     u32::from(requests.restart)
         | (u32::from(requests.process) << 1)
         | (u32::from(requests.callback) << 2)
+        | (u32::from(requests.parameter_rescan) << 3)
+        | (u32::from(requests.parameter_clear) << 4)
+        | (u32::from(requests.parameter_flush) << 5)
+        | (u32::from(requests.latency_changed) << 6)
+        | (u32::from(requests.state_dirty) << 7)
 }

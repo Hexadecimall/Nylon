@@ -1,11 +1,13 @@
-use nylon::plugin::clap::{Instance, MAX_PARAMETER_EVENTS, ParameterEvent};
+use nylon::plugin::clap::{Instance, MAX_PARAMETER_EVENTS, MAX_STATE_BYTES, ParameterEvent};
 use nylon::wave::{Format, SampleFormat, WaveWriter, read};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-const HEADER: [u8; 8] = *b"NYWORK2\0";
+const HEADER: [u8; 8] = *b"NYWORK3\0";
 const MAX_BLOCK_FRAMES: usize = 8_192;
+const SAVE_STATE: u32 = u32::MAX;
+const LOAD_STATE: u32 = u32::MAX - 1;
 
 fn main() {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
@@ -220,6 +222,40 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
         let frames = u32::from_le_bytes(count) as usize;
         if frames == 0 {
             return Ok(());
+        }
+        if frames == SAVE_STATE as usize {
+            let state = instance
+                .save_state()
+                .map_err(|_| "Plugin state save failed")?;
+            output
+                .write_all(&SAVE_STATE.to_le_bytes())
+                .and_then(|()| output.write_all(&(state.len() as u64).to_le_bytes()))
+                .and_then(|()| output.write_all(&state))
+                .and_then(|()| output.flush())
+                .map_err(|_| "Worker output failed")?;
+            continue;
+        }
+        if frames == LOAD_STATE as usize {
+            let mut length = [0; 8];
+            input
+                .read_exact(&mut length)
+                .map_err(|_| "Plugin state length is missing")?;
+            let length = usize::try_from(u64::from_le_bytes(length))
+                .ok()
+                .filter(|length| *length <= MAX_STATE_BYTES)
+                .ok_or("Plugin state exceeds the size limit")?;
+            let mut state = vec![0; length];
+            input
+                .read_exact(&mut state)
+                .map_err(|_| "Plugin state is truncated")?;
+            instance
+                .load_state(&state)
+                .map_err(|_| "Plugin state load failed")?;
+            output
+                .write_all(&LOAD_STATE.to_le_bytes())
+                .and_then(|()| output.flush())
+                .map_err(|_| "Worker output failed")?;
+            continue;
         }
         if frames > max_frames {
             return Err("Audio block exceeds the configured limit");

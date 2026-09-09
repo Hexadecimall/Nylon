@@ -211,7 +211,9 @@ enumerates parameter metadata, and accepts up to 1,024 ordered parameter value
 events per block. Each event carries a sample offset, and its value applies to
 that frame. Event records live in fixed storage allocated when the instance is
 opened. The worker protocol publishes latency and parameter metadata during its
-handshake, then carries bounded audio blocks and parameter events.
+handshake, then carries bounded audio blocks and parameter events. State save
+and load commands transfer opaque plugin state with a 256 MiB limit. State I/O
+runs on the worker control thread and never enters an audio callback.
 
 ## Benchmarks
 

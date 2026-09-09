@@ -106,6 +106,14 @@ fn null_handles_are_rejected() {
             nylon_clap_instance_latency(std::ptr::null(), &mut latency),
             0
         );
+        assert!(nylon_clap_instance_save_state(std::ptr::null()).is_null());
+        assert_eq!(
+            nylon_clap_instance_load_state(std::ptr::null_mut(), std::ptr::null(), 0),
+            0
+        );
+        assert_eq!(nylon_clap_state_size(std::ptr::null()), 0);
+        assert!(nylon_clap_state_data(std::ptr::null()).is_null());
+        nylon_clap_state_free(std::ptr::null_mut());
         assert_eq!(nylon_clap_instance_reset(std::ptr::null_mut()), 0);
         assert_eq!(nylon_clap_instance_take_requests(std::ptr::null()), 0);
         nylon_clap_instance_free(std::ptr::null_mut());

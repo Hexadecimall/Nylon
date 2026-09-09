@@ -410,7 +410,8 @@ unsigned long long nylon_plugin_catalog_descriptor_feature(const void* catalog,
 /* CLAP instances provide the processing primitive used by isolated plugin
  * workers. Input pointers may both be null for instruments. Non-null audio
  * regions contain `frames` values and may not overlap. Request bits are:
- * restart=1, process=2, callback=4. */
+ * restart=1, process=2, callback=4, parameter rescan=8, parameter clear=16,
+ * parameter flush=32, latency change=64, state dirty=128. */
 void* nylon_clap_instance_open(const char* path, const char* identifier);
 void nylon_clap_instance_free(void* instance);
 int nylon_clap_instance_activate(void* instance, double sample_rate,
@@ -428,6 +429,12 @@ int nylon_clap_instance_parameter_info(const void* instance,
 int nylon_clap_instance_parameter_value(const void* instance,
     unsigned int identifier, double* value);
 int nylon_clap_instance_latency(const void* instance, unsigned int* frames);
+void* nylon_clap_instance_save_state(const void* instance);
+int nylon_clap_instance_load_state(void* instance,
+    const unsigned char* bytes, unsigned long long length);
+void nylon_clap_state_free(void* state);
+unsigned long long nylon_clap_state_size(const void* state);
+const unsigned char* nylon_clap_state_data(const void* state);
 int nylon_clap_instance_reset(void* instance);
 unsigned int nylon_clap_instance_take_requests(const void* instance);
 

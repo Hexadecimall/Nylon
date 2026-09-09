@@ -194,6 +194,29 @@ bool ClapInstance::latency(std::uint32_t& frames) const
 {
     return nylon_clap_instance_latency(m_handle, &frames) != 0;
 }
+bool ClapInstance::saveState(std::vector<std::uint8_t>& state) const
+{
+    void* saved = nylon_clap_instance_save_state(m_handle);
+    if (saved == nullptr) return false;
+    struct StateGuard {
+        void* handle;
+        ~StateGuard() { nylon_clap_state_free(handle); }
+    } guard{saved};
+    const auto size = nylon_clap_state_size(saved);
+    const auto* data = nylon_clap_state_data(saved);
+    if (size == 0)
+        state.clear();
+    else
+        state.assign(data, data + size);
+    return true;
+}
+bool ClapInstance::loadState(const std::vector<std::uint8_t>& state)
+{
+    return nylon_clap_instance_load_state(m_handle,
+               state.empty() ? nullptr : state.data(),
+               static_cast<unsigned long long>(state.size()))
+        != 0;
+}
 bool ClapInstance::reset() { return nylon_clap_instance_reset(m_handle) != 0; }
 std::uint32_t ClapInstance::takeRequests()
 {

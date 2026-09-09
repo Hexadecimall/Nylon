@@ -10,12 +10,17 @@ use clap_sys::events::{
 use clap_sys::ext::audio_ports::{
     CLAP_EXT_AUDIO_PORTS, clap_audio_port_info, clap_plugin_audio_ports,
 };
-use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_plugin_latency};
-use clap_sys::ext::params::{CLAP_EXT_PARAMS, clap_param_info, clap_plugin_params};
+use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_host_latency, clap_plugin_latency};
+use clap_sys::ext::params::{
+    CLAP_EXT_PARAMS, clap_host_params, clap_param_clear_flags, clap_param_info,
+    clap_param_rescan_flags, clap_plugin_params,
+};
+use clap_sys::ext::state::{CLAP_EXT_STATE, clap_host_state, clap_plugin_state};
 use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
 use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::{CLAP_PROCESS_ERROR, clap_process, clap_process_status};
+use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::{CLAP_VERSION, clap_version_is_compatible};
 use libloading::{Library, Symbol};
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -27,7 +32,13 @@ use std::sync::atomic::{AtomicU8, Ordering};
 const RESTART_REQUESTED: u8 = 1;
 const PROCESS_REQUESTED: u8 = 2;
 const CALLBACK_REQUESTED: u8 = 4;
+const PARAMETER_RESCAN_REQUESTED: u8 = 8;
+const PARAMETER_CLEAR_REQUESTED: u8 = 16;
+const PARAMETER_FLUSH_REQUESTED: u8 = 32;
+const LATENCY_CHANGED: u8 = 64;
+const STATE_DIRTY: u8 = 128;
 pub const MAX_PARAMETER_EVENTS: usize = 1_024;
+pub const MAX_STATE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_PARAMETERS: u32 = 16_384;
 
 const EMPTY_PARAMETER_EVENT: clap_event_param_value = clap_event_param_value {
@@ -52,6 +63,11 @@ pub struct HostRequests {
     pub restart: bool,
     pub process: bool,
     pub callback: bool,
+    pub parameter_rescan: bool,
+    pub parameter_clear: bool,
+    pub parameter_flush: bool,
+    pub latency_changed: bool,
+    pub state_dirty: bool,
 }
 
 #[repr(C)]
@@ -90,6 +106,9 @@ pub enum Error {
     UnsupportedPorts,
     UnsupportedParameters,
     InvalidParameters,
+    UnsupportedState,
+    StateIo,
+    StateTooLarge,
     Activation,
     StartProcessing,
     NotProcessing,
@@ -119,6 +138,9 @@ impl fmt::Display for Error {
                 output.write_str("CLAP plugin does not expose parameters")
             }
             Self::InvalidParameters => output.write_str("CLAP plugin parameters are invalid"),
+            Self::UnsupportedState => output.write_str("CLAP plugin does not expose state"),
+            Self::StateIo => output.write_str("CLAP plugin state transfer failed"),
+            Self::StateTooLarge => output.write_str("CLAP plugin state exceeds the size limit"),
             Self::Activation => output.write_str("CLAP plugin activation failed"),
             Self::StartProcessing => output.write_str("CLAP plugin did not start processing"),
             Self::NotProcessing => output.write_str("CLAP plugin is not processing"),
@@ -462,6 +484,53 @@ impl Instance {
         }
     }
 
+    pub fn save_state(&self) -> Result<Vec<u8>, Error> {
+        let extension = self.state_extension()?;
+        let save = extension.save.ok_or(Error::UnsupportedState)?;
+        let mut context = StateWriteContext {
+            bytes: Vec::new(),
+            failed: false,
+        };
+        let stream = clap_ostream {
+            ctx: ptr::from_mut(&mut context).cast(),
+            write: Some(state_write),
+        };
+        // SAFETY: The stream and context remain live for the complete callback.
+        if !unsafe { save(self.plugin, &stream) } {
+            return Err(if context.failed {
+                Error::StateTooLarge
+            } else {
+                Error::StateIo
+            });
+        }
+        if context.failed {
+            return Err(Error::StateTooLarge);
+        }
+        Ok(context.bytes)
+    }
+
+    pub fn load_state(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        if bytes.len() > MAX_STATE_BYTES {
+            return Err(Error::StateTooLarge);
+        }
+        let extension = self.state_extension()?;
+        let load = extension.load.ok_or(Error::UnsupportedState)?;
+        let mut context = StateReadContext {
+            bytes: bytes.as_ptr(),
+            length: bytes.len(),
+            position: 0,
+        };
+        let stream = clap_istream {
+            ctx: ptr::from_mut(&mut context).cast(),
+            read: Some(state_read),
+        };
+        // SAFETY: The stream and context remain live for the complete callback.
+        if !unsafe { load(self.plugin, &stream) } {
+            return Err(Error::StateIo);
+        }
+        Ok(())
+    }
+
     fn parameter_extension(&self) -> Result<&clap_plugin_params, Error> {
         self.parameter_extension_optional()?
             .ok_or(Error::UnsupportedParameters)
@@ -476,6 +545,17 @@ impl Instance {
                     .cast::<clap_plugin_params>()
                     .as_ref(),
             )
+        }
+    }
+
+    fn state_extension(&self) -> Result<&clap_plugin_state, Error> {
+        // SAFETY: The plugin is initialized and owns the returned extension pointer.
+        unsafe {
+            let plugin = self.plugin.as_ref().ok_or(Error::InvalidPlugin)?;
+            (plugin.get_extension.unwrap())(self.plugin, CLAP_EXT_STATE.as_ptr())
+                .cast::<clap_plugin_state>()
+                .as_ref()
+                .ok_or(Error::UnsupportedState)
         }
     }
 
@@ -495,6 +575,11 @@ impl Instance {
             restart: requests & RESTART_REQUESTED != 0,
             process: requests & PROCESS_REQUESTED != 0,
             callback: requests & CALLBACK_REQUESTED != 0,
+            parameter_rescan: requests & PARAMETER_RESCAN_REQUESTED != 0,
+            parameter_clear: requests & PARAMETER_CLEAR_REQUESTED != 0,
+            parameter_flush: requests & PARAMETER_FLUSH_REQUESTED != 0,
+            latency_changed: requests & LATENCY_CHANGED != 0,
+            state_dirty: requests & STATE_DIRTY != 0,
         }
     }
 }
@@ -553,9 +638,69 @@ unsafe fn stereo_port_counts(plugin: *const clap_plugin) -> Result<u32, Error> {
 
 unsafe extern "C" fn host_get_extension(
     _host: *const clap_host,
-    _extension_id: *const c_char,
+    extension_id: *const c_char,
 ) -> *const c_void {
+    if extension_id.is_null() {
+        return ptr::null();
+    }
+    // SAFETY: CLAP extension identifiers are terminated strings.
+    let identifier = unsafe { CStr::from_ptr(extension_id) };
+    if identifier == CLAP_EXT_PARAMS {
+        return ptr::from_ref(&HOST_PARAMETERS).cast();
+    }
+    if identifier == CLAP_EXT_LATENCY {
+        return ptr::from_ref(&HOST_LATENCY).cast();
+    }
+    if identifier == CLAP_EXT_STATE {
+        return ptr::from_ref(&HOST_STATE).cast();
+    }
     ptr::null()
+}
+
+static HOST_PARAMETERS: clap_host_params = clap_host_params {
+    rescan: Some(host_parameter_rescan),
+    clear: Some(host_parameter_clear),
+    request_flush: Some(host_parameter_flush),
+};
+
+static HOST_LATENCY: clap_host_latency = clap_host_latency {
+    changed: Some(host_latency_changed),
+};
+
+static HOST_STATE: clap_host_state = clap_host_state {
+    mark_dirty: Some(host_state_dirty),
+};
+
+unsafe extern "C" fn host_parameter_rescan(
+    host: *const clap_host,
+    _flags: clap_param_rescan_flags,
+) {
+    // SAFETY: CLAP passes back the host pointer supplied at creation.
+    unsafe { request(host, PARAMETER_RESCAN_REQUESTED) };
+}
+
+unsafe extern "C" fn host_parameter_clear(
+    host: *const clap_host,
+    _identifier: u32,
+    _flags: clap_param_clear_flags,
+) {
+    // SAFETY: CLAP passes back the host pointer supplied at creation.
+    unsafe { request(host, PARAMETER_CLEAR_REQUESTED) };
+}
+
+unsafe extern "C" fn host_parameter_flush(host: *const clap_host) {
+    // SAFETY: CLAP passes back the host pointer supplied at creation.
+    unsafe { request(host, PARAMETER_FLUSH_REQUESTED) };
+}
+
+unsafe extern "C" fn host_latency_changed(host: *const clap_host) {
+    // SAFETY: CLAP passes back the host pointer supplied at creation.
+    unsafe { request(host, LATENCY_CHANGED) };
+}
+
+unsafe extern "C" fn host_state_dirty(host: *const clap_host) {
+    // SAFETY: CLAP passes back the host pointer supplied at creation.
+    unsafe { request(host, STATE_DIRTY) };
 }
 
 unsafe fn request(host: *const clap_host, bit: u8) {
@@ -587,6 +732,81 @@ unsafe extern "C" fn host_request_callback(host: *const clap_host) {
 struct InputEventContext {
     events: *const clap_event_param_value,
     count: u32,
+}
+
+struct StateWriteContext {
+    bytes: Vec<u8>,
+    failed: bool,
+}
+
+unsafe extern "C" fn state_write(
+    stream: *const clap_ostream,
+    buffer: *const c_void,
+    size: u64,
+) -> i64 {
+    // SAFETY: The state callback receives the stream created by save_state().
+    let Some(context) = (unsafe {
+        stream
+            .as_ref()
+            .and_then(|stream| stream.ctx.cast::<StateWriteContext>().as_mut())
+    }) else {
+        return -1;
+    };
+    let Ok(size) = usize::try_from(size) else {
+        context.failed = true;
+        return -1;
+    };
+    if (buffer.is_null() && size != 0) || context.bytes.len().saturating_add(size) > MAX_STATE_BYTES
+    {
+        context.failed = true;
+        return -1;
+    }
+    if size != 0 {
+        // SAFETY: The plugin supplies a readable region containing size bytes.
+        let bytes = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), size) };
+        context.bytes.extend_from_slice(bytes);
+    }
+    size as i64
+}
+
+struct StateReadContext {
+    bytes: *const u8,
+    length: usize,
+    position: usize,
+}
+
+unsafe extern "C" fn state_read(
+    stream: *const clap_istream,
+    buffer: *mut c_void,
+    size: u64,
+) -> i64 {
+    // SAFETY: The state callback receives the stream created by load_state().
+    let Some(context) = (unsafe {
+        stream
+            .as_ref()
+            .and_then(|stream| stream.ctx.cast::<StateReadContext>().as_mut())
+    }) else {
+        return -1;
+    };
+    let Ok(requested) = usize::try_from(size) else {
+        return -1;
+    };
+    if buffer.is_null() && requested != 0 {
+        return -1;
+    }
+    let count = requested.min(context.length.saturating_sub(context.position));
+    if count != 0 {
+        // SAFETY: The plugin supplies writable storage for the requested byte count.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                context.bytes.add(context.position),
+                buffer.cast::<u8>(),
+                count,
+            )
+        };
+        context.position += count;
+    }
+    count as i64
 }
 
 unsafe extern "C" fn parameter_event_count(list: *const clap_input_events) -> u32 {
@@ -647,7 +867,16 @@ mod tests {
     #[test]
     fn request_flags_start_clear() {
         let requests = HostRequests::default();
-        assert!(!requests.restart && !requests.process && !requests.callback);
+        assert!(
+            !requests.restart
+                && !requests.process
+                && !requests.callback
+                && !requests.parameter_rescan
+                && !requests.parameter_clear
+                && !requests.parameter_flush
+                && !requests.latency_changed
+                && !requests.state_dirty
+        );
     }
 
     #[test]
@@ -658,5 +887,40 @@ mod tests {
             fixed_text(&[-1_i8 as c_char, 0]),
             Err(Error::InvalidParameters)
         );
+    }
+
+    #[test]
+    fn state_streams_transfer_exact_bytes_and_stop_at_eof() {
+        let mut write_context = StateWriteContext {
+            bytes: Vec::new(),
+            failed: false,
+        };
+        let output = clap_ostream {
+            ctx: ptr::from_mut(&mut write_context).cast(),
+            write: Some(state_write),
+        };
+        let source = [3_u8, 1, 4, 1];
+        // SAFETY: Both pointers cover the complete call and source byte range.
+        let written = unsafe { state_write(&output, source.as_ptr().cast(), source.len() as u64) };
+        assert_eq!(written, 4);
+        assert_eq!(write_context.bytes, source);
+
+        let mut read_context = StateReadContext {
+            bytes: source.as_ptr(),
+            length: source.len(),
+            position: 0,
+        };
+        let input = clap_istream {
+            ctx: ptr::from_mut(&mut read_context).cast(),
+            read: Some(state_read),
+        };
+        let mut destination = [0_u8; 6];
+        // SAFETY: Both pointers cover the complete call and destination range.
+        let read = unsafe { state_read(&input, destination.as_mut_ptr().cast(), 6) };
+        assert_eq!(read, 4);
+        // SAFETY: The same stream remains live and has reached EOF.
+        let eof = unsafe { state_read(&input, destination.as_mut_ptr().cast(), 1) };
+        assert_eq!(eof, 0);
+        assert_eq!(&destination[..4], &source);
     }
 }

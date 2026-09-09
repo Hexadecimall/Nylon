@@ -213,6 +213,8 @@ public:
     std::vector<ParameterInfo> parameters() const;
     bool parameterValue(std::uint32_t identifier, double& value) const;
     bool latency(std::uint32_t& frames) const;
+    bool saveState(std::vector<std::uint8_t>& state) const;
+    bool loadState(const std::vector<std::uint8_t>& state);
     bool reset();
     std::uint32_t takeRequests();
 

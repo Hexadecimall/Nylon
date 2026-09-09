@@ -33,6 +33,8 @@ typedef struct ClapPlugin ClapPlugin;
 typedef struct ClapProcess ClapProcess;
 typedef struct ClapAudioPortInfo ClapAudioPortInfo;
 typedef struct ClapInputEvents ClapInputEvents;
+typedef struct ClapInputStream ClapInputStream;
+typedef struct ClapOutputStream ClapOutputStream;
 struct ClapFactory {
     uint32_t (*count)(const ClapFactory* factory);
     const ClapDescriptor* (*descriptor)(const ClapFactory* factory, uint32_t index);
@@ -82,6 +84,16 @@ struct ClapInputEvents {
     void* context;
     uint32_t (*size)(const ClapInputEvents* list);
     const ClapEventHeader* (*get)(const ClapInputEvents* list, uint32_t index);
+};
+
+struct ClapInputStream {
+    void* context;
+    int64_t (*read)(const ClapInputStream* stream, void* buffer, uint64_t size);
+};
+
+struct ClapOutputStream {
+    void* context;
+    int64_t (*write)(const ClapOutputStream* stream, const void* buffer, uint64_t size);
 };
 
 struct ClapPlugin {
@@ -138,6 +150,11 @@ typedef struct ClapParams {
 typedef struct ClapLatency {
     uint32_t (*get)(const ClapPlugin* plugin);
 } ClapLatency;
+
+typedef struct ClapState {
+    bool (*save)(const ClapPlugin* plugin, const ClapOutputStream* stream);
+    bool (*load)(const ClapPlugin* plugin, const ClapInputStream* stream);
+} ClapState;
 
 typedef struct ClapEntry {
     ClapVersion version_abi;
@@ -274,9 +291,30 @@ static uint32_t fixture_latency(const ClapPlugin* plugin)
     return 32;
 }
 
+static bool fixture_state_save(const ClapPlugin* plugin, const ClapOutputStream* stream)
+{
+    (void)plugin;
+    return stream != 0 && stream->write != 0
+        && stream->write(stream, &fixture_gain, sizeof(fixture_gain))
+            == (int64_t)sizeof(fixture_gain);
+}
+
+static bool fixture_state_load(const ClapPlugin* plugin, const ClapInputStream* stream)
+{
+    (void)plugin;
+    double value = 0.0;
+    if (stream == 0 || stream->read == 0
+        || stream->read(stream, &value, sizeof(value)) != (int64_t)sizeof(value)
+        || value < 0.0 || value > 1.0)
+        return false;
+    fixture_gain = value;
+    return true;
+}
+
 static const ClapParams fixture_parameters = {fixture_parameter_count,
     fixture_parameter_info, fixture_parameter_value, 0, 0, 0};
 static const ClapLatency fixture_latency_extension = {fixture_latency};
+static const ClapState fixture_state = {fixture_state_save, fixture_state_load};
 
 static const void* fixture_plugin_extension(const ClapPlugin* plugin, const char* id)
 {
@@ -285,6 +323,7 @@ static const void* fixture_plugin_extension(const ClapPlugin* plugin, const char
     if (strcmp(id, "clap.audio-ports") == 0) return &fixture_audio_ports;
     if (strcmp(id, "clap.params") == 0) return &fixture_parameters;
     if (strcmp(id, "clap.latency") == 0) return &fixture_latency_extension;
+    if (strcmp(id, "clap.state") == 0) return &fixture_state;
     return 0;
 }
 

@@ -77,7 +77,9 @@ project, opens stopped, and creates one undoable audio clip when finished.
 values, reported latency, and stereo processing. A caller can pass a bounded,
 sample-ordered array of parameter events to processing without allocating in
 the binding. Production playback places each instance in a separate worker
-process so a plugin fault does not terminate the controlling process.
+process so a plugin fault does not terminate the controlling process. State
+save returns an owned opaque byte buffer in C and a byte vector in C++. Loading
+restores the same opaque data with a 256 MiB upper bound.
 
 `bindings/cmake/NylonCore.cmake` defines the imported `nylon_core` target;
 `NYLON_CORE_LIBRARY` selects a static or shared core.

@@ -5,24 +5,33 @@ import struct
 import subprocess
 import sys
 
-HEADER = b"NYWORK2\0"
+HEADER = b"NYWORK3\0"
 IDENTIFIER = "app.nylon.fixture"
+SAVE_STATE = (1 << 32) - 1
+LOAD_STATE = SAVE_STATE - 1
 
 
-def request(blocks):
+def request(operations):
     data = bytearray(HEADER)
-    for block, events in blocks:
-        data.extend(struct.pack("<I", len(block)))
-        data.extend(struct.pack("<I", len(events)))
-        for offset, identifier, value in events:
-            data.extend(struct.pack("<IId", offset, identifier, value))
-        for left, right in block:
-            data.extend(struct.pack("<ff", left, right))
+    for operation in operations:
+        if operation[0] == "save":
+            data.extend(struct.pack("<I", SAVE_STATE))
+        elif operation[0] == "load":
+            state = operation[1]
+            data.extend(struct.pack("<IQ", LOAD_STATE, len(state)))
+            data.extend(state)
+        else:
+            _, block, events = operation
+            data.extend(struct.pack("<II", len(block), len(events)))
+            for offset, identifier, value in events:
+                data.extend(struct.pack("<IId", offset, identifier, value))
+            for left, right in block:
+                data.extend(struct.pack("<ff", left, right))
     data.extend(struct.pack("<I", 0))
     return bytes(data)
 
 
-def response(data, lengths):
+def response(data, operations):
     assert data[: len(HEADER)] == HEADER
     cursor = len(HEADER)
     latency, parameter_count = struct.unpack_from("<II", data, cursor)
@@ -51,7 +60,21 @@ def response(data, lengths):
         "Output",
     )
     blocks = []
-    for expected in lengths:
+    saved_states = []
+    for operation in operations:
+        if operation[0] == "save":
+            command, length = struct.unpack_from("<IQ", data, cursor)
+            cursor += 12
+            assert command == SAVE_STATE
+            saved_states.append(data[cursor : cursor + length])
+            cursor += length
+            continue
+        if operation[0] == "load":
+            command = struct.unpack_from("<I", data, cursor)[0]
+            cursor += 4
+            assert command == LOAD_STATE
+            continue
+        expected = len(operation[1])
         frames = struct.unpack_from("<I", data, cursor)[0]
         cursor += 4
         assert frames == expected
@@ -61,23 +84,29 @@ def response(data, lengths):
             cursor += 8
         blocks.append(block)
     assert cursor == len(data)
-    return blocks
+    return blocks, saved_states
 
 
 def main():
     if len(sys.argv) != 4:
         raise SystemExit("expected worker, fixture, and crash fixture")
     worker, fixture, crash_fixture = sys.argv[1:]
-    blocks = [
-        ([(1.0, -1.0), (0.5, -0.25), (0.0, 0.75)], [(1, 7, 0.25)]),
-        ([(-0.5, 0.25), (0.125, -0.125)], []),
+    operations = [
+        ("block", [(1.0, -1.0), (0.5, -0.25), (0.0, 0.75)], [(1, 7, 0.25)]),
+        ("save",),
+        ("block", [(-0.5, 0.25)], [(0, 7, 0.75)]),
+        ("load", struct.pack("<d", 0.25)),
+        ("block", [(0.125, -0.125)], []),
     ]
     command = [worker, "clap", fixture, IDENTIFIER, "48000", "64"]
-    result = subprocess.run(command, input=request(blocks), capture_output=True, timeout=10)
+    result = subprocess.run(command, input=request(operations), capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
-    rendered = response(result.stdout, [len(block) for block, _ in blocks])
-    expected_gains = [[0.5, 0.25, 0.25], [0.25, 0.25]]
-    for (source, _), processed, gains in zip(blocks, rendered, expected_gains):
+    rendered, states = response(result.stdout, operations)
+    assert len(states) == 1
+    assert math.isclose(struct.unpack("<d", states[0])[0], 0.25, abs_tol=1e-12)
+    source_blocks = [operation[1] for operation in operations if operation[0] == "block"]
+    expected_gains = [[0.5, 0.25, 0.25], [0.75], [0.25]]
+    for source, processed, gains in zip(source_blocks, rendered, expected_gains):
         for original, changed, gain in zip(source, processed, gains):
             assert math.isclose(changed[0], original[0] * gain, abs_tol=1e-7)
             assert math.isclose(changed[1], original[1] * gain, abs_tol=1e-7)
