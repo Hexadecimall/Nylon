@@ -20,6 +20,7 @@ pub mod limiter;
 pub mod meter;
 pub mod osc;
 pub mod pan;
+pub mod reverb;
 pub mod saturator;
 pub mod smooth;
 

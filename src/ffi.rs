@@ -10,6 +10,7 @@ use crate::dsp::env::Settings as EnvelopeSettings;
 use crate::dsp::gate::Parameters as GateParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
 use crate::dsp::osc::Shape;
+use crate::dsp::reverb::Parameters as ReverbParameters;
 use crate::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
     Parameters as SaturatorParameters,
@@ -696,6 +697,17 @@ fn track_device_kind(record: NylonTrackDevice) -> Option<TrackDeviceKind> {
                 stereo_phase: parameters[5],
             },
         }),
+        8 => Some(TrackDeviceKind::Reverb {
+            parameters: ReverbParameters {
+                size: parameters[0],
+                decay_seconds: parameters[1],
+                damping: parameters[2],
+                diffusion: parameters[3],
+                pre_delay_seconds: parameters[4],
+                width: parameters[5],
+                mix: parameters[6],
+            },
+        }),
         _ => None,
     }
 }
@@ -808,6 +820,18 @@ fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice
                 parameters.feedback,
                 parameters.mix,
                 parameters.stereo_phase,
+            ]);
+        }
+        TrackDeviceKind::Reverb { parameters } => {
+            record.kind = 8;
+            record.parameters.copy_from_slice(&[
+                parameters.size,
+                parameters.decay_seconds,
+                parameters.damping,
+                parameters.diffusion,
+                parameters.pre_delay_seconds,
+                parameters.width,
+                parameters.mix,
             ]);
         }
     }

@@ -7,6 +7,7 @@ use crate::dsp::env::Settings as EnvelopeSettings;
 use crate::dsp::gate::Parameters as GateParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
 use crate::dsp::osc::Shape;
+use crate::dsp::reverb::Parameters as ReverbParameters;
 use crate::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
     Parameters as SaturatorParameters,
@@ -29,7 +30,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 11;
+const VERSION: u32 = 12;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -183,6 +184,20 @@ impl Encoder {
                             parameters.feedback,
                             parameters.mix,
                             parameters.stereo_phase,
+                        ] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::Reverb { parameters } => {
+                        self.bytes(&[8])?;
+                        for value in [
+                            parameters.size,
+                            parameters.decay_seconds,
+                            parameters.damping,
+                            parameters.diffusion,
+                            parameters.pre_delay_seconds,
+                            parameters.width,
+                            parameters.mix,
                         ] {
                             self.bytes(&value.to_le_bytes())?;
                         }
@@ -466,6 +481,17 @@ impl<'a> Decoder<'a> {
                                 feedback: f32::from_le_bytes(self.array()?),
                                 mix: f32::from_le_bytes(self.array()?),
                                 stereo_phase: f32::from_le_bytes(self.array()?),
+                            },
+                        },
+                        8 if version >= 12 => DeviceKind::Reverb {
+                            parameters: ReverbParameters {
+                                size: f32::from_le_bytes(self.array()?),
+                                decay_seconds: f32::from_le_bytes(self.array()?),
+                                damping: f32::from_le_bytes(self.array()?),
+                                diffusion: f32::from_le_bytes(self.array()?),
+                                pre_delay_seconds: f32::from_le_bytes(self.array()?),
+                                width: f32::from_le_bytes(self.array()?),
+                                mix: f32::from_le_bytes(self.array()?),
                             },
                         },
                         _ => return Err(PersistenceError::InvalidFormat),

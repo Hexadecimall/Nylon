@@ -312,13 +312,19 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
             enabled: 1,
             parameters: [0.8, 0.012, 0.003, 0.1, 0.5, 0.25, 0.0],
         };
+        let reverb = NylonTrackDevice {
+            kind: 8,
+            enabled: 1,
+            parameters: [0.6, 2.8, 0.35, 0.7, 0.02, 1.0, 0.3],
+        };
         assert_eq!(nylon_track_device_add(handle, 0, &utility), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &delay), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &limiter), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &saturator), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &gate), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &chorus), 1);
-        assert_eq!(nylon_track_device_count(handle, 0), 6);
+        assert_eq!(nylon_track_device_add(handle, 0, &reverb), 1);
+        assert_eq!(nylon_track_device_count(handle, 0), 7);
         let mut read = NylonTrackDevice::default();
         assert_eq!(nylon_track_device_get(handle, 0, 0, &mut read), 1);
         assert_eq!(read, utility);
@@ -333,6 +339,8 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
         assert_eq!(read, gate);
         assert_eq!(nylon_track_device_get(handle, 0, 5, &mut read), 1);
         assert_eq!(read, chorus);
+        assert_eq!(nylon_track_device_get(handle, 0, 6, &mut read), 1);
+        assert_eq!(read, reverb);
 
         let changed = NylonTrackDevice {
             kind: 0,
@@ -353,8 +361,8 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
         };
         assert_eq!(nylon_track_device_set(handle, 0, 0, &invalid), 0);
         assert_eq!(nylon_track_device_delete(handle, 0, 0), 1);
-        assert_eq!(nylon_track_device_count(handle, 0), 5);
-        assert_eq!(nylon_track_device_get(handle, 0, 5, &mut read), 0);
+        assert_eq!(nylon_track_device_count(handle, 0), 6);
+        assert_eq!(nylon_track_device_get(handle, 0, 6, &mut read), 0);
         assert_eq!(
             nylon_track_device_get(handle, 0, 0, std::ptr::null_mut()),
             0

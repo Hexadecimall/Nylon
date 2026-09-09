@@ -7,6 +7,7 @@ use crate::dsp::db;
 use crate::dsp::delay::DelayLine;
 use crate::dsp::gate::{Gate, Parameters as GateParameters};
 use crate::dsp::limiter::{Limiter, Parameters as LimiterParameters};
+use crate::dsp::reverb::{Parameters as ReverbParameters, Reverb};
 use crate::dsp::saturator::{Parameters as SaturatorParameters, Saturator};
 
 pub const MAX_DEVICES: usize = 16;
@@ -71,6 +72,9 @@ pub enum DeviceKind {
     Chorus {
         parameters: ChorusParameters,
     },
+    Reverb {
+        parameters: ReverbParameters,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,6 +123,10 @@ enum Processor {
         processor: Chorus,
         left_storage: Vec<f32>,
         right_storage: Vec<f32>,
+    },
+    Reverb {
+        processor: Box<Reverb>,
+        storage: Vec<f32>,
     },
 }
 
@@ -228,6 +236,18 @@ impl DeviceChain {
                         processor,
                         left_storage: zeroed(frames)?,
                         right_storage: zeroed(frames)?,
+                    }
+                }
+                DeviceKind::Reverb { parameters } => {
+                    let processor = Reverb::new(sample_rate, parameters);
+                    let frames = processor.required_storage_frames();
+                    delay_storage = delay_storage
+                        .checked_add(frames)
+                        .filter(|value| *value <= MAX_DELAY_STORAGE_FRAMES)
+                        .ok_or(DeviceError::StorageCapacity)?;
+                    Processor::Reverb {
+                        processor: Box::new(processor),
+                        storage: zeroed(frames)?,
                     }
                 }
             };
@@ -368,6 +388,17 @@ fn validate_kind(kind: DeviceKind, sample_rate: f32) -> Result<usize, DeviceErro
                     + 2,
             )
         }
+        DeviceKind::Reverb { parameters }
+            if finite_range(parameters.size, 0.0, 1.0)
+                && finite_range(parameters.decay_seconds, 0.1, 30.0)
+                && finite_range(parameters.damping, 0.0, 1.0)
+                && finite_range(parameters.diffusion, 0.0, 1.0)
+                && finite_range(parameters.pre_delay_seconds, 0.0, 0.25)
+                && finite_range(parameters.width, 0.0, 1.0)
+                && finite_range(parameters.mix, 0.0, 1.0) =>
+        {
+            Ok(Reverb::new(sample_rate, parameters).required_storage_frames())
+        }
         _ => Err(DeviceError::InvalidParameter),
     }
 }
@@ -445,6 +476,7 @@ impl Processor {
                 left_storage,
                 right_storage,
             } => processor.process_block(left_storage, right_storage, audio),
+            Self::Reverb { processor, storage } => processor.process_block(storage, audio),
         }
     }
 
@@ -476,6 +508,7 @@ impl Processor {
                 left_storage,
                 right_storage,
             } => processor.reset(left_storage, right_storage),
+            Self::Reverb { processor, storage } => processor.reset(storage),
             Self::Utility { .. } => {}
         }
     }
@@ -713,6 +746,31 @@ mod tests {
         chain.process(&input, &[], &mut first).unwrap();
         assert_ne!(first, input);
         assert!(first.iter().flatten().all(|sample| sample.is_finite()));
+        chain.reset();
+        let mut second = vec![[0.0; 2]; input.len()];
+        chain.process(&input, &[], &mut second).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn reverb_produces_a_tail_and_reset_clears_it() {
+        let config = DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Reverb {
+                parameters: ReverbParameters::default(),
+            },
+        };
+        let mut chain = DeviceChain::new(&[config], RATE).unwrap();
+        let mut input = vec![[0.0; 2]; 8_192];
+        input[0] = [1.0, 1.0];
+        let mut first = vec![[0.0; 2]; input.len()];
+        chain.process(&input, &[], &mut first).unwrap();
+        assert!(
+            first[1..]
+                .iter()
+                .flatten()
+                .any(|sample| sample.abs() > 0.001)
+        );
         chain.reset();
         let mut second = vec![[0.0; 2]; input.len()];
         chain.process(&input, &[], &mut second).unwrap();

@@ -78,7 +78,8 @@ enum class DeviceKind : int {
     Limiter = 4,
     Saturator = 5,
     Gate = 6,
-    Chorus = 7
+    Chorus = 7,
+    Reverb = 8
 };
 
 enum class FilterKind : int {

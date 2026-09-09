@@ -32,6 +32,10 @@ harness = false
 name = "routed_playback"
 harness = false
 
+[[bench]]
+name = "reverb"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

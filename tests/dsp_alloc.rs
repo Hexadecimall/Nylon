@@ -13,6 +13,7 @@ use nylon::dsp::gate::{Gate, Parameters as GateParameters};
 use nylon::dsp::limiter::{Limiter, Parameters as LimiterParameters};
 use nylon::dsp::meter::Meter;
 use nylon::dsp::osc::{Oscillator, Shape};
+use nylon::dsp::reverb::{Parameters as ReverbParameters, Reverb};
 use nylon::dsp::saturator::{Parameters as SaturatorParameters, Saturator};
 use nylon::dsp::smooth::{OnePole, Ramp};
 use nylon::dsp::{db, pan};
@@ -93,6 +94,16 @@ fn chorusing_a_block_performs_no_allocator_operations() {
     let mut right = vec![0.0_f32; frames];
     let mut audio = vec![[0.25_f32, -0.1_f32]; BLOCK];
     let operations = measure(|| chorus.process_block(&mut left, &mut right, &mut audio));
+    assert_eq!(operations, 0, "{operations} allocator operations");
+    assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
+}
+
+#[test]
+fn reverberating_a_block_performs_no_allocator_operations() {
+    let mut reverb = Reverb::new(RATE, ReverbParameters::default());
+    let mut storage = vec![0.0_f32; reverb.required_storage_frames()];
+    let mut audio = vec![[0.25_f32, -0.1_f32]; BLOCK];
+    let operations = measure(|| reverb.process_block(&mut storage, &mut audio));
     assert_eq!(operations, 0, "{operations} allocator operations");
     assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
 }

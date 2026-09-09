@@ -1,6 +1,7 @@
 use nylon::dsp::chorus::Parameters as ChorusParameters;
 use nylon::dsp::gate::Parameters as GateParameters;
 use nylon::dsp::limiter::Parameters as LimiterParameters;
+use nylon::dsp::reverb::Parameters as ReverbParameters;
 use nylon::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
     Parameters as SaturatorParameters,
@@ -128,6 +129,15 @@ fn session() -> Project {
                     },
                 },
             },
+            Command::AddDevice {
+                track: id,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Reverb {
+                        parameters: ReverbParameters::default(),
+                    },
+                },
+            },
             Command::SetTimeSignature {
                 numerator: 7,
                 denominator: 8,
@@ -250,7 +260,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 12;
+    future[4] = 13;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)
