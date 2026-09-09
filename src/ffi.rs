@@ -3587,6 +3587,69 @@ pub unsafe extern "C" fn nylon_session_active_scene(audio: *const AudioRuntime, 
         .unwrap_or(-1)
 }
 
+/// Queues a live MIDI note start for the next audio callback.
+///
+/// # Safety
+/// Both handles must be live on the calling control thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_live_note_on(
+    audio: *mut AudioRuntime,
+    project: *const Project,
+    track: u64,
+    pitch: u8,
+    velocity: u8,
+) -> i32 {
+    // SAFETY: The interface contract makes the audio handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract keeps the project live and immutable.
+    let project = unsafe { project.as_ref() };
+    let (Some(audio), Some(project), Ok(track)) = (audio, project, usize::try_from(track)) else {
+        return 0;
+    };
+    i32::from(audio.note_on(project, track, pitch, velocity))
+}
+
+/// Queues a live MIDI note release for the next audio callback.
+///
+/// # Safety
+/// Both handles must be live on the calling control thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_live_note_off(
+    audio: *mut AudioRuntime,
+    project: *const Project,
+    track: u64,
+    pitch: u8,
+) -> i32 {
+    // SAFETY: The interface contract makes the audio handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract keeps the project live and immutable.
+    let project = unsafe { project.as_ref() };
+    let (Some(audio), Some(project), Ok(track)) = (audio, project, usize::try_from(track)) else {
+        return 0;
+    };
+    i32::from(audio.note_off(project, track, pitch))
+}
+
+/// Queues release of every live MIDI note on one track.
+///
+/// # Safety
+/// Both handles must be live on the calling control thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_live_all_notes_off(
+    audio: *mut AudioRuntime,
+    project: *const Project,
+    track: u64,
+) -> i32 {
+    // SAFETY: The interface contract makes the audio handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract keeps the project live and immutable.
+    let project = unsafe { project.as_ref() };
+    let (Some(audio), Some(project), Ok(track)) = (audio, project, usize::try_from(track)) else {
+        return 0;
+    };
+    i32::from(audio.all_notes_off(project, track))
+}
+
 /// # Safety
 /// The handle must be live with no concurrent access.
 #[unsafe(no_mangle)]

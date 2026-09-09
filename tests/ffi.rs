@@ -163,6 +163,18 @@ fn null_handles_are_rejected() {
             0
         );
         assert_eq!(nylon_session_active_scene(std::ptr::null(), 0), -1);
+        assert_eq!(
+            nylon_live_note_on(std::ptr::null_mut(), std::ptr::null(), 0, 60, 100),
+            0
+        );
+        assert_eq!(
+            nylon_live_note_off(std::ptr::null_mut(), std::ptr::null(), 0, 60),
+            0
+        );
+        assert_eq!(
+            nylon_live_all_notes_off(std::ptr::null_mut(), std::ptr::null(), 0),
+            0
+        );
         assert_eq!(nylon_audio_default_output(std::ptr::null_mut()), 0);
         assert_eq!(nylon_audio_default_input(std::ptr::null_mut()), 0);
         assert_eq!(nylon_recording_start(std::ptr::null_mut()), 0);
@@ -445,6 +457,9 @@ fn native_audio_handle_reports_closed_state() {
         assert_eq!(nylon_session_launch_scene(audio, project, 0, 1.0), 0);
         assert_eq!(nylon_session_stop_track(audio, project, 0), 0);
         assert_eq!(nylon_session_active_scene(audio, 0), -1);
+        assert_eq!(nylon_live_note_on(audio, project, 0, 60, 100), 0);
+        assert_eq!(nylon_live_note_off(audio, project, 0, 60), 0);
+        assert_eq!(nylon_live_all_notes_off(audio, project, 0), 0);
         let count = nylon_audio_device_list(std::ptr::null_mut(), 0);
         assert!(count <= nylon::runtime::MAX_DEVICES as u64);
         let input_count = nylon_audio_input_device_list(std::ptr::null_mut(), 0);

@@ -548,6 +548,10 @@ public:
     bool launchScene(const Project& project, std::uint64_t scene, double quantizationBeats);
     bool stopSessionTrack(const Project& project, std::uint64_t track);
     std::int64_t activeSessionScene(std::uint64_t track) const;
+    bool noteOn(const Project& project, std::uint64_t track, std::uint8_t pitch,
+        std::uint8_t velocity);
+    bool noteOff(const Project& project, std::uint64_t track, std::uint8_t pitch);
+    bool allNotesOff(const Project& project, std::uint64_t track);
 
     bool play();
     bool stop();

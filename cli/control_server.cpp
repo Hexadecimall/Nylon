@@ -177,6 +177,30 @@ public:
         }
         if (command == "play" && args.isEmpty()) return audioResult(m_audio.play(), "start playback");
         if (command == "stop" && args.isEmpty()) return audioResult(m_audio.stop(), "stop playback");
+        if (command == "note-on" && args.size() == 3) {
+            std::uint64_t track = 0;
+            std::uint8_t pitch = 0;
+            std::uint8_t velocity = 0;
+            if (!indexValue(args[0], track) || !byteValue(args[1], pitch)
+                || !byteValue(args[2], velocity))
+                return error("Invalid live MIDI note");
+            return audioResult(
+                m_audio.noteOn(m_project, track, pitch, velocity), "start the live MIDI note");
+        }
+        if (command == "note-off" && args.size() == 2) {
+            std::uint64_t track = 0;
+            std::uint8_t pitch = 0;
+            if (!indexValue(args[0], track) || !byteValue(args[1], pitch))
+                return error("Invalid live MIDI note");
+            return audioResult(
+                m_audio.noteOff(m_project, track, pitch), "release the live MIDI note");
+        }
+        if (command == "all-notes-off" && args.size() == 1) {
+            std::uint64_t track = 0;
+            if (!indexValue(args[0], track)) return error("Invalid track index");
+            return audioResult(
+                m_audio.allNotesOff(m_project, track), "release the live MIDI notes");
+        }
         if (command == "locate" && args.size() == 1) {
             double beats = 0.0;
             if (!numberValue(args[0], beats) || beats < 0.0) return error("Invalid beat position");

@@ -1153,6 +1153,19 @@ std::int64_t AudioEngine::activeSessionScene(std::uint64_t track) const
 {
     return nylon_session_active_scene(m_handle, track);
 }
+bool AudioEngine::noteOn(
+    const Project& project, std::uint64_t track, std::uint8_t pitch, std::uint8_t velocity)
+{
+    return nylon_live_note_on(m_handle, project.raw(), track, pitch, velocity) != 0;
+}
+bool AudioEngine::noteOff(const Project& project, std::uint64_t track, std::uint8_t pitch)
+{
+    return nylon_live_note_off(m_handle, project.raw(), track, pitch) != 0;
+}
+bool AudioEngine::allNotesOff(const Project& project, std::uint64_t track)
+{
+    return nylon_live_all_notes_off(m_handle, project.raw(), track) != 0;
+}
 bool AudioEngine::play() { return nylon_transport_play(m_handle) != 0; }
 bool AudioEngine::stop() { return nylon_transport_stop(m_handle) != 0; }
 bool AudioEngine::locate(double beats) { return nylon_transport_locate(m_handle, beats) != 0; }

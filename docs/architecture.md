@@ -253,6 +253,13 @@ stage that declares a note input port. Each plugin stage receives only its own
 parameter overrides, preventing equal numeric identifiers in separate plugins from
 affecting each other.
 
+Live MIDI input crosses a bounded SPSC queue into the callback. Note starts,
+releases, and per-track wildcard choke commands take effect at the next block
+boundary even while the transport is stopped. The same event reaches the native
+instrument and every plugin stage declaring a note input. A full queue refuses the
+producer call instead of blocking the control thread or overwriting an earlier
+release.
+
 ## Benchmarks
 
 The render benchmark reports nanoseconds per 256-frame stereo block after warmup.

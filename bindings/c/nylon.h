@@ -586,6 +586,15 @@ int nylon_session_stop_track(
     void* audio, const void* project, unsigned long long track);
 long long nylon_session_active_scene(const void* audio, unsigned long long track);
 
+/* Live MIDI commands enter a bounded queue and take effect at the next audio
+ * callback boundary. They work while the transport is stopped. */
+int nylon_live_note_on(void* audio, const void* project,
+    unsigned long long track, unsigned char pitch, unsigned char velocity);
+int nylon_live_note_off(void* audio, const void* project,
+    unsigned long long track, unsigned char pitch);
+int nylon_live_all_notes_off(
+    void* audio, const void* project, unsigned long long track);
+
 int nylon_transport_play(void* audio);
 int nylon_transport_stop(void* audio);
 int nylon_transport_locate(void* audio, double beats);

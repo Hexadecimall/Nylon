@@ -526,6 +526,54 @@ impl AudioRuntime {
         true
     }
 
+    /// Starts a live MIDI note at the next callback boundary.
+    pub fn note_on(&mut self, project: &Project, track: usize, pitch: u8, velocity: u8) -> bool {
+        if !self.is_open()
+            || project
+                .snapshot()
+                .tracks()
+                .get(track)
+                .is_none_or(|track| track.kind() != TrackKind::Midi)
+        {
+            return false;
+        }
+        self.publisher
+            .as_mut()
+            .is_some_and(|publisher| publisher.note_on(track, pitch, velocity))
+    }
+
+    /// Releases a live MIDI note at the next callback boundary.
+    pub fn note_off(&mut self, project: &Project, track: usize, pitch: u8) -> bool {
+        if !self.is_open()
+            || project
+                .snapshot()
+                .tracks()
+                .get(track)
+                .is_none_or(|track| track.kind() != TrackKind::Midi)
+        {
+            return false;
+        }
+        self.publisher
+            .as_mut()
+            .is_some_and(|publisher| publisher.note_off(track, pitch))
+    }
+
+    /// Releases every live MIDI note on one track at the next callback boundary.
+    pub fn all_notes_off(&mut self, project: &Project, track: usize) -> bool {
+        if !self.is_open()
+            || project
+                .snapshot()
+                .tracks()
+                .get(track)
+                .is_none_or(|track| track.kind() != TrackKind::Midi)
+        {
+            return false;
+        }
+        self.publisher
+            .as_mut()
+            .is_some_and(|publisher| publisher.all_notes_off(track))
+    }
+
     /// Moves the playhead at the next block boundary.
     pub fn locate(&mut self, beats: f64) -> bool {
         if !self.is_open() || !beats.is_finite() || beats < 0.0 {

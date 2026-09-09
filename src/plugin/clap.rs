@@ -421,8 +421,8 @@ impl Instance {
                     || event.kind > CLAP_EVENT_NOTE_CHOKE as u32
                     || event.port_index < 0
                     || event.port_index as u32 >= self.input_note_ports
-                    || !(0..=15).contains(&event.channel)
-                    || !(0..=127).contains(&event.key)
+                    || !((event.kind == 2 && event.channel == -1 && event.key == -1)
+                        || ((0..=15).contains(&event.channel) && (0..=127).contains(&event.key)))
                     || !event.velocity.is_finite()
                     || !(0.0..=1.0).contains(&event.velocity)
             })

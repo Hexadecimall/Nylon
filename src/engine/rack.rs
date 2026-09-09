@@ -460,6 +460,33 @@ mod tests {
     }
 
     #[test]
+    fn plugin_wildcard_choke_releases_all_notes() {
+        let bridge = Bridge::new(Gain(1.0), 4, 2, 0).unwrap();
+        let mut rack = DeviceRack::new(4).unwrap();
+        rack.push_plugin(bridge).unwrap();
+        let input = [[0.25, -0.25]; 4];
+        let mut output = [[0.0; 2]; 4];
+        let choke = NoteEvent {
+            sample_offset: 0,
+            kind: 2,
+            note_id: -1,
+            port_index: 0,
+            channel: -1,
+            key: -1,
+            velocity: 0.0,
+        };
+        for _ in 0..10_000 {
+            rack.process_events(&input, &[], &mut output, &[choke])
+                .unwrap();
+            if output == input {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(output, input);
+    }
+
+    #[test]
     fn plugin_parameter_values_are_delivered_only_to_their_stage() {
         let mut rack = DeviceRack::new(4).unwrap();
         rack.push_plugin_with_parameters(
