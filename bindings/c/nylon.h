@@ -483,6 +483,26 @@ void* nylon_clap_worker_save_state(void* worker);
 int nylon_clap_worker_load_state(void* worker,
     const unsigned char* bytes, unsigned long long length);
 
+/* The bridge adds one audio block of latency and keeps pipe I/O off the audio
+ * callback. Late or failed processing returns a one-block delayed dry signal. */
+void* nylon_clap_bridge_open(const char* executable, const char* path,
+    const char* identifier, double sample_rate, unsigned int frames,
+    unsigned int queue_depth);
+void nylon_clap_bridge_free(void* bridge);
+int nylon_clap_bridge_process_stereo(void* bridge,
+    const float* input_left, const float* input_right,
+    float* output_left, float* output_right, unsigned int frames,
+    const NylonClapParameterEvent* parameter_events,
+    unsigned int parameter_event_count,
+    const NylonClapNoteEvent* note_events, unsigned int note_event_count);
+unsigned int nylon_clap_bridge_latency(const void* bridge);
+int nylon_clap_bridge_is_running(const void* bridge);
+unsigned long long nylon_clap_bridge_submitted_blocks(const void* bridge);
+unsigned long long nylon_clap_bridge_completed_blocks(const void* bridge);
+unsigned long long nylon_clap_bridge_underruns(const void* bridge);
+unsigned long long nylon_clap_bridge_queue_drops(const void* bridge);
+unsigned long long nylon_clap_bridge_worker_failures(const void* bridge);
+
 /* Live audio is owned by a separate control-thread handle. The platform
  * stream remains open while the musical transport is stopped, allowing
  * meters and edits to continue crossing block boundaries. */

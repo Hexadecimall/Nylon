@@ -1,7 +1,9 @@
 #include "nylon.hpp"
 
 #include <cmath>
+#include <chrono>
 #include <cstdint>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -55,5 +57,32 @@ int main(int argc, char** argv)
     if (!worker.processStereo(inputLeft, inputRight, outputLeft, outputRight, 1,
             nullptr, 0, nullptr, 0))
         return 13;
+
+    auto bridge = nylon::ClapBridge::open(argv[1], argv[2],
+        "app.nylon.fixture", 48'000.0, 64, 3);
+    if (!bridge || !bridge.isRunning() || bridge.latency() != 96) return 14;
+    std::vector<float> bridgeInputLeft(64, 0.5F);
+    std::vector<float> bridgeInputRight(64, -0.25F);
+    std::vector<float> bridgeOutputLeft(64, 1.0F);
+    std::vector<float> bridgeOutputRight(64, 1.0F);
+    if (!bridge.processStereo(bridgeInputLeft.data(), bridgeInputRight.data(),
+            bridgeOutputLeft.data(), bridgeOutputRight.data(), 64,
+            nullptr, 0, nullptr, 0))
+        return 15;
+    if (!close(bridgeOutputLeft[0], 0.0F)) return 16;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (bridge.completedBlocks() < 1 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    if (bridge.completedBlocks() != 1) return 17;
+    if (!bridge.processStereo(bridgeInputLeft.data(), bridgeInputRight.data(),
+            bridgeOutputLeft.data(), bridgeOutputRight.data(), 64,
+            nullptr, 0, nullptr, 0))
+        return 18;
+    if (!close(bridgeOutputLeft[0], 0.25F)
+        || !close(bridgeOutputRight[0], -0.125F))
+        return 19;
+    if (bridge.submittedBlocks() != 2 || bridge.underruns() != 0
+        || bridge.queueDrops() != 0 || bridge.workerFailures() != 0)
+        return 20;
     return 0;
 }

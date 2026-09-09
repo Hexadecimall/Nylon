@@ -22,6 +22,7 @@ use crate::engine::voice::Patch;
 use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::plugin::Catalog as PluginCatalog;
+use crate::plugin::bridge::Bridge as ClapBridge;
 use crate::plugin::clap::{
     Instance as ClapInstance, NoteEvent as ClapNoteEvent, ParameterEvent as ClapParameterEvent,
 };
@@ -4334,3 +4335,161 @@ pub unsafe extern "C" fn nylon_clap_worker_load_state(
     };
     worker.load_state(bytes).is_ok().into()
 }
+
+/// # Safety
+/// All strings must be terminated and readable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_bridge_open(
+    executable: *const c_char,
+    path: *const c_char,
+    identifier: *const c_char,
+    sample_rate: f64,
+    frames: u32,
+    queue_depth: u32,
+) -> *mut ClapBridge {
+    if executable.is_null() || path.is_null() || identifier.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: The caller supplies terminated strings.
+    let (Ok(executable), Ok(path), Ok(identifier)) = (unsafe {
+        (
+            CStr::from_ptr(executable).to_str(),
+            CStr::from_ptr(path).to_str(),
+            CStr::from_ptr(identifier).to_str(),
+        )
+    }) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(client) = ClapWorker::spawn(
+        executable,
+        std::path::Path::new(path),
+        identifier,
+        sample_rate,
+        frames as usize,
+    ) else {
+        return std::ptr::null_mut();
+    };
+    ClapBridge::from_client(client, frames as usize, queue_depth as usize)
+        .map(Box::new)
+        .map_or(std::ptr::null_mut(), Box::into_raw)
+}
+
+/// # Safety
+/// The handle must be null or returned by `nylon_clap_bridge_open` and not freed yet.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_bridge_free(bridge: *mut ClapBridge) {
+    if !bridge.is_null() {
+        // SAFETY: Ownership transfers back exactly once.
+        drop(unsafe { Box::from_raw(bridge) });
+    }
+}
+
+/// # Safety
+/// The handle and buffers must remain live and exclusive. Audio regions contain
+/// `frames` values. Event regions contain the corresponding number of records.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_bridge_process_stereo(
+    bridge: *mut ClapBridge,
+    input_left: *const f32,
+    input_right: *const f32,
+    output_left: *mut f32,
+    output_right: *mut f32,
+    frames: u32,
+    parameter_events: *const ClapParameterEvent,
+    parameter_event_count: u32,
+    note_events: *const ClapNoteEvent,
+    note_event_count: u32,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    let Some(bridge) = (unsafe { bridge.as_mut() }) else {
+        return 0;
+    };
+    if output_left.is_null()
+        || output_right.is_null()
+        || frames == 0
+        || (input_left.is_null() != input_right.is_null())
+        || (parameter_events.is_null() && parameter_event_count != 0)
+        || (note_events.is_null() && note_event_count != 0)
+    {
+        return 0;
+    }
+    let frames = frames as usize;
+    let input = if input_left.is_null() {
+        None
+    } else {
+        // SAFETY: The caller supplies two readable regions containing frames samples.
+        Some(unsafe {
+            (
+                std::slice::from_raw_parts(input_left, frames),
+                std::slice::from_raw_parts(input_right, frames),
+            )
+        })
+    };
+    let parameter_events = if parameter_event_count == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller supplies parameter_event_count readable records.
+        unsafe { std::slice::from_raw_parts(parameter_events, parameter_event_count as usize) }
+    };
+    let note_events = if note_event_count == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller supplies note_event_count readable records.
+        unsafe { std::slice::from_raw_parts(note_events, note_event_count as usize) }
+    };
+    // SAFETY: The caller supplies two writable regions containing frames samples.
+    let (output_left, output_right) = unsafe {
+        (
+            std::slice::from_raw_parts_mut(output_left, frames),
+            std::slice::from_raw_parts_mut(output_right, frames),
+        )
+    };
+    bridge
+        .process_stereo(
+            input,
+            output_left,
+            output_right,
+            parameter_events,
+            note_events,
+        )
+        .is_ok()
+        .into()
+}
+
+/// # Safety
+/// The handle must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_bridge_latency(bridge: *const ClapBridge) -> u32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { bridge.as_ref() }.map_or(0, ClapBridge::latency_frames)
+}
+
+/// # Safety
+/// The handle must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_bridge_is_running(bridge: *const ClapBridge) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { bridge.as_ref() }
+        .is_some_and(ClapBridge::is_running)
+        .into()
+}
+
+macro_rules! bridge_counter {
+    ($name:ident, $method:ident) => {
+        /// Returns one bridge health counter, or zero for a null handle.
+        ///
+        /// # Safety
+        /// The handle must remain live for this call.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(bridge: *const ClapBridge) -> u64 {
+            // SAFETY: Handle validity is required by the interface.
+            unsafe { bridge.as_ref() }.map_or(0, ClapBridge::$method)
+        }
+    };
+}
+
+bridge_counter!(nylon_clap_bridge_submitted_blocks, submitted_blocks);
+bridge_counter!(nylon_clap_bridge_completed_blocks, completed_blocks);
+bridge_counter!(nylon_clap_bridge_underruns, underruns);
+bridge_counter!(nylon_clap_bridge_queue_drops, queue_drops);
+bridge_counter!(nylon_clap_bridge_worker_failures, worker_failures);

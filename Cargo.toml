@@ -62,6 +62,10 @@ harness = false
 name = "phaser"
 harness = false
 
+[[bench]]
+name = "plugin_bridge"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

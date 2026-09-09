@@ -1,5 +1,6 @@
 //! Plugin discovery and quarantine state.
 
+pub mod bridge;
 pub mod clap;
 pub mod probe;
 pub mod worker;

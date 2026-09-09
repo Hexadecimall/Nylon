@@ -19,6 +19,8 @@ use nylon::dsp::reverb::{Parameters as ReverbParameters, Reverb};
 use nylon::dsp::saturator::{Parameters as SaturatorParameters, Saturator};
 use nylon::dsp::smooth::{OnePole, Ramp};
 use nylon::dsp::{db, pan};
+use nylon::plugin::bridge::{BlockProcessor, Bridge};
+use nylon::plugin::clap::{NoteEvent, ParameterEvent};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -67,6 +69,46 @@ fn measure(body: impl FnOnce()) -> usize {
 
 const RATE: f32 = 48_000.0;
 const BLOCK: usize = 512;
+
+struct BridgePass;
+
+impl BlockProcessor for BridgePass {
+    fn process_block(
+        &mut self,
+        input: Option<(&[f32], &[f32])>,
+        output_left: &mut [f32],
+        output_right: &mut [f32],
+        _: &[ParameterEvent],
+        _: &[NoteEvent],
+    ) -> bool {
+        if let Some((left, right)) = input {
+            output_left.copy_from_slice(left);
+            output_right.copy_from_slice(right);
+        }
+        true
+    }
+}
+
+#[test]
+fn submitting_a_plugin_block_performs_no_allocator_operations() {
+    let mut bridge = Bridge::new(BridgePass, BLOCK, 2, 0).unwrap();
+    let left = vec![0.25_f32; BLOCK];
+    let right = vec![-0.25_f32; BLOCK];
+    let mut output_left = vec![0.0_f32; BLOCK];
+    let mut output_right = vec![0.0_f32; BLOCK];
+    let operations = measure(|| {
+        bridge
+            .process_stereo(
+                Some((&left, &right)),
+                &mut output_left,
+                &mut output_right,
+                &[],
+                &[],
+            )
+            .unwrap();
+    });
+    assert_eq!(operations, 0, "{operations} allocator operations");
+}
 
 #[test]
 fn filtering_a_block_performs_no_allocator_operations() {

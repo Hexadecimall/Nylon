@@ -43,6 +43,7 @@ Groups of functions:
 | `nylon_render_*` | deterministic offline file rendering |
 | `nylon_clap_instance_*` | in-process CLAP lifecycle and worker-side processing |
 | `nylon_clap_worker_*` | isolated process ownership, metadata, state, and blocking processing |
+| `nylon_clap_bridge_*` | wait-free audio submission, fixed latency, fallback, and health counters |
 
 Track kinds: 0 audio, 1 MIDI, 2 return, 3 master, 4 group, 5 cue.
 
@@ -82,7 +83,10 @@ key, velocity, and exact frame offset. `nylon::ClapWorker` owns that instance in
 a separate process so a plugin fault does not terminate the controlling process.
 Worker calls block on IPC and belong on a dedicated thread. State save returns
 an owned opaque byte buffer in C and a byte vector in C++. Loading restores the
-same opaque data with a 256 MiB upper bound.
+same opaque data with a 256 MiB upper bound. `nylon::ClapBridge` owns the IPC
+thread and exposes a nonblocking callback path with one audio block added to
+the plugin's reported latency. A late worker produces the delayed dry signal
+and increments an underrun counter rather than blocking the audio device.
 
 `bindings/cmake/NylonCore.cmake` defines the imported `nylon_core` target;
 `NYLON_CORE_LIBRARY` selects a static or shared core.

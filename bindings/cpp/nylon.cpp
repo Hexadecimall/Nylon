@@ -331,6 +331,65 @@ bool ClapWorker::loadState(const std::vector<std::uint8_t>& state)
         != 0;
 }
 
+ClapBridge::~ClapBridge() { nylon_clap_bridge_free(m_handle); }
+ClapBridge::ClapBridge(ClapBridge&& other) noexcept
+    : m_handle(std::exchange(other.m_handle, nullptr))
+{
+}
+ClapBridge& ClapBridge::operator=(ClapBridge&& other) noexcept
+{
+    if (this != &other) {
+        nylon_clap_bridge_free(m_handle);
+        m_handle = std::exchange(other.m_handle, nullptr);
+    }
+    return *this;
+}
+ClapBridge ClapBridge::open(const std::string& executable, const std::string& path,
+    const std::string& identifier, double sampleRate, std::uint32_t frames,
+    std::uint32_t queueDepth)
+{
+    return ClapBridge(nylon_clap_bridge_open(executable.c_str(), path.c_str(),
+        identifier.c_str(), sampleRate, frames, queueDepth));
+}
+bool ClapBridge::processStereo(const float* inputLeft, const float* inputRight,
+    float* outputLeft, float* outputRight, std::uint32_t frames,
+    const ParameterEvent* parameterEvents, std::uint32_t parameterEventCount,
+    const NoteEvent* noteEvents, std::uint32_t noteEventCount)
+{
+    static_assert(sizeof(ParameterEvent) == sizeof(NylonClapParameterEvent));
+    static_assert(alignof(ParameterEvent) == alignof(NylonClapParameterEvent));
+    static_assert(sizeof(NoteEvent) == sizeof(NylonClapNoteEvent));
+    static_assert(alignof(NoteEvent) == alignof(NylonClapNoteEvent));
+    return nylon_clap_bridge_process_stereo(m_handle, inputLeft, inputRight,
+               outputLeft, outputRight, frames,
+               reinterpret_cast<const NylonClapParameterEvent*>(parameterEvents),
+               parameterEventCount,
+               reinterpret_cast<const NylonClapNoteEvent*>(noteEvents), noteEventCount)
+        != 0;
+}
+std::uint32_t ClapBridge::latency() const { return nylon_clap_bridge_latency(m_handle); }
+bool ClapBridge::isRunning() const { return nylon_clap_bridge_is_running(m_handle) != 0; }
+std::uint64_t ClapBridge::submittedBlocks() const
+{
+    return nylon_clap_bridge_submitted_blocks(m_handle);
+}
+std::uint64_t ClapBridge::completedBlocks() const
+{
+    return nylon_clap_bridge_completed_blocks(m_handle);
+}
+std::uint64_t ClapBridge::underruns() const
+{
+    return nylon_clap_bridge_underruns(m_handle);
+}
+std::uint64_t ClapBridge::queueDrops() const
+{
+    return nylon_clap_bridge_queue_drops(m_handle);
+}
+std::uint64_t ClapBridge::workerFailures() const
+{
+    return nylon_clap_bridge_worker_failures(m_handle);
+}
+
 CompiledRouting::CompiledRouting() = default;
 CompiledRouting::CompiledRouting(void* handle)
     : m_handle(handle)

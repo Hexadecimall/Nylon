@@ -278,6 +278,42 @@ private:
     void* m_handle{};
 };
 
+class ClapBridge {
+public:
+    using ParameterEvent = ClapInstance::ParameterEvent;
+    using NoteEvent = ClapInstance::NoteEvent;
+
+    ClapBridge() = default;
+    ~ClapBridge();
+    ClapBridge(const ClapBridge&) = delete;
+    ClapBridge& operator=(const ClapBridge&) = delete;
+    ClapBridge(ClapBridge&& other) noexcept;
+    ClapBridge& operator=(ClapBridge&& other) noexcept;
+
+    static ClapBridge open(const std::string& executable, const std::string& path,
+        const std::string& identifier, double sampleRate, std::uint32_t frames,
+        std::uint32_t queueDepth);
+    explicit operator bool() const { return m_handle != nullptr; }
+    bool processStereo(const float* inputLeft, const float* inputRight,
+        float* outputLeft, float* outputRight, std::uint32_t frames,
+        const ParameterEvent* parameterEvents, std::uint32_t parameterEventCount,
+        const NoteEvent* noteEvents, std::uint32_t noteEventCount);
+    std::uint32_t latency() const;
+    bool isRunning() const;
+    std::uint64_t submittedBlocks() const;
+    std::uint64_t completedBlocks() const;
+    std::uint64_t underruns() const;
+    std::uint64_t queueDrops() const;
+    std::uint64_t workerFailures() const;
+
+private:
+    explicit ClapBridge(void* handle)
+        : m_handle(handle)
+    {
+    }
+    void* m_handle{};
+};
+
 class CompiledRouting {
 public:
     CompiledRouting();

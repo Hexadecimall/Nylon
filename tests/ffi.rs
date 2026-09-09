@@ -173,6 +173,40 @@ fn null_handles_are_rejected() {
             0
         );
         nylon_clap_worker_free(std::ptr::null_mut());
+        assert!(
+            nylon_clap_bridge_open(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                48_000.0,
+                256,
+                3,
+            )
+            .is_null()
+        );
+        assert_eq!(
+            nylon_clap_bridge_process_stereo(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            ),
+            0
+        );
+        assert_eq!(nylon_clap_bridge_latency(std::ptr::null()), 0);
+        assert_eq!(nylon_clap_bridge_is_running(std::ptr::null()), 0);
+        assert_eq!(nylon_clap_bridge_submitted_blocks(std::ptr::null()), 0);
+        assert_eq!(nylon_clap_bridge_completed_blocks(std::ptr::null()), 0);
+        assert_eq!(nylon_clap_bridge_underruns(std::ptr::null()), 0);
+        assert_eq!(nylon_clap_bridge_queue_drops(std::ptr::null()), 0);
+        assert_eq!(nylon_clap_bridge_worker_failures(std::ptr::null()), 0);
+        nylon_clap_bridge_free(std::ptr::null_mut());
         let mut device = NylonTrackDevice::default();
         assert_eq!(nylon_track_device_count(std::ptr::null(), 0), 0);
         assert_eq!(

@@ -219,8 +219,13 @@ so instruments with no audio input receive events and produce stereo output.
 The core worker client starts and owns the process, validates bounded handshake
 metadata, reuses request and response buffers, and rejects malformed event
 ranges before sending a block. It performs blocking pipe I/O and therefore runs
-on a dedicated IPC thread. State save and load commands transfer opaque plugin
-state with a 256 MiB limit. State I/O never enters an audio callback.
+on a dedicated IPC thread. A bounded bridge adds one block of declared latency
+between that thread and the render callback. Every audio and event buffer is
+allocated when the bridge opens. The callback uses wait-free queues and returns
+a delayed dry block when the worker misses its deadline. Submitted, completed,
+underrun, queue-drop, and worker-failure counters expose its health. State save
+and load commands transfer opaque plugin state with a 256 MiB limit. State I/O
+never enters an audio callback.
 
 ## Benchmarks
 
@@ -229,6 +234,8 @@ The reverb benchmark measures one active stereo instance over the same block.
 The auto-filter benchmark measures a driven stereo instance with envelope and
 low-frequency modulation active.
 The phaser benchmark measures a six-stage stereo instance with feedback.
+The plugin bridge benchmark measures callback-side block submission and delayed
+response collection without including plugin process time.
 The mixer benchmark measures a 32-track block with automation. The audio timeline
 benchmark measures the complete callback for 32 tracks and 64 looping regions.
 Both arrangement benchmarks report their share of the block's real-time budget.
