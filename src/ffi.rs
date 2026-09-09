@@ -3078,6 +3078,45 @@ pub extern "C" fn nylon_audio_new() -> *mut AudioRuntime {
     Box::into_raw(Box::new(AudioRuntime::new()))
 }
 
+/// Configures the worker and search roots used to open project plugins.
+///
+/// # Safety
+/// The audio handle must be live and exclusive. Every supplied pointer must
+/// address a readable terminated UTF-8 string for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_configure_plugin_host(
+    audio: *mut AudioRuntime,
+    worker: *const c_char,
+    roots: *const *const c_char,
+    root_count: u64,
+) -> i32 {
+    // SAFETY: The caller grants exclusive access to the live audio handle.
+    let Some(audio) = (unsafe { audio.as_mut() }) else {
+        return 0;
+    };
+    // SAFETY: The caller supplies a readable terminated worker path.
+    let Some(worker) = (unsafe { input_text(worker) }) else {
+        return 0;
+    };
+    let Ok(count) = usize::try_from(root_count) else {
+        return 0;
+    };
+    if count == 0 || count > MAX_DEVICES || roots.is_null() {
+        return 0;
+    }
+    // SAFETY: The caller supplies `count` readable pointers.
+    let roots = unsafe { std::slice::from_raw_parts(roots, count) };
+    let mut paths = Vec::with_capacity(count);
+    for root in roots {
+        // SAFETY: Each pointer follows the interface contract above.
+        let Some(root) = (unsafe { input_text(*root) }) else {
+            return 0;
+        };
+        paths.push(std::path::PathBuf::from(root));
+    }
+    i32::from(audio.configure_plugin_host(worker, paths))
+}
+
 /// # Safety
 /// A non-null handle must originate from `nylon_audio_new`, remain live,
 /// and be released exactly once with no outstanding references.

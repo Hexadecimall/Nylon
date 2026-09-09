@@ -3,6 +3,7 @@
 #include <cmath>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <thread>
 #include <vector>
 
@@ -13,6 +14,10 @@ bool close(float left, float right) { return std::fabs(left - right) < 0.000001F
 int main(int argc, char** argv)
 {
     if (argc != 4) return 1;
+    nylon::AudioEngine audio;
+    if (!audio.configurePluginHost(
+            argv[1], {std::filesystem::path(argv[2]).parent_path().string()}))
+        return 2;
     auto worker = nylon::ClapWorker::open(argv[1], argv[2],
         "app.nylon.fixture", 48'000.0, 64);
     if (!worker) return 2;

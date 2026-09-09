@@ -111,6 +111,34 @@ fn submitting_a_plugin_block_performs_no_allocator_operations() {
 }
 
 #[test]
+fn processing_a_mixed_device_rack_performs_no_allocator_operations() {
+    use nylon::engine::device::{DeviceConfig, DeviceKind};
+    use nylon::engine::rack::DeviceRack;
+
+    let bridge = Bridge::new(BridgePass, BLOCK, 2, 0).unwrap();
+    let mut rack = DeviceRack::new(BLOCK).unwrap();
+    rack.push_native(
+        &[DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Utility {
+                gain_db: -3.0,
+                width: 1.0,
+                balance: 0.0,
+            },
+        }],
+        RATE,
+    )
+    .unwrap();
+    rack.push_plugin(bridge).unwrap();
+    let input = vec![[0.25_f32, -0.25_f32]; BLOCK];
+    let sidechain = vec![[0.1_f32, 0.1_f32]; BLOCK];
+    let mut output = vec![[0.0_f32; 2]; BLOCK];
+
+    let operations = measure(|| rack.process(&input, &sidechain, &mut output).unwrap());
+    assert_eq!(operations, 0, "{operations} allocator operations");
+}
+
+#[test]
 fn filtering_a_block_performs_no_allocator_operations() {
     let mut filter = AutoFilter::new(RATE, AutoFilterParameters::default());
     let mut audio = vec![[0.25_f32, -0.1_f32]; BLOCK];

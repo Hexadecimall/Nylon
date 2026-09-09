@@ -241,6 +241,11 @@ Each plugin record contains its format, portable package name, stable identifier
 reported latency, enabled state, and opaque state bytes. Plugin state uses shared
 immutable storage so command snapshots do not copy the payload. Device moves,
 bypass changes, state replacement, undo, and persistence preserve mixed chains.
+Live CLAP audio effects run in that same order through preallocated node racks.
+The graph uses each opened rack's actual native and bridge latency for
+compensation. Short callback blocks are zero-padded for the fixed worker block
+without changing callback storage. Enabled plugins require an explicit worker
+and search roots; resolution refuses duplicate package filenames.
 
 ## Benchmarks
 

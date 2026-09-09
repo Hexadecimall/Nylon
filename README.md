@@ -45,6 +45,7 @@ Start a headless live engine, then control it from another terminal:
 
 ```sh
 nylon-control --project Session.nylon --endpoint nylon-live serve
+nylon-control --project Session.nylon --endpoint nylon-live --plugin-worker nylon-plugin-worker --plugin-root PluginDirectory serve
 nylon-control --endpoint nylon-live status
 nylon-control --endpoint nylon-live play
 nylon-control --endpoint nylon-live locate 16

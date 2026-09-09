@@ -73,7 +73,9 @@ saved bundle. `Project::recoveryAvailable`, `Project::recover`, and
 replaces the primary document and removes the sidecar.
 `nylon::AudioEngine` owns the platform
 stream and provides device enumeration, transport control, synchronization,
-configuration, dropout, and meter access. Consumers include the directory with
+configuration, dropout, and meter access. `configurePluginHost` supplies the
+isolated worker executable and plugin search roots before a stream is opened.
+Consumers include the directory with
 `add_subdirectory(bindings/cpp)` and link the `nyloncpp` target, which
 carries the core library and the C header directory.
 `nylon::Recording` is a move-only input handle. It reserves media in a saved
@@ -144,6 +146,7 @@ nylon-control --project Session.nylon recover
 nylon-control devices
 nylon-control input-devices
 nylon-control --plugin-worker nylon-plugin-worker plugin-info Effect.clap app.nylon.effect 48000 512
+nylon-control --project Session.nylon --endpoint nylon-live --plugin-worker nylon-plugin-worker --plugin-root PluginDirectory serve
 ```
 
 Every reply is one JSON object. Direct edit commands save the bundle only
@@ -151,6 +154,10 @@ after the core accepts the change. Recording duration is in seconds. Its
 optional device, sample rate, and block size fields default to the system
 input, project rate, and 256 frames.
 Device-chain commands also accept `--endpoint` and edit the running engine.
+Live CLAP playback resolves each portable package name beneath the configured
+search roots, restores its saved state, and runs it in an ordered mixed-device
+rack. A missing, duplicate, unsupported, or unresponsive plugin rejects stream
+startup instead of silently changing the mix.
 
 ## Rust
 

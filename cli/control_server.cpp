@@ -119,6 +119,19 @@ public:
             return false;
         }
         if (!options.audioEnabled) return true;
+        if (!options.pluginWorker.isEmpty() || !options.pluginRoots.isEmpty()) {
+            if (options.pluginWorker.isEmpty() || options.pluginRoots.isEmpty()) {
+                message = "Plugin worker and search root must be specified together";
+                return false;
+            }
+            std::vector<std::string> roots;
+            roots.reserve(static_cast<std::size_t>(options.pluginRoots.size()));
+            for (const auto& root : options.pluginRoots) roots.push_back(root.toStdString());
+            if (!m_audio.configurePluginHost(options.pluginWorker.toStdString(), roots)) {
+                message = "Plugin host configuration was rejected";
+                return false;
+            }
+        }
         std::uint64_t device = options.device;
         if (options.useDefaultDevice && !nylon::AudioEngine::defaultOutput(device)) {
             message = "No default output device is available";

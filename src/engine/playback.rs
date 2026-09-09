@@ -14,8 +14,9 @@ use crate::audio::{BlockTiming, Renderer, StreamConfig};
 use crate::engine::automation::{
     EMPTY_EVENT as EMPTY_AUTOMATION_EVENT, Timeline as AutomationTimeline,
 };
-use crate::engine::device::{DeviceChain, DeviceConfig, DeviceError, MAX_DELAY_STORAGE_FRAMES};
+use crate::engine::device::{DeviceConfig, DeviceError, MAX_DELAY_STORAGE_FRAMES};
 use crate::engine::graph::{GraphRenderError, GraphRenderer, NodeInput};
+use crate::engine::rack::{DeviceRack, RackError};
 use crate::engine::schedule::{
     MAX_NOTE_EVENTS, NoteAction, NoteEvent, ScheduledNote, Span, schedule_block,
     schedule_looped_block, sort_notes,
@@ -518,7 +519,7 @@ impl Publisher {
             renderer: GraphRenderer::new(compiled, MAX_FRAMES)
                 .map_err(RoutingPublishError::Graph)?,
             output_node,
-            devices: empty_device_chains(compiled.node_count(), self.sample_rate)
+            devices: empty_device_racks(compiled.node_count(), self.sample_rate)
                 .map_err(RoutingPublishError::Device)?,
         };
         Ok(self.routing.publish(Some(Box::new(routing))).is_ok())
@@ -541,17 +542,47 @@ impl Publisher {
             .map_err(|_| RoutingPublishError::Device(DeviceError::StorageCapacity))?;
         let mut delay_storage = 0_usize;
         for node in 0..compiled.node_count() {
-            let chain = DeviceChain::new(
+            let rack = DeviceRack::native(
                 node_devices.get(node).copied().unwrap_or(&[]),
                 self.sample_rate,
+                MAX_FRAMES,
             )
-            .map_err(RoutingPublishError::Device)?;
+            .map_err(|error| RoutingPublishError::Device(device_error(error)))?;
             delay_storage = delay_storage
-                .checked_add(chain.delay_storage_frames())
+                .checked_add(rack.delay_storage_frames())
                 .filter(|frames| *frames <= MAX_DELAY_STORAGE_FRAMES)
                 .ok_or(RoutingPublishError::Device(DeviceError::StorageCapacity))?;
-            devices.push(chain);
+            devices.push(rack);
         }
+        let routing = PublishedRouting {
+            renderer: GraphRenderer::new(compiled, MAX_FRAMES)
+                .map_err(RoutingPublishError::Graph)?,
+            output_node,
+            devices,
+        };
+        Ok(self.routing.publish(Some(Box::new(routing))).is_ok())
+    }
+
+    /// Transfers a routing revision with already prepared mixed-device racks.
+    pub fn publish_prepared_routing(
+        &mut self,
+        compiled: &CompiledRouting,
+        output_node: u16,
+        devices: Vec<DeviceRack>,
+    ) -> Result<bool, RoutingPublishError> {
+        if compiled.output_latency(output_node).is_none() {
+            return Err(RoutingPublishError::Graph(GraphRenderError::InvalidNode));
+        }
+        if devices.len() != compiled.node_count() {
+            return Err(RoutingPublishError::Device(DeviceError::Capacity));
+        }
+        let delay_storage = devices.iter().try_fold(0_usize, |total, rack| {
+            total.checked_add(rack.delay_storage_frames())
+        });
+        if delay_storage.is_none_or(|frames| frames > MAX_DELAY_STORAGE_FRAMES) {
+            return Err(RoutingPublishError::Device(DeviceError::StorageCapacity));
+        }
+        while self.routing.reclaim().is_some() {}
         let routing = PublishedRouting {
             renderer: GraphRenderer::new(compiled, MAX_FRAMES)
                 .map_err(RoutingPublishError::Graph)?,
@@ -570,18 +601,27 @@ impl Publisher {
 struct PublishedRouting {
     renderer: GraphRenderer,
     output_node: u16,
-    devices: Vec<DeviceChain>,
+    devices: Vec<DeviceRack>,
 }
 
-fn empty_device_chains(count: usize, sample_rate: f32) -> Result<Vec<DeviceChain>, DeviceError> {
+fn empty_device_racks(count: usize, sample_rate: f32) -> Result<Vec<DeviceRack>, DeviceError> {
     let mut chains = Vec::new();
     chains
         .try_reserve_exact(count)
         .map_err(|_| DeviceError::StorageCapacity)?;
     for _ in 0..count {
-        chains.push(DeviceChain::new(&[], sample_rate)?);
+        chains.push(DeviceRack::native(&[], sample_rate, MAX_FRAMES).map_err(device_error)?);
     }
     Ok(chains)
+}
+
+fn device_error(error: RackError) -> DeviceError {
+    match error {
+        RackError::Capacity => DeviceError::Capacity,
+        RackError::BufferSize => DeviceError::BufferSize,
+        RackError::Device(error) => error,
+        RackError::StorageCapacity => DeviceError::StorageCapacity,
+    }
 }
 
 /// Builds the per-track buffers directly on the heap.
@@ -1059,10 +1099,35 @@ mod tests {
     use crate::engine::automation::{
         Lane as AutomationLane, Point as AutomationPoint, Timeline as AutomationTimeline,
     };
+    use crate::engine::rack::DeviceRack;
     use crate::mixer::AutomationCurve;
     use crate::mixer::Parameter;
+    use crate::plugin::bridge::{BlockProcessor, Bridge};
+    use crate::plugin::clap::{NoteEvent as PluginNoteEvent, ParameterEvent};
 
     const RATE: f64 = 48_000.0;
+
+    struct PluginGain(f32);
+
+    impl BlockProcessor for PluginGain {
+        fn process_block(
+            &mut self,
+            input: Option<(&[f32], &[f32])>,
+            output_left: &mut [f32],
+            output_right: &mut [f32],
+            _: &[ParameterEvent],
+            _: &[PluginNoteEvent],
+        ) -> bool {
+            let Some((left, right)) = input else {
+                return false;
+            };
+            for index in 0..left.len() {
+                output_left[index] = left[index] * self.0;
+                output_right[index] = right[index] * self.0;
+            }
+            true
+        }
+    }
 
     /// The most an engine may take on the stack when it is moved. A test
     /// thread gets two mebibytes, and a build without optimisation copies a
@@ -1377,6 +1442,71 @@ mod tests {
         for (routed_frame, direct_frame) in routed_output.iter().zip(direct_output) {
             assert!((routed_frame[0] - direct_frame[0]).abs() < 1e-6);
             assert!((routed_frame[1] - direct_frame[1]).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn a_prepared_plugin_rack_processes_inside_the_live_graph() {
+        use crate::engine::sample::Sample;
+        use crate::engine::timeline::{AudioRegion, AudioTimeline};
+        use crate::routing::{Edge, EdgeKind, RoutingGraph};
+
+        let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
+        assert!(publisher.publish(&playing_settings(1)));
+        let mut timeline = AudioTimeline::new();
+        let media = timeline
+            .add_sample(Sample::new(48_000, vec![[0.2, -0.2]; 256]).unwrap())
+            .unwrap();
+        let mut region = AudioRegion::new(media, 0, 0.0, 100.0, 0.0, 512.0).unwrap();
+        assert!(region.set_loop(Some(0..256)));
+        timeline.add_region(region).unwrap();
+        assert!(publisher.publish_audio(timeline));
+
+        let utility = DeviceConfig {
+            enabled: true,
+            kind: crate::engine::device::DeviceKind::Utility {
+                gain_db: -6.020_6,
+                width: 1.0,
+                balance: 0.0,
+            },
+        };
+        let mut track_rack = DeviceRack::new(64).unwrap();
+        track_rack.push_native(&[utility], RATE as f32).unwrap();
+        track_rack
+            .push_plugin(Bridge::new(PluginGain(2.0), 64, 2, 0).unwrap())
+            .unwrap();
+        track_rack.push_native(&[utility], RATE as f32).unwrap();
+        let master_rack = DeviceRack::new(64).unwrap();
+        let mut graph = RoutingGraph::new(2).unwrap();
+        graph
+            .add_edge(Edge {
+                source: 0,
+                destination: 1,
+                kind: EdgeKind::Main,
+                gain: 1.0,
+            })
+            .unwrap();
+        assert!(
+            publisher
+                .publish_prepared_routing(
+                    &graph.compile().unwrap(),
+                    1,
+                    vec![track_rack, master_rack],
+                )
+                .unwrap()
+        );
+
+        let mut output = [[0.0_f32; 2]; 64];
+        for _ in 0..10_000 {
+            engine.render_block(&mut output, &[]);
+            if (output[0][0] - 0.1).abs() < 1e-4 {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        for frame in output {
+            assert!((frame[0] - 0.1).abs() < 1e-4, "{frame:?}");
+            assert!((frame[1] + 0.1).abs() < 1e-4, "{frame:?}");
         }
     }
 

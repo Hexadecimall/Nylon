@@ -524,6 +524,8 @@ public:
     static bool defaultOutput(std::uint64_t& deviceId);
     static bool defaultInput(std::uint64_t& deviceId);
 
+    bool configurePluginHost(
+        const std::string& worker, const std::vector<std::string>& roots);
     bool open(const Project& project, std::uint64_t deviceId, std::uint32_t sampleRate,
         std::uint32_t blockFrames);
     bool close();

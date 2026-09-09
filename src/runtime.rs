@@ -15,13 +15,18 @@ use crate::engine::device::DeviceConfig;
 use crate::engine::playback::{
     MixSettings, PlaybackEngine, PlaybackState, Publisher, Score, TrackSettings,
 };
+use crate::engine::rack::DeviceRack;
 use crate::engine::schedule::ScheduledNote;
 #[cfg(platform_audio)]
 use crate::media::{ImportReport, MediaError, PendingRecording, prepare_recording};
 use crate::media::{SessionAudioRegion, timeline_from_project, timeline_from_project_with_session};
 use crate::mixer::{AutomationCurve as PlaybackAutomationCurve, MAX_TRACKS, Parameter};
+use crate::plugin::bridge::Bridge;
+use crate::plugin::worker::Client as PluginClient;
+use crate::plugin::{Catalog as PluginCatalog, Format as PluginFormat, State as PluginState};
 use crate::project::{AutomationCurve, AutomationParameter, Project, Snapshot, TrackKind};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "linux")]
 use crate::audio::alsa::{AlsaBackend, AlsaCapture, AlsaStream};
@@ -226,6 +231,8 @@ pub struct AudioRuntime {
     dirty_settings: bool,
     dirty_score: bool,
     sessions: [Option<SessionSelection>; MAX_TRACKS],
+    plugin_worker: Option<PathBuf>,
+    plugin_roots: Vec<PathBuf>,
 }
 
 impl Default for AudioRuntime {
@@ -248,7 +255,27 @@ impl AudioRuntime {
             dirty_settings: false,
             dirty_score: false,
             sessions: [None; MAX_TRACKS],
+            plugin_worker: None,
+            plugin_roots: Vec::new(),
         }
+    }
+
+    /// Configures isolated plugin processing for later stream opens.
+    pub fn configure_plugin_host(
+        &mut self,
+        worker: impl Into<PathBuf>,
+        roots: Vec<PathBuf>,
+    ) -> bool {
+        if self.is_open() || roots.is_empty() || roots.len() > MAX_DEVICES {
+            return false;
+        }
+        let worker = worker.into();
+        if worker.as_os_str().is_empty() || roots.iter().any(|root| root.as_os_str().is_empty()) {
+            return false;
+        }
+        self.plugin_worker = Some(worker);
+        self.plugin_roots = roots;
+        true
     }
 
     /// Opens and starts a platform output stream. The musical transport
@@ -277,11 +304,22 @@ impl AudioRuntime {
         let snapshot = project.snapshot();
         let timeline = timeline_from_project(project)
             .map_err(|_| AudioError::Host("project media could not be loaded"))?;
-        let (routing, output_node) = playback_routing(&snapshot, sample_rate as f32)
-            .map_err(|_| AudioError::Host("project routing could not be compiled"))?;
-        let devices = playback_devices(&snapshot);
+        let devices = playback_racks(
+            &snapshot,
+            sample_rate as f32,
+            block_frames,
+            self.plugin_worker.as_deref(),
+            &self.plugin_roots,
+        )?;
+        let device_latencies: Vec<u32> = devices
+            .iter()
+            .take(snapshot.tracks().len())
+            .map(DeviceRack::latency_frames)
+            .collect();
+        let (routing, output_node) =
+            playback_routing_with_device_latencies(&snapshot, &device_latencies)
+                .map_err(|_| AudioError::Host("project routing could not be compiled"))?;
         let automation = automation_from_snapshot(&snapshot);
-        let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
         let (engine, mut publisher) = PlaybackEngine::new(f64::from(sample_rate));
         let playing = false;
         (self.settings, self.score) = state_from_snapshot(&snapshot, playing);
@@ -290,7 +328,7 @@ impl AudioRuntime {
             || !publisher.publish_audio(timeline)
             || !publisher.publish_automation(automation)
             || !publisher
-                .publish_routing_with_devices(&routing, output_node, &device_slices)
+                .publish_prepared_routing(&routing, output_node, devices)
                 .map_err(|_| AudioError::Host("project routing could not be prepared"))?
         {
             return Err(AudioError::Host("initial state could not be published"));
@@ -420,12 +458,29 @@ impl AudioRuntime {
         let sample_rate = self
             .config()
             .map_or(snapshot.sample_rate(), |config| config.sample_rate);
-        let Ok((routing, output_node)) = playback_routing(&snapshot, sample_rate as f32) else {
+        let Some(block_frames) = self.config().map(|config| config.block_frames) else {
             return false;
         };
-        let devices = playback_devices(&snapshot);
+        let Ok(devices) = playback_racks(
+            &snapshot,
+            sample_rate as f32,
+            block_frames,
+            self.plugin_worker.as_deref(),
+            &self.plugin_roots,
+        ) else {
+            return false;
+        };
+        let device_latencies: Vec<u32> = devices
+            .iter()
+            .take(snapshot.tracks().len())
+            .map(DeviceRack::latency_frames)
+            .collect();
+        let Ok((routing, output_node)) =
+            playback_routing_with_device_latencies(&snapshot, &device_latencies)
+        else {
+            return false;
+        };
         let automation = automation_from_snapshot(&snapshot);
-        let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
         let playing = self.settings.is_playing();
         (self.settings, self.score) =
             state_from_snapshot_with_session(&snapshot, playing, &self.sessions);
@@ -442,7 +497,7 @@ impl AudioRuntime {
             .is_some_and(|publisher| publisher.publish_automation(automation));
         let routing_sent = self.publisher.as_mut().is_some_and(|publisher| {
             publisher
-                .publish_routing_with_devices(&routing, output_node, &device_slices)
+                .publish_prepared_routing(&routing, output_node, devices)
                 .unwrap_or(false)
         });
         state_sent && audio_sent && automation_sent && routing_sent
@@ -660,23 +715,39 @@ pub(crate) fn playback_routing(
     snapshot: &Snapshot,
     sample_rate: f32,
 ) -> Result<(CompiledRouting, u16), RoutingError> {
+    let device_latencies = snapshot
+        .tracks()
+        .iter()
+        .map(|track| {
+            track.devices().iter().try_fold(0_u32, |total, device| {
+                total
+                    .checked_add(
+                        device
+                            .latency_frames(sample_rate)
+                            .map_err(|_| RoutingError::LatencyOverflow)?,
+                    )
+                    .ok_or(RoutingError::LatencyOverflow)
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    playback_routing_with_device_latencies(snapshot, &device_latencies)
+}
+
+fn playback_routing_with_device_latencies(
+    snapshot: &Snapshot,
+    device_latencies: &[u32],
+) -> Result<(CompiledRouting, u16), RoutingError> {
     let track_count = snapshot.tracks().len();
+    if device_latencies.len() != track_count {
+        return Err(RoutingError::InvalidNode);
+    }
     let output_node = u16::try_from(track_count).map_err(|_| RoutingError::NodeCapacity)?;
     let mut graph = RoutingGraph::new(track_count + 1)?;
     for (index, track) in snapshot.tracks().iter().enumerate() {
-        let latency =
-            track
-                .devices()
-                .iter()
-                .try_fold(track.latency_frames(), |total, device| {
-                    total
-                        .checked_add(
-                            device
-                                .latency_frames(sample_rate)
-                                .map_err(|_| RoutingError::LatencyOverflow)?,
-                        )
-                        .ok_or(RoutingError::LatencyOverflow)
-                })?;
+        let latency = track
+            .latency_frames()
+            .checked_add(device_latencies[index])
+            .ok_or(RoutingError::LatencyOverflow)?;
         graph.set_node_latency(index as u16, latency)?;
     }
     for route in snapshot.routes() {
@@ -712,6 +783,93 @@ pub(crate) fn playback_routing(
         }
     }
     Ok((graph.compile()?, output_node))
+}
+
+fn playback_racks(
+    snapshot: &Snapshot,
+    sample_rate: f32,
+    block_frames: usize,
+    worker: Option<&Path>,
+    roots: &[PathBuf],
+) -> Result<Vec<DeviceRack>, AudioError> {
+    let has_plugins = snapshot.tracks().iter().any(|track| {
+        track
+            .devices()
+            .iter()
+            .any(|device| device.enabled() && device.plugin().is_some())
+    });
+    let catalog = has_plugins.then(|| PluginCatalog::scan(roots));
+    let mut racks = Vec::with_capacity(snapshot.tracks().len() + 1);
+    for track in snapshot.tracks() {
+        let mut rack = DeviceRack::new(block_frames)
+            .map_err(|_| AudioError::Host("device rack could not be prepared"))?;
+        let mut native = Vec::new();
+        for device in track.devices() {
+            if let Some(config) = device.native_config() {
+                native.push(config);
+                continue;
+            }
+            if !native.is_empty() {
+                rack.push_native(&native, sample_rate)
+                    .map_err(|_| AudioError::Host("native device could not be prepared"))?;
+                native.clear();
+            }
+            if !device.enabled() {
+                continue;
+            }
+            let plugin = device
+                .plugin()
+                .ok_or(AudioError::Host("plugin device is invalid"))?;
+            if plugin.format() != PluginFormat::Clap {
+                return Err(AudioError::Host(
+                    "plugin format is not available for playback",
+                ));
+            }
+            let worker = worker.ok_or(AudioError::Host("plugin worker is not configured"))?;
+            let catalog = catalog
+                .as_ref()
+                .ok_or(AudioError::Host("plugin catalog is not available"))?;
+            let mut matches = catalog.entries().iter().filter(|entry| {
+                entry.state() == PluginState::Discovered
+                    && entry.format() == plugin.format()
+                    && entry.path().file_name().and_then(|name| name.to_str())
+                        == Some(plugin.package())
+            });
+            let package = matches
+                .next()
+                .ok_or(AudioError::Host("plugin package could not be resolved"))?;
+            if matches.next().is_some() {
+                return Err(AudioError::Host("plugin package name is ambiguous"));
+            }
+            let mut client = PluginClient::spawn(
+                worker,
+                package.path(),
+                plugin.identifier(),
+                f64::from(sample_rate),
+                block_frames,
+            )
+            .map_err(|_| AudioError::Host("plugin worker could not be opened"))?;
+            if !plugin.state().is_empty() {
+                client
+                    .load_state(plugin.state())
+                    .map_err(|_| AudioError::Host("plugin state could not be restored"))?;
+            }
+            let bridge = Bridge::from_client(client, block_frames, 3)
+                .map_err(|_| AudioError::Host("plugin bridge could not be prepared"))?;
+            rack.push_plugin(bridge)
+                .map_err(|_| AudioError::Host("plugin rack could not be prepared"))?;
+        }
+        if !native.is_empty() {
+            rack.push_native(&native, sample_rate)
+                .map_err(|_| AudioError::Host("native device could not be prepared"))?;
+        }
+        racks.push(rack);
+    }
+    racks.push(
+        DeviceRack::new(block_frames)
+            .map_err(|_| AudioError::Host("master rack could not be prepared"))?,
+    );
+    Ok(racks)
 }
 
 pub(crate) fn playback_devices(snapshot: &Snapshot) -> Vec<Vec<DeviceConfig>> {
@@ -995,7 +1153,7 @@ mod tests {
     use crate::dsp::limiter::Parameters as LimiterParameters;
     use crate::engine::device::{DeviceConfig, DeviceKind};
     use crate::engine::voice::Patch;
-    use crate::project::{AutomationPoint, Command, MidiNote};
+    use crate::project::{AutomationPoint, Command, MidiNote, PluginDevice};
 
     fn midi_project() -> Project {
         let mut project = Project::new();
@@ -1146,6 +1304,64 @@ mod tests {
                 && compiled.edge_delay(index) == Some(240)
         }));
         assert_ne!(audio, keys);
+    }
+
+    #[test]
+    fn enabled_plugins_require_a_configured_worker() {
+        let mut project = Project::new();
+        project
+            .apply(&[Command::CreateTrack {
+                name: "Audio".into(),
+                kind: TrackKind::Audio,
+            }])
+            .unwrap();
+        let track = project.snapshot().tracks()[0].id();
+        let plugin = PluginDevice::new(
+            PluginFormat::Clap,
+            "Effect.clap",
+            "app.nylon.effect",
+            0,
+            Vec::new(),
+        )
+        .unwrap();
+        project
+            .apply(&[Command::AddPluginDevice {
+                track,
+                enabled: true,
+                plugin,
+            }])
+            .unwrap();
+        assert!(playback_racks(&project.snapshot(), 48_000.0, 256, None, &[]).is_err());
+    }
+
+    #[test]
+    fn bypassed_plugins_do_not_require_a_worker_or_add_latency() {
+        let mut project = Project::new();
+        project
+            .apply(&[Command::CreateTrack {
+                name: "Audio".into(),
+                kind: TrackKind::Audio,
+            }])
+            .unwrap();
+        let track = project.snapshot().tracks()[0].id();
+        let plugin = PluginDevice::new(
+            PluginFormat::Clap,
+            "Effect.clap",
+            "app.nylon.effect",
+            900,
+            Vec::new(),
+        )
+        .unwrap();
+        project
+            .apply(&[Command::AddPluginDevice {
+                track,
+                enabled: false,
+                plugin,
+            }])
+            .unwrap();
+        let racks = playback_racks(&project.snapshot(), 48_000.0, 256, None, &[]).unwrap();
+        assert!(racks[0].is_empty());
+        assert_eq!(racks[0].latency_frames(), 0);
     }
 
     #[test]

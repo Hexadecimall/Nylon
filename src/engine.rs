@@ -4,6 +4,7 @@ pub mod automation;
 pub mod device;
 pub mod graph;
 pub mod playback;
+pub mod rack;
 pub mod sample;
 pub mod schedule;
 pub mod timeline;

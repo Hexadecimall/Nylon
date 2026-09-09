@@ -1,6 +1,38 @@
 use nylon::ffi::*;
 
 #[test]
+fn native_audio_plugin_host_configuration_validates_inputs() {
+    let audio = nylon_audio_new();
+    let roots = [c"plugins".as_ptr(), c"more-plugins".as_ptr()];
+    // SAFETY: This thread owns the audio handle and every string is terminated.
+    unsafe {
+        assert_eq!(
+            nylon_audio_configure_plugin_host(
+                audio,
+                c"bin/nylon-plugin-worker".as_ptr(),
+                roots.as_ptr(),
+                roots.len() as u64,
+            ),
+            1
+        );
+        assert_eq!(
+            nylon_audio_configure_plugin_host(
+                audio,
+                c"bin/nylon-plugin-worker".as_ptr(),
+                std::ptr::null(),
+                0,
+            ),
+            0
+        );
+        assert_eq!(
+            nylon_audio_configure_plugin_host(audio, std::ptr::null(), roots.as_ptr(), 2),
+            0
+        );
+        nylon_audio_free(audio);
+    }
+}
+
+#[test]
 fn native_edit_cycle_uses_the_command_history() {
     let handle = nylon_project_new();
     assert!(!handle.is_null());

@@ -184,6 +184,11 @@ impl Bridge {
     }
 
     #[must_use]
+    pub const fn block_frames(&self) -> usize {
+        self.frames
+    }
+
+    #[must_use]
     pub fn submitted_blocks(&self) -> u64 {
         self.counters.submitted.load(Ordering::Relaxed)
     }

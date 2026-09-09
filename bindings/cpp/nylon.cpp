@@ -1077,6 +1077,18 @@ bool AudioEngine::defaultInput(std::uint64_t& deviceId)
     return true;
 }
 
+bool AudioEngine::configurePluginHost(
+    const std::string& worker, const std::vector<std::string>& roots)
+{
+    std::vector<const char*> nativeRoots;
+    nativeRoots.reserve(roots.size());
+    for (const auto& root : roots) nativeRoots.push_back(root.c_str());
+    return nylon_audio_configure_plugin_host(m_handle, worker.c_str(),
+               nativeRoots.empty() ? nullptr : nativeRoots.data(),
+               static_cast<unsigned long long>(nativeRoots.size()))
+        != 0;
+}
+
 bool AudioEngine::open(const Project& project, std::uint64_t deviceId,
     std::uint32_t sampleRate, std::uint32_t blockFrames)
 {

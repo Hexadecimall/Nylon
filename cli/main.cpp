@@ -1142,8 +1142,11 @@ int main(int argc, char** argv)
         "plugin-probe", "Plugin probe executable.", "path");
     const QCommandLineOption pluginWorker(
         "plugin-worker", "Plugin worker executable.", "path");
+    const QCommandLineOption pluginRoot(
+        "plugin-root", "Plugin search root for live playback. Repeat for more roots.", "directory");
     parser.addOptions(
-        {endpoint, project, noAudio, device, sampleRate, blockFrames, pluginProbe, pluginWorker});
+        {endpoint, project, noAudio, device, sampleRate, blockFrames, pluginProbe, pluginWorker,
+            pluginRoot});
     parser.addPositionalArgument("command", "Command to execute.");
     parser.addPositionalArgument("args", "Command arguments.", "[args...]");
     parser.setOptionsAfterPositionalArgumentsMode(
@@ -1166,6 +1169,8 @@ int main(int argc, char** argv)
             return fail("Invalid output sample rate");
         if (!unsignedNumber(parser.value(blockFrames), options.blockFrames))
             return fail("Invalid output block size");
+        options.pluginWorker = parser.value(pluginWorker);
+        options.pluginRoots = parser.values(pluginRoot);
         return runControlServer(app, options);
     }
     if (!parser.value(endpoint).isEmpty()) return remoteCommand(parser.value(endpoint), positional);

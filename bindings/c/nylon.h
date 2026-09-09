@@ -533,6 +533,8 @@ unsigned long long nylon_clap_bridge_worker_failures(const void* bridge);
  * meters and edits to continue crossing block boundaries. */
 void* nylon_audio_new(void);
 void nylon_audio_free(void* audio);
+int nylon_audio_configure_plugin_host(void* audio, const char* worker,
+    const char* const* roots, unsigned long long root_count);
 
 /* Returns the number of output devices found. Passing a null output pointer
  * queries the count. A non-null output receives up to capacity records. */
