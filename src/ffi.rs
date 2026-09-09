@@ -2692,6 +2692,90 @@ pub unsafe extern "C" fn nylon_audio_sync(
 }
 
 /// # Safety
+/// Both handles must be live, belong to the calling control thread, and
+/// the project must have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_session_launch_clip(
+    audio: *mut AudioRuntime,
+    project: *const Project,
+    track: u64,
+    scene: u64,
+    quantization_beats: f64,
+) -> i32 {
+    // SAFETY: The interface contract makes the audio handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract keeps the project live and immutable.
+    let project = unsafe { project.as_ref() };
+    let (Some(audio), Some(project), Ok(track), Ok(scene)) = (
+        audio,
+        project,
+        usize::try_from(track),
+        usize::try_from(scene),
+    ) else {
+        return 0;
+    };
+    i32::from(audio.launch_clip(project, track, scene, quantization_beats))
+}
+
+/// # Safety
+/// Both handles must be live, belong to the calling control thread, and
+/// the project must have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_session_launch_scene(
+    audio: *mut AudioRuntime,
+    project: *const Project,
+    scene: u64,
+    quantization_beats: f64,
+) -> i32 {
+    // SAFETY: The interface contract makes the audio handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract keeps the project live and immutable.
+    let project = unsafe { project.as_ref() };
+    let (Some(audio), Some(project), Ok(scene)) = (audio, project, usize::try_from(scene)) else {
+        return 0;
+    };
+    i32::from(audio.launch_scene(project, scene, quantization_beats))
+}
+
+/// # Safety
+/// Both handles must be live, belong to the calling control thread, and
+/// the project must have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_session_stop_track(
+    audio: *mut AudioRuntime,
+    project: *const Project,
+    track: u64,
+) -> i32 {
+    // SAFETY: The interface contract makes the audio handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract keeps the project live and immutable.
+    let project = unsafe { project.as_ref() };
+    let (Some(audio), Some(project), Ok(track)) = (audio, project, usize::try_from(track)) else {
+        return 0;
+    };
+    i32::from(audio.stop_session_track(project, track))
+}
+
+/// Returns minus one when the track has no launched Session clip.
+///
+/// # Safety
+/// The handle must be live with no concurrent access.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_session_active_scene(audio: *const AudioRuntime, track: u64) -> i64 {
+    // SAFETY: The interface contract keeps the handle live and immutable.
+    let Some(audio) = (unsafe { audio.as_ref() }) else {
+        return -1;
+    };
+    let Ok(track) = usize::try_from(track) else {
+        return -1;
+    };
+    audio
+        .active_session_scene(track)
+        .and_then(|scene| i64::try_from(scene).ok())
+        .unwrap_or(-1)
+}
+
+/// # Safety
 /// The handle must be live with no concurrent access.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nylon_audio_dropouts(audio: *const AudioRuntime) -> u64 {

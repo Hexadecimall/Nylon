@@ -593,6 +593,26 @@ bool AudioEngine::sync(const Project& project)
 }
 
 std::uint64_t AudioEngine::dropouts() const { return nylon_audio_dropouts(m_handle); }
+bool AudioEngine::launchClip(const Project& project, std::uint64_t track, std::uint64_t scene,
+    double quantizationBeats)
+{
+    return nylon_session_launch_clip(m_handle, project.raw(), track, scene, quantizationBeats)
+        != 0;
+}
+bool AudioEngine::launchScene(
+    const Project& project, std::uint64_t scene, double quantizationBeats)
+{
+    return nylon_session_launch_scene(m_handle, project.raw(), scene, quantizationBeats)
+        != 0;
+}
+bool AudioEngine::stopSessionTrack(const Project& project, std::uint64_t track)
+{
+    return nylon_session_stop_track(m_handle, project.raw(), track) != 0;
+}
+std::int64_t AudioEngine::activeSessionScene(std::uint64_t track) const
+{
+    return nylon_session_active_scene(m_handle, track);
+}
 bool AudioEngine::play() { return nylon_transport_play(m_handle) != 0; }
 bool AudioEngine::stop() { return nylon_transport_stop(m_handle) != 0; }
 bool AudioEngine::locate(double beats) { return nylon_transport_locate(m_handle, beats) != 0; }

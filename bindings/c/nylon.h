@@ -350,6 +350,16 @@ int nylon_audio_config(const void* audio, NylonAudioConfig* out);
 int nylon_audio_sync(void* audio, const void* project);
 unsigned long long nylon_audio_dropouts(const void* audio);
 
+/* Session launches replace Arrangement playback on affected tracks. A zero
+ * quantization starts at the earliest callback boundary. */
+int nylon_session_launch_clip(void* audio, const void* project,
+    unsigned long long track, unsigned long long scene, double quantization_beats);
+int nylon_session_launch_scene(void* audio, const void* project,
+    unsigned long long scene, double quantization_beats);
+int nylon_session_stop_track(
+    void* audio, const void* project, unsigned long long track);
+long long nylon_session_active_scene(const void* audio, unsigned long long track);
+
 int nylon_transport_play(void* audio);
 int nylon_transport_stop(void* audio);
 int nylon_transport_locate(void* audio, double beats);

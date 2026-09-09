@@ -16,10 +16,10 @@ use crate::engine::playback::{
     MixSettings, PlaybackEngine, PlaybackState, Publisher, Score, TrackSettings,
 };
 use crate::engine::schedule::ScheduledNote;
-use crate::media::timeline_from_project;
 #[cfg(platform_audio)]
 use crate::media::{ImportReport, MediaError, PendingRecording, prepare_recording};
-use crate::mixer::{AutomationCurve as PlaybackAutomationCurve, Parameter};
+use crate::media::{SessionAudioRegion, timeline_from_project, timeline_from_project_with_session};
+use crate::mixer::{AutomationCurve as PlaybackAutomationCurve, MAX_TRACKS, Parameter};
 use crate::project::{AutomationCurve, AutomationParameter, Project, Snapshot, TrackKind};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
 
@@ -210,6 +210,12 @@ fn start_platform_stream(
 }
 
 /// Live engine state owned by the control thread.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SessionSelection {
+    scene: usize,
+    launch_beats: f64,
+}
+
 pub struct AudioRuntime {
     settings: MixSettings,
     score: Box<Score>,
@@ -219,6 +225,7 @@ pub struct AudioRuntime {
     state: PlaybackState,
     dirty_settings: bool,
     dirty_score: bool,
+    sessions: [Option<SessionSelection>; MAX_TRACKS],
 }
 
 impl Default for AudioRuntime {
@@ -240,6 +247,7 @@ impl AudioRuntime {
             state: PlaybackState::default(),
             dirty_settings: false,
             dirty_score: false,
+            sessions: [None; MAX_TRACKS],
         }
     }
 
@@ -258,6 +266,7 @@ impl AudioRuntime {
         block_frames: usize,
     ) -> Result<StreamConfig, AudioError> {
         self.close();
+        self.sessions = [None; MAX_TRACKS];
         let config = StreamConfig {
             device,
             sample_rate,
@@ -319,6 +328,7 @@ impl AudioRuntime {
         self.state = PlaybackState::default();
         self.dirty_settings = false;
         self.dirty_score = false;
+        self.sessions = [None; MAX_TRACKS];
     }
 
     /// Whether a platform stream is open and producing callbacks.
@@ -381,10 +391,19 @@ impl AudioRuntime {
         if !self.is_open() {
             return false;
         }
-        let Ok(timeline) = timeline_from_project(project) else {
+        let snapshot = project.snapshot();
+        for (track, session) in self.sessions.iter_mut().enumerate() {
+            if session.is_some_and(|active| {
+                snapshot.clip_at(track, active.scene).is_none()
+                    && snapshot.audio_clip_at(track, active.scene).is_none()
+            }) {
+                *session = None;
+            }
+        }
+        let audio_sessions = session_audio_regions(&snapshot, &self.sessions);
+        let Ok(timeline) = timeline_from_project_with_session(project, &audio_sessions) else {
             return false;
         };
-        let snapshot = project.snapshot();
         let sample_rate = self
             .config()
             .map_or(snapshot.sample_rate(), |config| config.sample_rate);
@@ -395,7 +414,8 @@ impl AudioRuntime {
         let automation = automation_from_snapshot(&snapshot);
         let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
         let playing = self.settings.is_playing();
-        (self.settings, self.score) = state_from_snapshot(&snapshot, playing);
+        (self.settings, self.score) =
+            state_from_snapshot_with_session(&snapshot, playing, &self.sessions);
         self.dirty_settings = true;
         self.dirty_score = true;
         let state_sent = self.flush();
@@ -448,6 +468,91 @@ impl AudioRuntime {
         true
     }
 
+    /// Launches one Session clip at the next quantization boundary.
+    pub fn launch_clip(
+        &mut self,
+        project: &Project,
+        track: usize,
+        scene: usize,
+        quantization_beats: f64,
+    ) -> bool {
+        if !self.is_open()
+            || track >= MAX_TRACKS
+            || !quantization_beats.is_finite()
+            || quantization_beats < 0.0
+        {
+            return false;
+        }
+        let snapshot = project.snapshot();
+        if snapshot.clip_at(track, scene).is_none()
+            && snapshot.audio_clip_at(track, scene).is_none()
+        {
+            return false;
+        }
+        let launch_beats = self.next_launch_beat(quantization_beats);
+        let mut sessions = self.sessions;
+        sessions[track] = Some(SessionSelection {
+            scene,
+            launch_beats,
+        });
+        self.publish_session_state(project, &snapshot, sessions, true)
+    }
+
+    /// Launches every occupied slot in one scene as one quantized action.
+    pub fn launch_scene(
+        &mut self,
+        project: &Project,
+        scene: usize,
+        quantization_beats: f64,
+    ) -> bool {
+        if !self.is_open() || !quantization_beats.is_finite() || quantization_beats < 0.0 {
+            return false;
+        }
+        let snapshot = project.snapshot();
+        if scene >= snapshot.scenes().len() {
+            return false;
+        }
+        let launch_beats = self.next_launch_beat(quantization_beats);
+        let mut sessions = self.sessions;
+        let mut found = false;
+        for (track, session) in sessions
+            .iter_mut()
+            .enumerate()
+            .take(snapshot.tracks().len())
+        {
+            if snapshot.clip_at(track, scene).is_some()
+                || snapshot.audio_clip_at(track, scene).is_some()
+            {
+                *session = Some(SessionSelection {
+                    scene,
+                    launch_beats,
+                });
+                found = true;
+            }
+        }
+        found && self.publish_session_state(project, &snapshot, sessions, true)
+    }
+
+    /// Stops a launched clip and restores Arrangement playback on the track.
+    pub fn stop_session_track(&mut self, project: &Project, track: usize) -> bool {
+        if !self.is_open() || track >= MAX_TRACKS || self.sessions[track].is_none() {
+            return false;
+        }
+        let snapshot = project.snapshot();
+        let mut sessions = self.sessions;
+        sessions[track] = None;
+        let playing = self.settings.is_playing();
+        self.publish_session_state(project, &snapshot, sessions, playing)
+    }
+
+    /// Active scene index on one track.
+    #[must_use]
+    pub fn active_session_scene(&self, track: usize) -> Option<usize> {
+        self.sessions
+            .get(track)
+            .and_then(|session| session.map(|value| value.scene))
+    }
+
     /// Latest engine state. Polling also retries publications that arrived
     /// faster than the audio thread could accept them.
     pub fn state(&mut self) -> PlaybackState {
@@ -456,6 +561,50 @@ impl AudioRuntime {
         }
         let _ = self.flush();
         self.state
+    }
+
+    fn next_launch_beat(&mut self, quantization_beats: f64) -> f64 {
+        let position = self.state().position_beats.max(0.0);
+        if !self.settings.is_playing() {
+            return position;
+        }
+        let lead = self.config().map_or(0.0, |config| {
+            config.block_frames as f64 / f64::from(config.sample_rate) * self.settings.tempo()
+                / 60.0
+        });
+        let earliest = position + lead;
+        if quantization_beats == 0.0 {
+            earliest
+        } else {
+            (earliest / quantization_beats).ceil() * quantization_beats
+        }
+    }
+
+    fn publish_session_state(
+        &mut self,
+        project: &Project,
+        snapshot: &Snapshot,
+        sessions: [Option<SessionSelection>; MAX_TRACKS],
+        playing: bool,
+    ) -> bool {
+        let audio_sessions = session_audio_regions(snapshot, &sessions);
+        let Ok(timeline) = timeline_from_project_with_session(project, &audio_sessions) else {
+            return false;
+        };
+        let (settings, score) = state_from_snapshot_with_session(snapshot, playing, &sessions);
+        let audio_sent = self
+            .publisher
+            .as_mut()
+            .is_some_and(|publisher| publisher.publish_audio(timeline));
+        if !audio_sent {
+            return false;
+        }
+        self.sessions = sessions;
+        self.settings = settings;
+        self.score = score;
+        self.dirty_settings = true;
+        self.dirty_score = true;
+        self.flush()
     }
 
     fn flush(&mut self) -> bool {
@@ -706,6 +855,14 @@ pub fn default_input() -> Result<DeviceId, AudioError> {
 }
 
 pub(crate) fn state_from_snapshot(snapshot: &Snapshot, playing: bool) -> (MixSettings, Box<Score>) {
+    state_from_snapshot_with_session(snapshot, playing, &[None; MAX_TRACKS])
+}
+
+fn state_from_snapshot_with_session(
+    snapshot: &Snapshot,
+    playing: bool,
+    sessions: &[Option<SessionSelection>; MAX_TRACKS],
+) -> (MixSettings, Box<Score>) {
     let mut settings = MixSettings::new();
     settings.set_track_count(snapshot.tracks().len());
     settings.set_tempo(snapshot.tempo());
@@ -731,6 +888,24 @@ pub(crate) fn state_from_snapshot(snapshot: &Snapshot, playing: bool) -> (MixSet
             continue;
         };
         destination.set_enabled(true);
+        if let Some(session) = sessions[index] {
+            let Some(clip) = snapshot.clip_at(index, session.scene) else {
+                continue;
+            };
+            let notes: Vec<ScheduledNote> = clip
+                .notes()
+                .iter()
+                .map(|note| ScheduledNote {
+                    start_beats: note.start_beats,
+                    length_beats: note.length_beats,
+                    pitch: note.pitch,
+                    velocity: note.velocity,
+                })
+                .collect();
+            let (loop_start, loop_length) = clip.loop_range();
+            destination.set_session_notes(&notes, loop_start, loop_length, session.launch_beats);
+            continue;
+        }
         let mut notes = Vec::new();
         for placement in track.arrangement() {
             let Some(clip) = snapshot.clips.iter().find(|clip| clip.id == placement.clip) else {
@@ -741,6 +916,26 @@ pub(crate) fn state_from_snapshot(snapshot: &Snapshot, playing: bool) -> (MixSet
         destination.set_notes(&notes);
     }
     (settings, score)
+}
+
+fn session_audio_regions(
+    snapshot: &Snapshot,
+    sessions: &[Option<SessionSelection>; MAX_TRACKS],
+) -> Vec<SessionAudioRegion> {
+    sessions
+        .iter()
+        .enumerate()
+        .filter_map(|(track, active)| {
+            let active = (*active)?;
+            snapshot
+                .audio_clip_at(track, active.scene)
+                .map(|_| SessionAudioRegion {
+                    track,
+                    scene: active.scene,
+                    launch_beats: active.launch_beats,
+                })
+        })
+        .collect()
 }
 
 fn append_placement_notes(
@@ -975,12 +1170,72 @@ mod tests {
     }
 
     #[test]
+    fn a_session_clip_replaces_arrangement_notes_on_its_track() {
+        let mut project = midi_project();
+        project
+            .apply(&[Command::CreateScene { name: "A".into() }])
+            .unwrap();
+        let snapshot = project.snapshot();
+        let track = snapshot.tracks()[1].id();
+        let scene = snapshot.scenes()[0].id();
+        project
+            .apply(&[Command::CreateMidiClip {
+                track,
+                scene,
+                name: "Pattern".into(),
+                length_beats: 2.0,
+            }])
+            .unwrap();
+        let clip = project.snapshot().clip_at(1, 0).unwrap().id();
+        project
+            .apply(&[
+                Command::AddNote {
+                    id: clip,
+                    note: MidiNote {
+                        pitch: 72,
+                        velocity: 90,
+                        start_beats: 0.25,
+                        length_beats: 0.5,
+                    },
+                },
+                Command::PlaceClip {
+                    track,
+                    clip,
+                    start_beats: 8.0,
+                    length_beats: 2.0,
+                },
+            ])
+            .unwrap();
+        let mut sessions = [None; MAX_TRACKS];
+        sessions[1] = Some(SessionSelection {
+            scene: 0,
+            launch_beats: 4.0,
+        });
+        let (_, score) = state_from_snapshot_with_session(&project.snapshot(), true, &sessions);
+        let part = score.track(1).unwrap();
+        assert_eq!(part.notes().len(), 1);
+        assert_eq!(part.notes()[0].start_beats, 0.25);
+        assert_eq!(
+            part.session_loop(),
+            Some(crate::engine::playback::SessionLoop {
+                launch_beats: 4.0,
+                loop_start_beats: 0.0,
+                loop_length_beats: 2.0,
+            })
+        );
+    }
+
+    #[test]
     fn closed_runtime_rejects_transport_commands() {
         let mut runtime = AudioRuntime::new();
         assert!(!runtime.is_open());
         assert!(!runtime.play());
         assert!(!runtime.stop());
         assert!(!runtime.locate(2.0));
+        assert!(!runtime.launch_clip(&Project::new(), 0, 0, 1.0));
+        assert!(!runtime.launch_scene(&Project::new(), 0, 1.0));
+        assert!(!runtime.stop_session_track(&Project::new(), 0));
+        assert_eq!(runtime.active_session_scene(0), None);
         assert_eq!(runtime.state(), PlaybackState::default());
         assert_eq!(runtime.dropouts(), 0);
         assert_eq!(runtime.config(), None);

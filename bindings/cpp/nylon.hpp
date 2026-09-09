@@ -298,6 +298,12 @@ public:
     bool sync(const Project& project);
     std::uint64_t dropouts() const;
 
+    bool launchClip(const Project& project, std::uint64_t track, std::uint64_t scene,
+        double quantizationBeats);
+    bool launchScene(const Project& project, std::uint64_t scene, double quantizationBeats);
+    bool stopSessionTrack(const Project& project, std::uint64_t track);
+    std::int64_t activeSessionScene(std::uint64_t track) const;
+
     bool play();
     bool stop();
     bool locate(double beats);

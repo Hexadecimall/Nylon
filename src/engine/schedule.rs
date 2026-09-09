@@ -13,6 +13,8 @@ use crate::mixer::MAX_FRAMES;
 /// Note events one block can carry. A block asking for more than this
 /// loses the rest, which is reported so a caller can notice.
 pub const MAX_NOTE_EVENTS: usize = 256;
+/// Loop repetitions one block may inspect before reporting overflow.
+const MAX_LOOP_CYCLES_PER_BLOCK: i64 = 256;
 
 /// A note on a clip's timeline.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -154,7 +156,7 @@ pub fn schedule_block(notes: &[ScheduledNote], span: Span, events: &mut [NoteEve
             break;
         }
         let starts_here = note.start_beats >= start && note.start_beats < end;
-        let ends_here = note.end_beats() > start && note.end_beats() < end;
+        let ends_here = note.end_beats() >= start && note.end_beats() < end;
         if starts_here {
             push(
                 NoteEvent {
@@ -186,17 +188,120 @@ pub fn schedule_block(notes: &[ScheduledNote], span: Span, events: &mut [NoteEve
         }
     }
 
-    // Sorting is by offset, keeping a note's start before its end when
-    // both land on the same frame.
     let written = result.count;
-    events[..written].sort_by(|left, right| {
-        left.offset.cmp(&right.offset).then_with(|| {
-            // On before Off at the same offset only when they are
-            // different notes; the same note's pair is already ordered.
-            (left.action == NoteAction::Off).cmp(&(right.action == NoteAction::Off))
-        })
-    });
+    sort_note_events(&mut events[..written]);
     result
+}
+
+/// Places repeated clip notes into one transport block.
+///
+/// `launch_beats` is the transport position where the first loop begins.
+/// Notes are relative to the clip timeline and only notes beginning inside
+/// the selected loop participate.
+pub fn schedule_looped_block(
+    notes: &[ScheduledNote],
+    loop_start_beats: f64,
+    loop_length_beats: f64,
+    launch_beats: f64,
+    span: Span,
+    events: &mut [NoteEvent],
+) -> Scheduled {
+    let mut result = Scheduled::default();
+    if !span.is_moving()
+        || span.frames > MAX_FRAMES
+        || !loop_start_beats.is_finite()
+        || loop_start_beats < 0.0
+        || !loop_length_beats.is_finite()
+        || loop_length_beats <= 0.0
+        || !launch_beats.is_finite()
+        || launch_beats < 0.0
+    {
+        return result;
+    }
+    let block_start = span.start_beats;
+    let block_end = span.end_beats();
+    if block_end <= launch_beats {
+        return result;
+    }
+    let first_cycle =
+        (((block_start - launch_beats) / loop_length_beats).floor() as i64 - 1).max(0);
+    let last_cycle = ((block_end - launch_beats) / loop_length_beats).floor() as i64;
+    let loop_end = loop_start_beats + loop_length_beats;
+    if !loop_end.is_finite() || last_cycle < first_cycle {
+        return result;
+    }
+    let capped_last_cycle = last_cycle.min(
+        first_cycle
+            .saturating_add(MAX_LOOP_CYCLES_PER_BLOCK)
+            .saturating_sub(1),
+    );
+
+    for cycle in first_cycle..=capped_last_cycle {
+        let cycle_start = launch_beats + cycle as f64 * loop_length_beats;
+        for note in notes {
+            if !note.is_playable()
+                || note.start_beats < loop_start_beats
+                || note.start_beats >= loop_end
+            {
+                continue;
+            }
+            let relative = note.start_beats - loop_start_beats;
+            let start = cycle_start + relative;
+            let available = loop_length_beats - relative;
+            let end = start + note.length_beats.min(available);
+            if start >= launch_beats && start >= block_start && start < block_end {
+                push_note_event(
+                    NoteEvent {
+                        offset: span.frame_of(start),
+                        pitch: note.pitch,
+                        velocity: note.velocity,
+                        action: NoteAction::On,
+                    },
+                    events,
+                    &mut result,
+                );
+            }
+            if end > launch_beats && end >= block_start && end < block_end {
+                push_note_event(
+                    NoteEvent {
+                        offset: span.frame_of(end),
+                        pitch: note.pitch,
+                        velocity: 0,
+                        action: NoteAction::Off,
+                    },
+                    events,
+                    &mut result,
+                );
+            }
+        }
+    }
+    if capped_last_cycle < last_cycle {
+        result.dropped = result.dropped.saturating_add(1);
+    }
+    sort_note_events(&mut events[..result.count]);
+    result
+}
+
+fn push_note_event(event: NoteEvent, events: &mut [NoteEvent], result: &mut Scheduled) {
+    if result.count < events.len() {
+        events[result.count] = event;
+        result.count += 1;
+    } else {
+        result.dropped += 1;
+    }
+}
+
+fn sort_note_events(events: &mut [NoteEvent]) {
+    // Stable insertion sorting needs no scratch allocation. Equal offsets
+    // keep generation order: a short note keeps On before Off, while a loop
+    // edge keeps the preceding cycle's Off before the next cycle's On.
+    for index in 1..events.len() {
+        let mut position = index;
+        while position > 0 && events[position - 1].offset > events[position].offset {
+            events.swap(position - 1, position);
+            position -= 1;
+        }
+    }
 }
 
 /// Sorts notes by start beat, which [`schedule_block`] relies on.
@@ -328,6 +433,24 @@ mod tests {
     }
 
     #[test]
+    fn a_note_ending_on_a_block_boundary_is_released_in_the_next_block() {
+        let notes = [note(0.5, 0.5, 67)];
+        let mut events = [NoteEvent {
+            offset: 0,
+            pitch: 0,
+            velocity: 0,
+            action: NoteAction::On,
+        }; 8];
+        let first = schedule_block(&notes, span(0.0, 1.0), &mut events);
+        assert_eq!(first.count, 1);
+        assert_eq!(events[0].action, NoteAction::On);
+        let second = schedule_block(&notes, span(1.0, 1.0), &mut events);
+        assert_eq!(second.count, 1);
+        assert_eq!(events[0].action, NoteAction::Off);
+        assert_eq!(events[0].offset, 0);
+    }
+
+    #[test]
     fn a_note_entirely_before_or_after_the_block_is_skipped() {
         let notes = [note(0.0, 0.25, 60), note(8.0, 1.0, 72)];
         let mut events = [NoteEvent {
@@ -442,6 +565,89 @@ mod tests {
         }; 5];
         let result = schedule_block(&notes, span(0.0, 1.0), &mut events);
         assert_eq!(result.count, 5);
+        assert!(result.dropped > 0);
+    }
+
+    #[test]
+    fn a_session_note_repeats_at_each_loop_boundary() {
+        let notes = [note(0.0, 0.25, 60)];
+        let mut events = [NoteEvent {
+            offset: 0,
+            pitch: 0,
+            velocity: 0,
+            action: NoteAction::On,
+        }; 16];
+        let result = schedule_looped_block(&notes, 0.0, 1.0, 2.0, span(2.0, 2.0), &mut events);
+        assert_eq!(result.count, 4);
+        assert_eq!(events[0].action, NoteAction::On);
+        assert_eq!(events[0].offset, 0);
+        assert_eq!(events[1].action, NoteAction::Off);
+        assert_eq!(events[2].action, NoteAction::On);
+        assert_eq!(events[2].offset, 240);
+        assert_eq!(events[3].action, NoteAction::Off);
+    }
+
+    #[test]
+    fn a_session_note_never_sounds_before_launch() {
+        let notes = [note(0.0, 0.25, 60)];
+        let mut events = [NoteEvent {
+            offset: 0,
+            pitch: 0,
+            velocity: 0,
+            action: NoteAction::On,
+        }; 8];
+        let result = schedule_looped_block(&notes, 0.0, 1.0, 4.0, span(3.0, 1.0), &mut events);
+        assert_eq!(result.count, 0);
+    }
+
+    #[test]
+    fn a_session_note_is_cut_at_the_loop_edge() {
+        let notes = [note(0.75, 1.0, 67)];
+        let mut events = [NoteEvent {
+            offset: 0,
+            pitch: 0,
+            velocity: 0,
+            action: NoteAction::On,
+        }; 8];
+        let result = schedule_looped_block(&notes, 0.0, 1.0, 0.0, span(0.5, 1.5), &mut events);
+        assert_eq!(result.count, 3);
+        assert_eq!(events[0].action, NoteAction::On);
+        assert_eq!(events[0].offset, 80);
+        assert_eq!(events[1].action, NoteAction::Off);
+        assert_eq!(events[1].offset, 160);
+        assert_eq!(events[2].action, NoteAction::On);
+        assert_eq!(events[2].offset, 400);
+    }
+
+    #[test]
+    fn a_loop_edge_releases_before_retriggering_the_same_pitch() {
+        let notes = [note(0.75, 0.25, 67), note(0.0, 0.25, 67)];
+        let mut events = [NoteEvent {
+            offset: 0,
+            pitch: 0,
+            velocity: 0,
+            action: NoteAction::On,
+        }; 8];
+        let result = schedule_looped_block(&notes, 0.0, 1.0, 0.0, span(1.0, 0.5), &mut events);
+        assert_eq!(result.count, 3);
+        assert_eq!(events[0].offset, 0);
+        assert_eq!(events[0].action, NoteAction::Off);
+        assert_eq!(events[1].offset, 0);
+        assert_eq!(events[1].action, NoteAction::On);
+    }
+
+    #[test]
+    fn tiny_session_loops_have_a_fixed_work_limit() {
+        let notes = [note(0.0, 0.000_001, 60)];
+        let mut events = [NoteEvent {
+            offset: 0,
+            pitch: 0,
+            velocity: 0,
+            action: NoteAction::On,
+        }; MAX_NOTE_EVENTS];
+        let result =
+            schedule_looped_block(&notes, 0.0, 0.000_001, 0.0, span(0.0, 1.0), &mut events);
+        assert_eq!(result.count, MAX_NOTE_EVENTS);
         assert!(result.dropped > 0);
     }
 

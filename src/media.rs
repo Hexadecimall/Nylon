@@ -4,7 +4,7 @@ use crate::audio::recording::RecordingReport;
 use crate::dsp::db;
 use crate::engine::sample::{Sample, SampleError};
 use crate::engine::timeline::{AudioRegion, AudioTimeline};
-use crate::project::{Command, Project, ProjectError, TrackKind, validate_name};
+use crate::project::{Command, Project, ProjectError, Snapshot, TrackKind, validate_name};
 use crate::wave::{self, WaveError};
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -278,8 +278,25 @@ pub fn import_wave(
     })
 }
 
+/// One launched audio clip added to a live timeline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SessionAudioRegion {
+    pub track: usize,
+    pub scene: usize,
+    pub launch_beats: f64,
+}
+
 /// Builds immutable decoded media and arrangement regions for a project.
 pub fn timeline_from_project(project: &Project) -> Result<AudioTimeline, MediaError> {
+    timeline_from_project_with_session(project, &[])
+}
+
+/// Builds decoded media with launched Session clips replacing Arrangement
+/// playback on their tracks.
+pub(crate) fn timeline_from_project_with_session(
+    project: &Project,
+    sessions: &[SessionAudioRegion],
+) -> Result<AudioTimeline, MediaError> {
     let snapshot = project.snapshot();
     if snapshot.audio_clips().is_empty() {
         return Ok(AudioTimeline::new());
@@ -308,6 +325,29 @@ pub fn timeline_from_project(project: &Project) -> Result<AudioTimeline, MediaEr
         if track.kind() != TrackKind::Audio {
             continue;
         }
+        if let Some(session) = sessions.iter().find(|session| session.track == track_index) {
+            let clip = snapshot
+                .audio_clip_at(track_index, session.scene)
+                .ok_or(MediaError::InvalidSlot)?;
+            let clip_index = snapshot
+                .audio_clips()
+                .iter()
+                .position(|candidate| candidate.id() == clip.id())
+                .ok_or(MediaError::InvalidSlot)?;
+            add_audio_region(
+                &mut timeline,
+                &snapshot,
+                clip,
+                clip_index,
+                track_index,
+                session.launch_beats,
+                1_000_000_000.0,
+                &media_indices,
+                &media_lengths,
+                &media_rates,
+            )?;
+            continue;
+        }
         for placement in track.arrangement() {
             let Some(clip_index) = snapshot
                 .audio_clips()
@@ -316,39 +356,66 @@ pub fn timeline_from_project(project: &Project) -> Result<AudioTimeline, MediaEr
             else {
                 return Err(MediaError::InvalidSlot);
             };
-            let clip = &snapshot.audio_clips()[clip_index];
-            let frames_per_beat = f64::from(media_rates[clip_index]) * 60.0
-                / if clip.warped() {
-                    clip.source_tempo()
-                } else {
-                    snapshot.tempo()
-                };
-            let (loop_start, loop_length) = clip.loop_range();
-            let source_start = loop_start * frames_per_beat;
-            let mut region = AudioRegion::new(
-                media_indices[clip_index],
+            add_audio_region(
+                &mut timeline,
+                &snapshot,
+                &snapshot.audio_clips()[clip_index],
+                clip_index,
                 track_index,
                 placement.start_beats(),
                 placement.length_beats(),
-                source_start,
-                frames_per_beat,
-            )
-            .ok_or(MediaError::InvalidSlot)?;
-            region.set_gain(db::to_linear(clip.gain_db() as f32));
-            region.set_reverse(clip.reversed());
-            let start_frame = source_start.floor().max(0.0) as usize;
-            let end_frame = ((loop_start + loop_length) * frames_per_beat)
-                .ceil()
-                .min(media_lengths[clip_index] as f64) as usize;
-            if start_frame < end_frame {
-                let _ = region.set_loop(Some(start_frame..end_frame));
-            }
-            timeline
-                .add_region(region)
-                .map_err(|_| MediaError::Capacity)?;
+                &media_indices,
+                &media_lengths,
+                &media_rates,
+            )?;
         }
     }
     Ok(timeline)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_audio_region(
+    timeline: &mut AudioTimeline,
+    snapshot: &Snapshot,
+    clip: &crate::project::AudioClip,
+    clip_index: usize,
+    track_index: usize,
+    start_beats: f64,
+    length_beats: f64,
+    media_indices: &[usize],
+    media_lengths: &[usize],
+    media_rates: &[u32],
+) -> Result<(), MediaError> {
+    let frames_per_beat = f64::from(media_rates[clip_index]) * 60.0
+        / if clip.warped() {
+            clip.source_tempo()
+        } else {
+            snapshot.tempo()
+        };
+    let (loop_start, loop_length) = clip.loop_range();
+    let source_start = loop_start * frames_per_beat;
+    let mut region = AudioRegion::new(
+        media_indices[clip_index],
+        track_index,
+        start_beats,
+        length_beats,
+        source_start,
+        frames_per_beat,
+    )
+    .ok_or(MediaError::InvalidSlot)?;
+    region.set_gain(db::to_linear(clip.gain_db() as f32));
+    region.set_reverse(clip.reversed());
+    let start_frame = source_start.floor().max(0.0) as usize;
+    let end_frame = ((loop_start + loop_length) * frames_per_beat)
+        .ceil()
+        .min(media_lengths[clip_index] as f64) as usize;
+    if start_frame < end_frame {
+        let _ = region.set_loop(Some(start_frame..end_frame));
+    }
+    timeline
+        .add_region(region)
+        .map_err(|_| MediaError::Capacity)?;
+    Ok(())
 }
 
 fn create_destination(
@@ -384,5 +451,87 @@ fn clip_name(source: &Path) -> String {
         candidate.to_owned()
     } else {
         "Audio Clip".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::schedule::Span;
+    use crate::project::TrackKind;
+    use crate::wave::{Format, WaveWriter};
+
+    #[test]
+    fn a_launched_audio_clip_replaces_its_arrangement_regions() {
+        let tick = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = PathBuf::from("target").join(format!("session-audio-{tick}"));
+        fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("source.wav");
+        let mut writer =
+            WaveWriter::new(File::create(&source).unwrap(), Format::stereo(48_000)).unwrap();
+        writer.write_stereo(&[[0.5, -0.5]; 4_800]).unwrap();
+        writer.finish().unwrap();
+
+        let bundle = directory.join("Session.nylonproject");
+        let mut project = Project::new();
+        project.save_bundle(&bundle).unwrap();
+        project
+            .apply(&[
+                Command::CreateTrack {
+                    name: "Audio".into(),
+                    kind: TrackKind::Audio,
+                },
+                Command::CreateScene { name: "A".into() },
+            ])
+            .unwrap();
+        import_wave(&mut project, &source, 0, 0, 120.0).unwrap();
+        let snapshot = project.snapshot();
+        let track = snapshot.tracks()[0].id();
+        let clip = snapshot.audio_clip_at(0, 0).unwrap().id();
+        project
+            .apply(&[Command::PlaceClip {
+                track,
+                clip,
+                start_beats: 8.0,
+                length_beats: 1.0,
+            }])
+            .unwrap();
+
+        let timeline = timeline_from_project_with_session(
+            &project,
+            &[SessionAudioRegion {
+                track: 0,
+                scene: 0,
+                launch_beats: 2.0,
+            }],
+        )
+        .unwrap();
+        assert_eq!(timeline.region_count(), 1);
+        let mut before = [[0.0; 2]; 16];
+        timeline.render_track(
+            0,
+            Span {
+                start_beats: 1.0,
+                length_beats: 0.1,
+                frames: before.len(),
+            },
+            &mut before,
+        );
+        assert!(before.iter().all(|frame| *frame == [0.0; 2]));
+        let mut after = [[0.0; 2]; 16];
+        timeline.render_track(
+            0,
+            Span {
+                start_beats: 2.0,
+                length_beats: 0.1,
+                frames: after.len(),
+            },
+            &mut after,
+        );
+        assert!(after.iter().any(|frame| frame[0].abs() > 0.1));
+        fs::remove_dir_all(directory).unwrap();
     }
 }

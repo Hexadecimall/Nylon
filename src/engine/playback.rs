@@ -17,7 +17,8 @@ use crate::engine::automation::{
 use crate::engine::device::{DeviceChain, DeviceConfig, DeviceError, MAX_DELAY_STORAGE_FRAMES};
 use crate::engine::graph::{GraphRenderError, GraphRenderer, NodeInput};
 use crate::engine::schedule::{
-    MAX_NOTE_EVENTS, NoteAction, NoteEvent, ScheduledNote, Span, schedule_block, sort_notes,
+    MAX_NOTE_EVENTS, NoteAction, NoteEvent, ScheduledNote, Span, schedule_block,
+    schedule_looped_block, sort_notes,
 };
 use crate::engine::timeline::AudioTimeline;
 use crate::engine::voice::{Patch, VoiceBank};
@@ -219,15 +220,24 @@ impl MixSettings {
     }
 }
 
+/// Loop placement for a launched Session clip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SessionLoop {
+    /// Transport beat where the launch takes effect.
+    pub launch_beats: f64,
+    /// First clip beat included in the loop.
+    pub loop_start_beats: f64,
+    /// Length of the loop in beats.
+    pub loop_length_beats: f64,
+}
+
 /// The notes an instrument track plays, and the sound it plays them with.
-///
-/// Notes are placed at absolute beats on the timeline, which is how an
-/// arrangement reads. Session clip looping is not represented here yet.
 #[derive(Clone, Copy)]
 pub struct TrackScore {
     notes: [ScheduledNote; MAX_NOTES_PER_TRACK],
     count: usize,
     patch: Patch,
+    session: Option<SessionLoop>,
     /// Whether this track sounds at all.
     enabled: bool,
 }
@@ -251,6 +261,7 @@ impl TrackScore {
             }; MAX_NOTES_PER_TRACK],
             count: 0,
             patch: Patch::default(),
+            session: None,
             enabled: false,
         }
     }
@@ -262,6 +273,39 @@ impl TrackScore {
         let count = notes.len().min(MAX_NOTES_PER_TRACK);
         self.notes[..count].copy_from_slice(&notes[..count]);
         self.count = count;
+        self.session = None;
+        sort_notes(&mut self.notes[..count]);
+        count
+    }
+
+    /// Replaces the notes with a Session clip that repeats after launch.
+    /// Returns zero and leaves an empty part when the loop is invalid.
+    pub fn set_session_notes(
+        &mut self,
+        notes: &[ScheduledNote],
+        loop_start_beats: f64,
+        loop_length_beats: f64,
+        launch_beats: f64,
+    ) -> usize {
+        self.count = 0;
+        self.session = None;
+        if !loop_start_beats.is_finite()
+            || loop_start_beats < 0.0
+            || !loop_length_beats.is_finite()
+            || loop_length_beats <= 0.0
+            || !launch_beats.is_finite()
+            || launch_beats < 0.0
+        {
+            return 0;
+        }
+        let count = notes.len().min(MAX_NOTES_PER_TRACK);
+        self.notes[..count].copy_from_slice(&notes[..count]);
+        self.count = count;
+        self.session = Some(SessionLoop {
+            launch_beats,
+            loop_start_beats,
+            loop_length_beats,
+        });
         sort_notes(&mut self.notes[..count]);
         count
     }
@@ -270,6 +314,13 @@ impl TrackScore {
     #[must_use]
     pub fn notes(&self) -> &[ScheduledNote] {
         &self.notes[..self.count]
+    }
+
+    /// Active Session loop, or `None` for Arrangement playback.
+    #[inline]
+    #[must_use]
+    pub const fn session_loop(&self) -> Option<SessionLoop> {
+        self.session
     }
 
     /// The sound the notes are played with.
@@ -646,14 +697,21 @@ impl PlaybackEngine {
         if !self.score.apply_pending() {
             return;
         }
+        let previous_sessions: [Option<SessionLoop>; MAX_INSTRUMENTS] =
+            core::array::from_fn(|index| {
+                self.applied_score
+                    .track(index)
+                    .and_then(TrackScore::session_loop)
+            });
         *self.applied_score = **self.score.current();
-        for index in 0..MAX_INSTRUMENTS {
+        for (index, previous_session) in previous_sessions.iter().enumerate() {
             let Some(track) = self.applied_score.track(index) else {
                 continue;
             };
             self.instruments[index].set_patch(track.patch());
-            if !track.is_enabled() {
-                // A track switched off stops at once rather than ringing.
+            let session_changed = *previous_session != track.session_loop();
+            if !track.is_enabled() || session_changed {
+                // A disabled or relaunched part stops at once rather than ringing.
                 self.instruments[index].reset();
             }
         }
@@ -768,8 +826,20 @@ impl PlaybackEngine {
         let scheduled = self
             .applied_score
             .track(index)
-            .map(|track| schedule_block(track.notes(), span, &mut note_events))
-            .unwrap_or_default();
+            .map_or_else(Default::default, |track| {
+                if let Some(session) = track.session_loop() {
+                    schedule_looped_block(
+                        track.notes(),
+                        session.loop_start_beats,
+                        session.loop_length_beats,
+                        session.launch_beats,
+                        span,
+                        &mut note_events,
+                    )
+                } else {
+                    schedule_block(track.notes(), span, &mut note_events)
+                }
+            });
 
         // Render in spans between note events so each note starts and
         // stops on the frame it was written for.
