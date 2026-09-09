@@ -118,10 +118,16 @@ def main():
         assert abs(gate_parameters["attackSeconds"] - 0.002) < 1e-7, gate
         assert abs(gate_parameters["holdSeconds"] - 0.04) < 1e-7, gate
         assert abs(gate_parameters["releaseSeconds"] - 0.15) < 1e-7, gate
+        call("add-device", "0", "chorus", "0.8", "0.012", "0.003", "0.1", "0.5", "0.25")
+        chorus = call("track-devices", "0")["devices"][4]
+        assert chorus["kind"] == "chorus", chorus
+        assert abs(chorus["parameters"]["rateHz"] - 0.8) < 1e-6, chorus
+        assert chorus["parameters"]["stereoPhase"] == 0.25, chorus
         call("add-device", "0", "delay", "0.2", "1", "0.5", succeeds=False)
         call("add-device", "0", "limiter", "-0.3", "0.1", "0.1", succeeds=False)
         call("add-device", "0", "saturator", "9", "-4", "0.75", "bad", "4x", "on", succeeds=False)
         call("add-device", "0", "gate", "-32", "8", "0.002", "0.04", "31", "on", succeeds=False)
+        call("add-device", "0", "chorus", "0.8", "0.01", "0.02", "0.1", "0.5", "0.25", succeeds=False)
         call("import-wave", "1", "0", str(source), "120")
         clips = call("clips", "1")["clips"]
         assert clips[0]["kind"] == "audio" and clips[0]["mediaPath"].startswith("Media/"), clips

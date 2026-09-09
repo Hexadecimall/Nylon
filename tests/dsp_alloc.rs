@@ -5,6 +5,7 @@
 //! Storage that outlives a call is allocated before the flag goes up.
 
 use nylon::dsp::biquad::{Biquad, Coefficients, Kind};
+use nylon::dsp::chorus::{Chorus, Parameters as ChorusParameters};
 use nylon::dsp::compressor::{Compressor, Parameters as CompressorParameters};
 use nylon::dsp::delay::DelayLine;
 use nylon::dsp::env::{Envelope, Settings};
@@ -80,6 +81,18 @@ fn gating_a_block_performs_no_allocator_operations() {
     let mut audio = vec![[0.25_f32, -0.1_f32]; BLOCK];
     let sidechain = vec![[0.5_f32, 0.5_f32]; BLOCK];
     let operations = measure(|| gate.process_block(&mut audio, &sidechain));
+    assert_eq!(operations, 0, "{operations} allocator operations");
+    assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
+}
+
+#[test]
+fn chorusing_a_block_performs_no_allocator_operations() {
+    let mut chorus = Chorus::new(RATE, ChorusParameters::default());
+    let frames = chorus.required_storage_frames();
+    let mut left = vec![0.0_f32; frames];
+    let mut right = vec![0.0_f32; frames];
+    let mut audio = vec![[0.25_f32, -0.1_f32]; BLOCK];
+    let operations = measure(|| chorus.process_block(&mut left, &mut right, &mut audio));
     assert_eq!(operations, 0, "{operations} allocator operations");
     assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
 }

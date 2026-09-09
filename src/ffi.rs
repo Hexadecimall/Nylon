@@ -4,6 +4,7 @@
 use crate::audio::{DeviceId, DeviceInfo, Direction, Name, Rates};
 use crate::bounce::{Options as BounceOptions, render_wave};
 use crate::dsp::biquad::Kind as FilterKind;
+use crate::dsp::chorus::Parameters as ChorusParameters;
 use crate::dsp::compressor::Parameters as CompressorParameters;
 use crate::dsp::env::Settings as EnvelopeSettings;
 use crate::dsp::gate::Parameters as GateParameters;
@@ -685,6 +686,16 @@ fn track_device_kind(record: NylonTrackDevice) -> Option<TrackDeviceKind> {
                 },
             },
         }),
+        7 => Some(TrackDeviceKind::Chorus {
+            parameters: ChorusParameters {
+                rate_hz: parameters[0],
+                center_seconds: parameters[1],
+                depth_seconds: parameters[2],
+                feedback: parameters[3],
+                mix: parameters[4],
+                stereo_phase: parameters[5],
+            },
+        }),
         _ => None,
     }
 }
@@ -786,6 +797,17 @@ fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice
                 parameters.hold_seconds,
                 parameters.release_seconds,
                 f32::from(u8::from(parameters.external_sidechain)),
+            ]);
+        }
+        TrackDeviceKind::Chorus { parameters } => {
+            record.kind = 7;
+            record.parameters[..6].copy_from_slice(&[
+                parameters.rate_hz,
+                parameters.center_seconds,
+                parameters.depth_seconds,
+                parameters.feedback,
+                parameters.mix,
+                parameters.stereo_phase,
             ]);
         }
     }

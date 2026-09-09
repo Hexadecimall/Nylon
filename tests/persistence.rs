@@ -1,3 +1,4 @@
+use nylon::dsp::chorus::Parameters as ChorusParameters;
 use nylon::dsp::gate::Parameters as GateParameters;
 use nylon::dsp::limiter::Parameters as LimiterParameters;
 use nylon::dsp::saturator::{
@@ -115,6 +116,15 @@ fn session() -> Project {
                             release_seconds: 0.125,
                             lookahead_seconds: 0.004,
                         },
+                    },
+                },
+            },
+            Command::AddDevice {
+                track: id,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Chorus {
+                        parameters: ChorusParameters::default(),
                     },
                 },
             },
@@ -240,7 +250,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 11;
+    future[4] = 12;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

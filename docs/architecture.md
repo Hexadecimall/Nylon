@@ -45,8 +45,10 @@ on the control thread after the callback stops.
 conversion, panning laws, parameter smoothing, second-order sections,
 band-limited oscillators, an envelope generator, a delay line, and level
 metering. Dynamics and nonlinear stages include compression, lookahead
-limiting, stereo-linked gating with sidechain detection, and saturation with selectable transfer curves and bounded
-oversampling. Each type is fixed-size. Storage that must outlive a call, such
+limiting, stereo-linked gating with sidechain detection, saturation with
+selectable transfer curves and bounded oversampling, and a stereo chorus with
+phase-offset modulated delay lines. Each processor is fixed-size. Storage that
+must outlive a call, such
 as a delay buffer, is borrowed from the caller, which allocates it on the
 control thread before playback.
 

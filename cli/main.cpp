@@ -196,6 +196,7 @@ QString deviceKindName(nylon::DeviceKind kind)
     case nylon::DeviceKind::Limiter: return "limiter";
     case nylon::DeviceKind::Saturator: return "saturator";
     case nylon::DeviceKind::Gate: return "gate";
+    case nylon::DeviceKind::Chorus: return "chorus";
     }
     return "utility";
 }
@@ -297,6 +298,14 @@ bool parseTrackDevice(
         device.parameters[5] = sidechain ? 1.0F : 0.0F;
         return true;
     }
+    if (kind == "chorus" && positional.size() == kindIndex + 7) {
+        device.kind = nylon::DeviceKind::Chorus;
+        for (int index = 0; index < 6; ++index) {
+            if (!parameter(positional[kindIndex + 1 + index], device.parameters[index]))
+                return false;
+        }
+        return true;
+    }
     return false;
 }
 
@@ -345,6 +354,13 @@ QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
             {"holdSeconds", device.parameters[3]},
             {"releaseSeconds", device.parameters[4]},
             {"externalSidechain", device.parameters[5] == 1.0F}};
+        break;
+    case nylon::DeviceKind::Chorus:
+        parameters = {{"rateHz", device.parameters[0]},
+            {"centerSeconds", device.parameters[1]},
+            {"depthSeconds", device.parameters[2]},
+            {"feedback", device.parameters[3]}, {"mix", device.parameters[4]},
+            {"stereoPhase", device.parameters[5]}};
         break;
     }
     return {{"index", static_cast<double>(index)}, {"kind", deviceKindName(device.kind)},

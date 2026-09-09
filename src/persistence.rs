@@ -1,6 +1,7 @@
 //! Versioned binary project documents and directory bundles.
 
 use crate::dsp::biquad::Kind as FilterKind;
+use crate::dsp::chorus::Parameters as ChorusParameters;
 use crate::dsp::compressor::Parameters as CompressorParameters;
 use crate::dsp::env::Settings as EnvelopeSettings;
 use crate::dsp::gate::Parameters as GateParameters;
@@ -28,7 +29,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 10;
+const VERSION: u32 = 11;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -169,6 +170,19 @@ impl Encoder {
                             parameters.attack_seconds,
                             parameters.hold_seconds,
                             parameters.release_seconds,
+                        ] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::Chorus { parameters } => {
+                        self.bytes(&[7])?;
+                        for value in [
+                            parameters.rate_hz,
+                            parameters.center_seconds,
+                            parameters.depth_seconds,
+                            parameters.feedback,
+                            parameters.mix,
+                            parameters.stereo_phase,
                         ] {
                             self.bytes(&value.to_le_bytes())?;
                         }
@@ -444,6 +458,16 @@ impl<'a> Decoder<'a> {
                                 },
                             }
                         }
+                        7 if version >= 11 => DeviceKind::Chorus {
+                            parameters: ChorusParameters {
+                                rate_hz: f32::from_le_bytes(self.array()?),
+                                center_seconds: f32::from_le_bytes(self.array()?),
+                                depth_seconds: f32::from_le_bytes(self.array()?),
+                                feedback: f32::from_le_bytes(self.array()?),
+                                mix: f32::from_le_bytes(self.array()?),
+                                stereo_phase: f32::from_le_bytes(self.array()?),
+                            },
+                        },
                         _ => return Err(PersistenceError::InvalidFormat),
                     };
                     let config = DeviceConfig { enabled, kind };

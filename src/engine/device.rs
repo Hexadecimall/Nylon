@@ -1,6 +1,7 @@
 //! Native audio device chains for routed tracks and buses.
 
 use crate::dsp::biquad::{Biquad, Coefficients, Kind as FilterKind};
+use crate::dsp::chorus::{Chorus, Parameters as ChorusParameters};
 use crate::dsp::compressor::{Compressor, Parameters as CompressorParameters};
 use crate::dsp::db;
 use crate::dsp::delay::DelayLine;
@@ -67,6 +68,9 @@ pub enum DeviceKind {
     Gate {
         parameters: GateParameters,
     },
+    Chorus {
+        parameters: ChorusParameters,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +114,11 @@ enum Processor {
     },
     Gate {
         processor: Gate,
+    },
+    Chorus {
+        processor: Chorus,
+        left_storage: Vec<f32>,
+        right_storage: Vec<f32>,
     },
 }
 
@@ -208,6 +217,19 @@ impl DeviceChain {
                 DeviceKind::Gate { parameters } => Processor::Gate {
                     processor: Gate::new(sample_rate, parameters),
                 },
+                DeviceKind::Chorus { parameters } => {
+                    let processor = Chorus::new(sample_rate, parameters);
+                    let frames = processor.required_storage_frames();
+                    delay_storage = delay_storage
+                        .checked_add(frames.saturating_mul(2))
+                        .filter(|value| *value <= MAX_DELAY_STORAGE_FRAMES)
+                        .ok_or(DeviceError::StorageCapacity)?;
+                    Processor::Chorus {
+                        processor,
+                        left_storage: zeroed(frames)?,
+                        right_storage: zeroed(frames)?,
+                    }
+                }
             };
             devices.push(Device {
                 enabled: config.enabled,
@@ -331,6 +353,21 @@ fn validate_kind(kind: DeviceKind, sample_rate: f32) -> Result<usize, DeviceErro
         {
             Ok(0)
         }
+        DeviceKind::Chorus { parameters }
+            if finite_range(parameters.rate_hz, 0.01, 20.0)
+                && finite_range(parameters.center_seconds, 0.000_1, 0.1)
+                && finite_range(parameters.depth_seconds, 0.0, 0.05)
+                && parameters.depth_seconds <= parameters.center_seconds
+                && finite_range(parameters.feedback, -0.95, 0.95)
+                && finite_range(parameters.mix, 0.0, 1.0)
+                && finite_range(parameters.stereo_phase, 0.0, 1.0) =>
+        {
+            Ok(
+                ((parameters.center_seconds + parameters.depth_seconds) * sample_rate).ceil()
+                    as usize
+                    + 2,
+            )
+        }
         _ => Err(DeviceError::InvalidParameter),
     }
 }
@@ -403,6 +440,11 @@ impl Processor {
                 }
             }
             Self::Gate { processor } => processor.process_block(audio, sidechain),
+            Self::Chorus {
+                processor,
+                left_storage,
+                right_storage,
+            } => processor.process_block(left_storage, right_storage, audio),
         }
     }
 
@@ -429,6 +471,11 @@ impl Processor {
             }
             Self::Saturator { processor } => processor.reset(),
             Self::Gate { processor } => processor.reset(),
+            Self::Chorus {
+                processor,
+                left_storage,
+                right_storage,
+            } => processor.reset(left_storage, right_storage),
             Self::Utility { .. } => {}
         }
     }
@@ -651,9 +698,47 @@ mod tests {
     }
 
     #[test]
+    fn chorus_modulates_stereo_delay_and_reset_clears_it() {
+        let config = DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Chorus {
+                parameters: ChorusParameters::default(),
+            },
+        };
+        let mut chain = DeviceChain::new(&[config], RATE).unwrap();
+        assert!(chain.delay_storage_frames() > 0);
+        let mut input = vec![[0.0; 2]; 4_096];
+        input[0] = [1.0, 1.0];
+        let mut first = vec![[0.0; 2]; input.len()];
+        chain.process(&input, &[], &mut first).unwrap();
+        assert_ne!(first, input);
+        assert!(first.iter().flatten().all(|sample| sample.is_finite()));
+        chain.reset();
+        let mut second = vec![[0.0; 2]; input.len()];
+        chain.process(&input, &[], &mut second).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
     fn invalid_configuration_and_buffers_are_rejected() {
         assert!(matches!(
             DeviceChain::new(&[utility(f32::NAN, 1.0, 0.0)], RATE),
+            Err(DeviceError::InvalidParameter)
+        ));
+        assert!(matches!(
+            DeviceChain::new(
+                &[DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Chorus {
+                        parameters: ChorusParameters {
+                            depth_seconds: 0.02,
+                            center_seconds: 0.01,
+                            ..ChorusParameters::default()
+                        },
+                    },
+                }],
+                RATE,
+            ),
             Err(DeviceError::InvalidParameter)
         ));
         assert!(matches!(
