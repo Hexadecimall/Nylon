@@ -292,7 +292,10 @@ void nylon_audio_free(void* audio);
 /* Returns the number of output devices found. Passing a null output pointer
  * queries the count. A non-null output receives up to capacity records. */
 unsigned long long nylon_audio_device_list(NylonAudioDevice* out, unsigned long long capacity);
+unsigned long long nylon_audio_input_device_list(
+    NylonAudioDevice* out, unsigned long long capacity);
 int nylon_audio_default_output(unsigned long long* device_id);
+int nylon_audio_default_input(unsigned long long* device_id);
 
 /* Opens and starts an output callback with the musical transport stopped.
  * Device zero selects the current system default where the backend supports

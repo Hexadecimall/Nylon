@@ -245,10 +245,11 @@ int remoteCommand(const QString& endpoint, const QStringList& positional)
     return QJsonDocument::fromJson(response).object().value("ok").toBool() ? 0 : 1;
 }
 
-int listDevices()
+int listDevices(bool input)
 {
     QJsonArray devices;
-    for (const auto& device : nylon::AudioEngine::devices()) {
+    const auto found = input ? nylon::AudioEngine::inputDevices() : nylon::AudioEngine::devices();
+    for (const auto& device : found) {
         QJsonArray rates;
         for (const auto rate : device.sampleRates) rates.append(static_cast<double>(rate));
         devices.append(QJsonObject{{"id", static_cast<double>(device.id)},
@@ -262,7 +263,8 @@ int listDevices()
 int directCommand(const QString& bundle, const QStringList& positional)
 {
     const QString command = positional[0];
-    if (command == "devices" && positional.size() == 1) return listDevices();
+    if (command == "devices" && positional.size() == 1) return listDevices(false);
+    if (command == "input-devices" && positional.size() == 1) return listDevices(true);
     if (bundle.isEmpty()) return fail("A project bundle is required with --project");
     if (command == "recovery-status" && positional.size() == 1) {
         return writeJson({{"ok", true},

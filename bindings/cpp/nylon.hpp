@@ -261,7 +261,9 @@ public:
     explicit operator bool() const { return valid(); }
 
     static std::vector<AudioDevice> devices();
+    static std::vector<AudioDevice> inputDevices();
     static bool defaultOutput(std::uint64_t& deviceId);
+    static bool defaultInput(std::uint64_t& deviceId);
 
     bool open(const Project& project, std::uint64_t deviceId, std::uint32_t sampleRate,
         std::uint32_t blockFrames);

@@ -38,6 +38,7 @@ fn null_handles_are_rejected() {
         assert_eq!(nylon_transport_locate(std::ptr::null_mut(), 1.0), 0);
         assert_eq!(nylon_transport_position_beats(std::ptr::null_mut()), 0.0);
         assert_eq!(nylon_audio_default_output(std::ptr::null_mut()), 0);
+        assert_eq!(nylon_audio_default_input(std::ptr::null_mut()), 0);
         let mut device = NylonTrackDevice::default();
         assert_eq!(nylon_track_device_count(std::ptr::null(), 0), 0);
         assert_eq!(
@@ -124,6 +125,8 @@ fn native_audio_handle_reports_closed_state() {
         assert_eq!(nylon_audio_sync(audio, project), 0);
         let count = nylon_audio_device_list(std::ptr::null_mut(), 0);
         assert!(count <= nylon::runtime::MAX_DEVICES as u64);
+        let input_count = nylon_audio_input_device_list(std::ptr::null_mut(), 0);
+        assert!(input_count <= nylon::runtime::MAX_DEVICES as u64);
         nylon_audio_free(audio);
         nylon_project_free(project);
     }

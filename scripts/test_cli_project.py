@@ -90,6 +90,11 @@ def main():
         )
         assert devices.returncode == 0, (devices.stdout, devices.stderr)
         assert isinstance(json.loads(devices.stdout)["devices"], list)
+        inputs = subprocess.run(
+            [binary, "input-devices"], capture_output=True, text=True, timeout=10,
+        )
+        assert inputs.returncode == 0, (inputs.stdout, inputs.stderr)
+        assert isinstance(json.loads(inputs.stdout)["devices"], list)
         print("Direct project CLI: pass")
 
 

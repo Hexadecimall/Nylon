@@ -36,7 +36,7 @@ Groups of functions:
 | `nylon_scene_*` | scene count, creation, deletion, names |
 | `nylon_clip_*` | slot state, MIDI creation, WAVE import, clip settings, notes |
 | `nylon_arrangement_*` | clips placed on the timeline |
-| `nylon_audio_*` | output devices, stream lifecycle, granted configuration, dropouts, project publication |
+| `nylon_audio_*` | input/output devices, stream lifecycle, granted configuration, dropouts, project publication |
 | `nylon_transport_*` | play, stop, locate, position |
 | `nylon_track_levels`, `nylon_master_levels` | live linear peak and RMS readings |
 | `nylon_render_*` | deterministic offline file rendering |
@@ -96,6 +96,7 @@ nylon-control --project Session.nylon bounce mix.wav 0 64 48000
 nylon-control --project Session.nylon recovery-status
 nylon-control --project Session.nylon recover
 nylon-control devices
+nylon-control input-devices
 ```
 
 Every reply is one JSON object. Direct edit commands save the bundle only

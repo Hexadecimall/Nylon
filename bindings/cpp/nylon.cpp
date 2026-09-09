@@ -506,9 +506,35 @@ std::vector<AudioDevice> AudioEngine::devices()
     return result;
 }
 
+std::vector<AudioDevice> AudioEngine::inputDevices()
+{
+    const auto count = nylon_audio_input_device_list(nullptr, 0);
+    std::vector<NylonAudioDevice> native(static_cast<std::size_t>(count));
+    const auto written = nylon_audio_input_device_list(native.data(), count);
+    std::vector<AudioDevice> result;
+    result.reserve(static_cast<std::size_t>(written));
+    for (std::uint64_t index = 0; index < written; ++index) {
+        const auto& device = native[static_cast<std::size_t>(index)];
+        AudioDevice converted;
+        converted.id = device.id;
+        converted.name = device.name;
+        converted.channels = device.channels;
+        converted.isDefault = device.is_default != 0;
+        converted.sampleRates.assign(device.sample_rates,
+            device.sample_rates + device.sample_rate_count);
+        result.push_back(std::move(converted));
+    }
+    return result;
+}
+
 bool AudioEngine::defaultOutput(std::uint64_t& deviceId)
 {
     return nylon_audio_default_output(&deviceId) != 0;
+}
+
+bool AudioEngine::defaultInput(std::uint64_t& deviceId)
+{
+    return nylon_audio_default_input(&deviceId) != 0;
 }
 
 bool AudioEngine::open(const Project& project, std::uint64_t deviceId,

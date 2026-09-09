@@ -4,7 +4,7 @@
 //! values before publication. The platform stream owns the renderer; this
 //! type retains the control endpoint used by transport, meters, and edits.
 
-use crate::audio::{AudioError, Backend, DeviceId, DeviceInfo, Stream, StreamConfig};
+use crate::audio::{AudioError, Backend, DeviceId, DeviceInfo, InputBackend, Stream, StreamConfig};
 use crate::engine::device::DeviceConfig;
 use crate::engine::playback::{
     MixSettings, PlaybackEngine, PlaybackState, Publisher, Score, TrackSettings,
@@ -431,6 +431,31 @@ pub fn output_devices(out: &mut [DeviceInfo]) -> Result<usize, AudioError> {
     }
 }
 
+/// Lists input devices available from the platform backend.
+///
+/// # Errors
+///
+/// Returns the platform query error.
+pub fn input_devices(out: &mut [DeviceInfo]) -> Result<usize, AudioError> {
+    #[cfg(target_os = "macos")]
+    {
+        CoreAudioBackend::new().input_devices(out)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        AlsaBackend::new().map_or(Ok(0), |backend| backend.input_devices(out))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        WasapiBackend::new().input_devices(out)
+    }
+    #[cfg(not(platform_audio))]
+    {
+        let _ = out;
+        Ok(0)
+    }
+}
+
 /// Default platform output device.
 ///
 /// # Errors
@@ -449,6 +474,31 @@ pub fn default_output() -> Result<DeviceId, AudioError> {
     #[cfg(target_os = "windows")]
     {
         WasapiBackend::new().default_output()
+    }
+    #[cfg(not(platform_audio))]
+    {
+        Err(AudioError::DeviceMissing)
+    }
+}
+
+/// Default platform input device.
+///
+/// # Errors
+///
+/// Returns [`AudioError::DeviceMissing`] when no platform backend or
+/// default device exists.
+pub fn default_input() -> Result<DeviceId, AudioError> {
+    #[cfg(target_os = "macos")]
+    {
+        CoreAudioBackend::new().default_input()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        AlsaBackend::new()?.default_input()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        WasapiBackend::new().default_input()
     }
     #[cfg(not(platform_audio))]
     {

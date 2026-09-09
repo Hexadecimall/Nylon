@@ -11,7 +11,9 @@ use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::project::{ClipId, Command, MidiNote, Project, SceneId, TrackId, TrackKind};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingGraph};
-use crate::runtime::{AudioRuntime, MAX_DEVICES, default_output, output_devices};
+use crate::runtime::{
+    AudioRuntime, MAX_DEVICES, default_input, default_output, input_devices, output_devices,
+};
 use crate::wave::Format;
 use std::ffi::{CStr, c_char};
 use std::fs::File;
@@ -2158,16 +2160,41 @@ pub unsafe extern "C" fn nylon_audio_free(handle: *mut AudioRuntime) {
 /// null queries the available count without copying records.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nylon_audio_device_list(out: *mut NylonAudioDevice, capacity: u64) -> u64 {
+    // SAFETY: The caller provides the output storage described above.
+    unsafe { copy_audio_devices(out, capacity, Direction::Output) }
+}
+
+/// # Safety
+/// When `out` is non-null it must hold `capacity` writable records. Passing
+/// null queries the available input count without copying records.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_input_device_list(
+    out: *mut NylonAudioDevice,
+    capacity: u64,
+) -> u64 {
+    // SAFETY: The caller provides the output storage described above.
+    unsafe { copy_audio_devices(out, capacity, Direction::Input) }
+}
+
+unsafe fn copy_audio_devices(
+    out: *mut NylonAudioDevice,
+    capacity: u64,
+    direction: Direction,
+) -> u64 {
     let empty = DeviceInfo {
         id: DeviceId(0),
         name: Name::new(),
-        direction: Direction::Output,
+        direction,
         channels: 0,
         rates: Rates::new(),
         is_default: false,
     };
     let mut devices = [empty; MAX_DEVICES];
-    let Ok(count) = output_devices(&mut devices) else {
+    let result = match direction {
+        Direction::Input => input_devices(&mut devices),
+        Direction::Output => output_devices(&mut devices),
+    };
+    let Ok(count) = result else {
         return 0;
     };
     if !out.is_null() {
@@ -2189,6 +2216,21 @@ pub unsafe extern "C" fn nylon_audio_default_output(device_id: *mut u64) -> i32 
         return 0;
     }
     let Ok(device) = default_output() else {
+        return 0;
+    };
+    // SAFETY: The caller provides one writable integer.
+    unsafe { device_id.write(device.0) };
+    1
+}
+
+/// # Safety
+/// `device_id` must point to one writable integer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_default_input(device_id: *mut u64) -> i32 {
+    if device_id.is_null() {
+        return 0;
+    }
+    let Ok(device) = default_input() else {
         return 0;
     };
     // SAFETY: The caller provides one writable integer.
