@@ -243,6 +243,56 @@ fn the_playback_engine_renders_without_allocating() {
 }
 
 #[test]
+fn routing_a_block_performs_no_allocator_operations() {
+    use nylon::engine::graph::{GraphRenderer, NodeInput};
+    use nylon::routing::{Edge, EdgeKind, RoutingGraph};
+
+    let mut graph = RoutingGraph::new(3).unwrap();
+    graph.set_node_latency(0, 128).unwrap();
+    graph
+        .add_edge(Edge {
+            source: 0,
+            destination: 2,
+            kind: EdgeKind::Main,
+            gain: 1.0,
+        })
+        .unwrap();
+    graph
+        .add_edge(Edge {
+            source: 1,
+            destination: 2,
+            kind: EdgeKind::Sidechain,
+            gain: 0.5,
+        })
+        .unwrap();
+    let compiled = graph.compile().unwrap();
+    let mut renderer = GraphRenderer::new(&compiled, BLOCK).unwrap();
+    let source = vec![[0.25, -0.25]; BLOCK];
+    let inputs = [NodeInput {
+        node: 0,
+        samples: &source,
+    }];
+    let mut output = vec![[0.0; 2]; BLOCK];
+
+    let operations = measure(|| {
+        renderer
+            .render(&inputs, 2, &mut output, |_, main, sidechain, pre, post| {
+                pre.copy_from_slice(main);
+                for ((post, main), sidechain) in post.iter_mut().zip(main).zip(sidechain) {
+                    post[0] = main[0] + sidechain[0];
+                    post[1] = main[1] + sidechain[1];
+                }
+            })
+            .unwrap();
+    });
+
+    assert_eq!(
+        operations, 0,
+        "{operations} allocator operations while routing"
+    );
+}
+
+#[test]
 fn a_voice_bank_sounds_notes_without_allocating() {
     use nylon::engine::voice::{MAX_VOICES, Patch, VoiceBank};
 
