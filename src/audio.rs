@@ -14,6 +14,7 @@ pub mod alsa;
 #[cfg(target_os = "macos")]
 pub mod coreaudio;
 pub mod offline;
+pub mod recording;
 #[cfg(target_os = "windows")]
 pub mod wasapi;
 
