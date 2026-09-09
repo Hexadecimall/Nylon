@@ -14,6 +14,14 @@ pub struct DeviceConfig {
     pub kind: DeviceKind,
 }
 
+impl DeviceConfig {
+    /// Checks configuration without allocating processor storage.
+    pub fn validate(self, sample_rate: f32) -> Result<(), DeviceError> {
+        validate_sample_rate(sample_rate)?;
+        validate_kind(self.kind, sample_rate).map(|_| ())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DeviceKind {
     Utility {
@@ -88,45 +96,30 @@ impl DeviceChain {
         if configs.len() > MAX_DEVICES {
             return Err(DeviceError::Capacity);
         }
-        if !sample_rate.is_finite() || !(8_000.0..=192_000.0).contains(&sample_rate) {
-            return Err(DeviceError::InvalidSampleRate);
-        }
+        validate_sample_rate(sample_rate)?;
         let mut devices = Vec::new();
         devices
             .try_reserve_exact(configs.len())
             .map_err(|_| DeviceError::StorageCapacity)?;
         let mut delay_storage = 0_usize;
         for config in configs {
+            let delay_frames = validate_kind(config.kind, sample_rate)?;
             let processor = match config.kind {
                 DeviceKind::Utility {
                     gain_db,
                     width,
                     balance,
-                } => {
-                    if !finite_range(gain_db, -120.0, 24.0)
-                        || !finite_range(width, 0.0, 2.0)
-                        || !finite_range(balance, -1.0, 1.0)
-                    {
-                        return Err(DeviceError::InvalidParameter);
-                    }
-                    Processor::Utility {
-                        gain: db::to_linear(gain_db),
-                        width,
-                        balance,
-                    }
-                }
+                } => Processor::Utility {
+                    gain: db::to_linear(gain_db),
+                    width,
+                    balance,
+                },
                 DeviceKind::Equalizer {
                     kind,
                     frequency,
                     q,
                     gain_db,
                 } => {
-                    if !finite_range(frequency, 1.0, sample_rate * 0.4975)
-                        || !finite_range(q, 0.001, 100.0)
-                        || !finite_range(gain_db, -96.0, 96.0)
-                    {
-                        return Err(DeviceError::InvalidParameter);
-                    }
                     let coefficients =
                         Coefficients::design(kind, frequency, q, gain_db, sample_rate);
                     Processor::Equalizer {
@@ -137,27 +130,16 @@ impl DeviceChain {
                 DeviceKind::Compressor {
                     parameters,
                     external_sidechain,
-                } => {
-                    if !compressor_parameters_valid(parameters) {
-                        return Err(DeviceError::InvalidParameter);
-                    }
-                    Processor::Compressor {
-                        processor: Compressor::new(sample_rate, parameters),
-                        external_sidechain,
-                    }
-                }
+                } => Processor::Compressor {
+                    processor: Compressor::new(sample_rate, parameters),
+                    external_sidechain,
+                },
                 DeviceKind::StereoDelay {
                     delay_seconds,
                     feedback,
                     mix,
                 } => {
-                    if !finite_range(delay_seconds, 0.0, 10.0)
-                        || !finite_range(feedback, -0.99, 0.99)
-                        || !finite_range(mix, 0.0, 1.0)
-                    {
-                        return Err(DeviceError::InvalidParameter);
-                    }
-                    let frames = (delay_seconds * sample_rate).ceil() as usize + 2;
+                    let frames = delay_frames;
                     delay_storage = delay_storage
                         .checked_add(frames.saturating_mul(2))
                         .filter(|value| *value <= MAX_DELAY_STORAGE_FRAMES)
@@ -231,6 +213,54 @@ impl DeviceChain {
         for device in &mut self.devices {
             device.processor.reset();
         }
+    }
+}
+
+fn validate_sample_rate(sample_rate: f32) -> Result<(), DeviceError> {
+    if sample_rate.is_finite() && (8_000.0..=192_000.0).contains(&sample_rate) {
+        Ok(())
+    } else {
+        Err(DeviceError::InvalidSampleRate)
+    }
+}
+
+fn validate_kind(kind: DeviceKind, sample_rate: f32) -> Result<usize, DeviceError> {
+    match kind {
+        DeviceKind::Utility {
+            gain_db,
+            width,
+            balance,
+        } if finite_range(gain_db, -120.0, 24.0)
+            && finite_range(width, 0.0, 2.0)
+            && finite_range(balance, -1.0, 1.0) =>
+        {
+            Ok(0)
+        }
+        DeviceKind::Equalizer {
+            frequency,
+            q,
+            gain_db,
+            ..
+        } if finite_range(frequency, 1.0, sample_rate * 0.4975)
+            && finite_range(q, 0.001, 100.0)
+            && finite_range(gain_db, -96.0, 96.0) =>
+        {
+            Ok(0)
+        }
+        DeviceKind::Compressor { parameters, .. } if compressor_parameters_valid(parameters) => {
+            Ok(0)
+        }
+        DeviceKind::StereoDelay {
+            delay_seconds,
+            feedback,
+            mix,
+        } if finite_range(delay_seconds, 0.0, 10.0)
+            && finite_range(feedback, -0.99, 0.99)
+            && finite_range(mix, 0.0, 1.0) =>
+        {
+            Ok((delay_seconds * sample_rate).ceil() as usize + 2)
+        }
+        _ => Err(DeviceError::InvalidParameter),
     }
 }
 

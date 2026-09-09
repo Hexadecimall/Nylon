@@ -697,6 +697,23 @@ mod tests {
     }
 
     #[test]
+    fn a_library_that_is_present_lists_at_least_one_device() {
+        let Ok(backend) = AlsaBackend::new() else {
+            // Nothing to check on a machine without the library.
+            return;
+        };
+        let mut devices = [blank(); MAX_DEVICES];
+        let count = backend.devices(&mut devices).expect("enumeration failed");
+        // Every installation carries a configuration with at least the
+        // default and null devices in it.
+        assert!(
+            count > 0,
+            "the library is installed but reported no output devices"
+        );
+        assert!(backend.default_output().is_ok());
+    }
+
+    #[test]
     fn a_stream_renders_into_the_null_device() {
         let Ok(backend) = AlsaBackend::new() else {
             return;

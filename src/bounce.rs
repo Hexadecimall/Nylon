@@ -6,11 +6,12 @@
 
 use crate::audio::offline::{DEVICE, OfflineBackend};
 use crate::audio::{AudioError, Backend, Stream, StreamConfig};
+use crate::engine::device::DeviceConfig;
 use crate::engine::playback::{MAX_INSTRUMENTS, PlaybackEngine, Score};
 use crate::engine::schedule::ScheduledNote;
 use crate::media::{MediaError, timeline_from_project};
 use crate::project::Project;
-use crate::runtime::{playback_routing, state_from_snapshot};
+use crate::runtime::{playback_devices, playback_routing, state_from_snapshot};
 use crate::wave::{Format, WaveError, WaveWriter};
 use std::io::{Seek, Write};
 
@@ -176,8 +177,10 @@ pub fn render_wave<W: Write + Seek>(
     let (routing, output_node) = playback_routing(&snapshot).map_err(|_| {
         BounceError::Audio(AudioError::Host("project routing could not be compiled"))
     })?;
+    let devices = playback_devices(&snapshot);
+    let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
     if !publisher
-        .publish_routing(&routing, output_node)
+        .publish_routing_with_devices(&routing, output_node, &device_slices)
         .map_err(|_| {
             BounceError::Audio(AudioError::Host("project routing could not be prepared"))
         })?
@@ -236,6 +239,7 @@ fn prepare_score_range(score: &mut Score, start_beats: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::device::DeviceKind;
     use crate::project::{Command, MidiNote, TrackKind};
     use crate::wave;
     use std::io::Cursor;
@@ -361,6 +365,40 @@ mod tests {
         .peak_left;
 
         assert!((routed_peak / direct_peak - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn project_devices_process_the_offline_mix() {
+        let direct = project_with_note();
+        let direct_peak = render_wave(
+            &direct,
+            Cursor::new(Vec::new()),
+            Options::stereo(0.25, 48_000),
+        )
+        .unwrap()
+        .1
+        .peak_left;
+        let mut processed = project_with_note();
+        let track = processed.snapshot().tracks()[0].id();
+        processed
+            .apply(&[Command::AddDevice {
+                track,
+                kind: DeviceKind::Utility {
+                    gain_db: -6.020_6,
+                    width: 1.0,
+                    balance: 0.0,
+                },
+            }])
+            .unwrap();
+        let processed_peak = render_wave(
+            &processed,
+            Cursor::new(Vec::new()),
+            Options::stereo(0.25, 48_000),
+        )
+        .unwrap()
+        .1
+        .peak_left;
+        assert!((processed_peak / direct_peak - 0.5).abs() < 0.01);
     }
 
     #[test]

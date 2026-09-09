@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
 
 /// Largest number of routes stored in one project snapshot.
@@ -18,6 +19,30 @@ pub struct ClipId(pub(crate) u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RouteId(pub(crate) u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceId(pub(crate) u64);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Device {
+    pub(crate) id: DeviceId,
+    pub(crate) config: DeviceConfig,
+}
+
+impl Device {
+    pub fn id(&self) -> DeviceId {
+        self.id
+    }
+    pub fn enabled(&self) -> bool {
+        self.config.enabled
+    }
+    pub fn kind(&self) -> DeviceKind {
+        self.config.kind
+    }
+    pub fn config(&self) -> DeviceConfig {
+        self.config
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -177,6 +202,7 @@ pub struct Track {
     pub(crate) armed: bool,
     pub(crate) color_index: u8,
     pub(crate) latency_frames: u32,
+    pub(crate) devices: Vec<Device>,
     pub(crate) session_slots: Vec<Option<ClipId>>,
     pub(crate) arrangement: Vec<ArrangementPlacement>,
 }
@@ -211,6 +237,9 @@ impl Track {
     }
     pub fn latency_frames(&self) -> u32 {
         self.latency_frames
+    }
+    pub fn devices(&self) -> &[Device] {
+        &self.devices
     }
     pub fn arrangement(&self) -> &[ArrangementPlacement] {
         &self.arrangement
@@ -364,6 +393,23 @@ pub enum Command {
         id: TrackId,
         frames: u32,
     },
+    AddDevice {
+        track: TrackId,
+        kind: DeviceKind,
+    },
+    DeleteDevice(DeviceId),
+    MoveDevice {
+        id: DeviceId,
+        index: usize,
+    },
+    SetDeviceEnabled {
+        id: DeviceId,
+        enabled: bool,
+    },
+    SetDeviceKind {
+        id: DeviceId,
+        kind: DeviceKind,
+    },
     CreateRoute {
         source: TrackId,
         destination: TrackId,
@@ -481,6 +527,9 @@ pub enum ProjectError {
     TrackCapacity,
     InvalidRouting,
     MissingRoute,
+    InvalidDevice,
+    MissingDevice,
+    DeviceCapacity,
 }
 
 /// Control-thread state. Snapshots and history must never be destroyed in a
@@ -581,6 +630,7 @@ impl Project {
                         armed: false,
                         color_index: (snapshot.tracks.len() % 16) as u8,
                         latency_frames: 0,
+                        devices: Vec::new(),
                         session_slots: vec![None; snapshot.scenes.len()],
                         arrangement: Vec::new(),
                     });
@@ -628,6 +678,83 @@ impl Project {
                     snapshot
                         .compiled_routing()
                         .map_err(|_| ProjectError::InvalidRouting)?;
+                }
+                Command::AddDevice { track, kind } => {
+                    DeviceConfig {
+                        enabled: true,
+                        kind: *kind,
+                    }
+                    .validate(snapshot.sample_rate as f32)
+                    .map_err(|_| ProjectError::InvalidDevice)?;
+                    let target = snapshot.track_mut(*track)?;
+                    if target.devices.len() == MAX_DEVICES {
+                        return Err(ProjectError::DeviceCapacity);
+                    }
+                    let id = DeviceId(next_id);
+                    next_id = next_identifier(next_id)?;
+                    target.devices.push(Device {
+                        id,
+                        config: DeviceConfig {
+                            enabled: true,
+                            kind: *kind,
+                        },
+                    });
+                }
+                Command::DeleteDevice(id) => {
+                    let devices = snapshot
+                        .tracks
+                        .iter_mut()
+                        .find_map(|track| {
+                            track
+                                .devices
+                                .iter()
+                                .position(|device| device.id == *id)
+                                .map(|index| (&mut track.devices, index))
+                        })
+                        .ok_or(ProjectError::MissingDevice)?;
+                    devices.0.remove(devices.1);
+                }
+                Command::MoveDevice { id, index } => {
+                    let devices = snapshot
+                        .tracks
+                        .iter_mut()
+                        .find_map(|track| {
+                            track
+                                .devices
+                                .iter()
+                                .position(|device| device.id == *id)
+                                .map(|current| (&mut track.devices, current))
+                        })
+                        .ok_or(ProjectError::MissingDevice)?;
+                    if *index >= devices.0.len() {
+                        return Err(ProjectError::MissingDevice);
+                    }
+                    let device = devices.0.remove(devices.1);
+                    devices.0.insert(*index, device);
+                }
+                Command::SetDeviceEnabled { id, enabled } => {
+                    let device = snapshot
+                        .tracks
+                        .iter_mut()
+                        .flat_map(|track| &mut track.devices)
+                        .find(|device| device.id == *id)
+                        .ok_or(ProjectError::MissingDevice)?;
+                    device.config.enabled = *enabled;
+                }
+                Command::SetDeviceKind { id, kind } => {
+                    DeviceConfig {
+                        enabled: true,
+                        kind: *kind,
+                    }
+                    .validate(snapshot.sample_rate as f32)
+                    .map_err(|_| ProjectError::InvalidDevice)?;
+                    let device = snapshot
+                        .tracks
+                        .iter_mut()
+                        .flat_map(|track| &mut track.devices)
+                        .find(|device| device.id == *id)
+                        .ok_or(ProjectError::MissingDevice)?;
+                    device.config.kind = *kind;
                 }
                 Command::CreateRoute {
                     source,
@@ -679,6 +806,14 @@ impl Project {
                 }
                 Command::SetSampleRate(rate) => {
                     validate_rate(*rate)?;
+                    if snapshot
+                        .tracks
+                        .iter()
+                        .flat_map(|track| &track.devices)
+                        .any(|device| device.config.validate(*rate as f32).is_err())
+                    {
+                        return Err(ProjectError::InvalidDevice);
+                    }
                     snapshot.sample_rate = *rate;
                 }
                 Command::CreateScene { name } => {

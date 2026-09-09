@@ -1,8 +1,11 @@
 //! Versioned binary project documents and directory bundles.
 
+use crate::dsp::biquad::Kind as FilterKind;
+use crate::dsp::compressor::Parameters as CompressorParameters;
+use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
 use crate::project::{
-    self, ArrangementPlacement, AudioClip, ClipId, MidiClip, MidiNote, Project, Route, RouteId,
-    Scene, SceneId, Snapshot, Track, TrackId, TrackKind,
+    self, ArrangementPlacement, AudioClip, ClipId, Device, DeviceId, MidiClip, MidiNote, Project,
+    Route, RouteId, Scene, SceneId, Snapshot, Track, TrackId, TrackKind,
 };
 use crate::routing::EdgeKind;
 use std::collections::HashSet;
@@ -15,7 +18,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -66,6 +69,60 @@ impl Encoder {
             self.bytes(&track.latency_frames.to_le_bytes())?;
             self.count(track.name.len())?;
             self.bytes(track.name.as_bytes())?;
+            self.count(track.devices.len())?;
+            for device in &track.devices {
+                self.bytes(&device.id.0.to_le_bytes())?;
+                self.bytes(&[u8::from(device.config.enabled)])?;
+                match device.config.kind {
+                    DeviceKind::Utility {
+                        gain_db,
+                        width,
+                        balance,
+                    } => {
+                        self.bytes(&[0])?;
+                        for value in [gain_db, width, balance] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::Equalizer {
+                        kind,
+                        frequency,
+                        q,
+                        gain_db,
+                    } => {
+                        self.bytes(&[1, filter_code(kind)])?;
+                        for value in [frequency, q, gain_db] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::Compressor {
+                        parameters,
+                        external_sidechain,
+                    } => {
+                        self.bytes(&[2, u8::from(external_sidechain)])?;
+                        for value in [
+                            parameters.threshold_db,
+                            parameters.ratio,
+                            parameters.knee_db,
+                            parameters.attack_seconds,
+                            parameters.release_seconds,
+                            parameters.makeup_db,
+                        ] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::StereoDelay {
+                        delay_seconds,
+                        feedback,
+                        mix,
+                    } => {
+                        self.bytes(&[3])?;
+                        for value in [delay_seconds, feedback, mix] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                }
+            }
         }
         self.count(snapshot.scenes.len())?;
         for scene in &snapshot.scenes {
@@ -196,6 +253,71 @@ impl<'a> Decoder<'a> {
             let name = std::str::from_utf8(self.bytes(length)?)
                 .map_err(|_| PersistenceError::InvalidFormat)?;
             project::validate_name(name).map_err(|_| PersistenceError::InvalidFormat)?;
+            let mut devices = Vec::new();
+            if version >= 5 {
+                let device_count = self.count()?;
+                if device_count > MAX_DEVICES {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                devices.reserve(device_count);
+                for _ in 0..device_count {
+                    let device_id = u64::from_le_bytes(self.array()?);
+                    let enabled = match self.array::<1>()?[0] {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(PersistenceError::InvalidFormat),
+                    };
+                    if device_id == 0 || device_id >= next_id || !ids.insert(device_id) {
+                        return Err(PersistenceError::InvalidFormat);
+                    }
+                    let kind = match self.array::<1>()?[0] {
+                        0 => DeviceKind::Utility {
+                            gain_db: f32::from_le_bytes(self.array()?),
+                            width: f32::from_le_bytes(self.array()?),
+                            balance: f32::from_le_bytes(self.array()?),
+                        },
+                        1 => DeviceKind::Equalizer {
+                            kind: filter_from_code(self.array::<1>()?[0])
+                                .ok_or(PersistenceError::InvalidFormat)?,
+                            frequency: f32::from_le_bytes(self.array()?),
+                            q: f32::from_le_bytes(self.array()?),
+                            gain_db: f32::from_le_bytes(self.array()?),
+                        },
+                        2 => {
+                            let external_sidechain = match self.array::<1>()?[0] {
+                                0 => false,
+                                1 => true,
+                                _ => return Err(PersistenceError::InvalidFormat),
+                            };
+                            DeviceKind::Compressor {
+                                parameters: CompressorParameters {
+                                    threshold_db: f32::from_le_bytes(self.array()?),
+                                    ratio: f32::from_le_bytes(self.array()?),
+                                    knee_db: f32::from_le_bytes(self.array()?),
+                                    attack_seconds: f32::from_le_bytes(self.array()?),
+                                    release_seconds: f32::from_le_bytes(self.array()?),
+                                    makeup_db: f32::from_le_bytes(self.array()?),
+                                },
+                                external_sidechain,
+                            }
+                        }
+                        3 => DeviceKind::StereoDelay {
+                            delay_seconds: f32::from_le_bytes(self.array()?),
+                            feedback: f32::from_le_bytes(self.array()?),
+                            mix: f32::from_le_bytes(self.array()?),
+                        },
+                        _ => return Err(PersistenceError::InvalidFormat),
+                    };
+                    let config = DeviceConfig { enabled, kind };
+                    config
+                        .validate(sample_rate as f32)
+                        .map_err(|_| PersistenceError::InvalidFormat)?;
+                    devices.push(Device {
+                        id: DeviceId(device_id),
+                        config,
+                    });
+                }
+            }
             tracks.push(Track {
                 id: TrackId(id),
                 name: name.into(),
@@ -207,6 +329,7 @@ impl<'a> Decoder<'a> {
                 armed: flags & 4 != 0,
                 color_index,
                 latency_frames,
+                devices,
                 session_slots: Vec::new(),
                 arrangement: Vec::new(),
             });
@@ -498,6 +621,33 @@ impl<'a> Decoder<'a> {
             .compiled_routing()
             .map_err(|_| PersistenceError::InvalidFormat)?;
         Ok(snapshot)
+    }
+}
+
+fn filter_code(kind: FilterKind) -> u8 {
+    match kind {
+        FilterKind::LowPass => 0,
+        FilterKind::HighPass => 1,
+        FilterKind::BandPass => 2,
+        FilterKind::Notch => 3,
+        FilterKind::AllPass => 4,
+        FilterKind::Peaking => 5,
+        FilterKind::LowShelf => 6,
+        FilterKind::HighShelf => 7,
+    }
+}
+
+fn filter_from_code(code: u8) -> Option<FilterKind> {
+    match code {
+        0 => Some(FilterKind::LowPass),
+        1 => Some(FilterKind::HighPass),
+        2 => Some(FilterKind::BandPass),
+        3 => Some(FilterKind::Notch),
+        4 => Some(FilterKind::AllPass),
+        5 => Some(FilterKind::Peaking),
+        6 => Some(FilterKind::LowShelf),
+        7 => Some(FilterKind::HighShelf),
+        _ => None,
     }
 }
 

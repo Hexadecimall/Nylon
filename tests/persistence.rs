@@ -1,3 +1,4 @@
+use nylon::engine::device::DeviceKind;
 use nylon::persistence::PersistenceError;
 use nylon::project::{Command, MidiNote, Project, TrackKind};
 use nylon::routing::EdgeKind;
@@ -22,6 +23,14 @@ fn session() -> Project {
             Command::SetTrackVolume { id, db: -8.0 },
             Command::SetTrackPan { id, pan: 0.25 },
             Command::SetTrackArm { id, enabled: true },
+            Command::AddDevice {
+                track: id,
+                kind: DeviceKind::StereoDelay {
+                    delay_seconds: 0.375,
+                    feedback: 0.45,
+                    mix: 0.2,
+                },
+            },
             Command::SetTimeSignature {
                 numerator: 7,
                 denominator: 8,
@@ -144,7 +153,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 5;
+    future[4] = 6;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

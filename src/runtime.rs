@@ -166,11 +166,7 @@ impl AudioRuntime {
     pub fn is_open(&self) -> bool {
         #[cfg(platform_audio)]
         {
-            // A device that has been unplugged is not open, whatever the
-            // stream was last asked to do.
-            self.stream
-                .as_ref()
-                .is_some_and(|stream| stream.is_running() && !stream.is_lost())
+            self.stream.as_ref().is_some_and(Stream::is_running)
         }
         #[cfg(not(platform_audio))]
         {
@@ -188,20 +184,6 @@ impl AudioRuntime {
         #[cfg(not(platform_audio))]
         {
             None
-        }
-    }
-
-    /// Whether the device was taken away while the stream was open. The
-    /// runtime has to be closed and opened again on another device.
-    #[must_use]
-    pub fn is_device_lost(&self) -> bool {
-        #[cfg(platform_audio)]
-        {
-            self.stream.as_ref().is_some_and(Stream::is_lost)
-        }
-        #[cfg(not(platform_audio))]
-        {
-            false
         }
     }
 

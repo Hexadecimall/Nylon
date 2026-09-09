@@ -1,3 +1,4 @@
+use nylon::engine::device::DeviceKind;
 use nylon::project::{Command, MidiNote, Project, ProjectError, TrackKind};
 use nylon::routing::EdgeKind;
 
@@ -439,4 +440,69 @@ fn routing_edits_are_validated_undoable_and_use_stable_track_ids() {
     assert_eq!(project.snapshot().routes().len(), 1);
     assert!(project.undo());
     assert_eq!(project.snapshot().routes().len(), 2);
+}
+
+#[test]
+fn device_chains_are_validated_ordered_and_undoable() {
+    let mut project = Project::new();
+    project
+        .apply(&[Command::CreateTrack {
+            name: "Bus".into(),
+            kind: TrackKind::Audio,
+        }])
+        .unwrap();
+    let track = project.snapshot().tracks()[0].id();
+    project
+        .apply(&[
+            Command::AddDevice {
+                track,
+                kind: DeviceKind::Utility {
+                    gain_db: -6.0,
+                    width: 1.0,
+                    balance: 0.0,
+                },
+            },
+            Command::AddDevice {
+                track,
+                kind: DeviceKind::StereoDelay {
+                    delay_seconds: 0.25,
+                    feedback: 0.4,
+                    mix: 0.3,
+                },
+            },
+        ])
+        .unwrap();
+    let snapshot = project.snapshot();
+    let utility = snapshot.tracks()[0].devices()[0].id();
+    let delay = snapshot.tracks()[0].devices()[1].id();
+    project
+        .apply(&[
+            Command::MoveDevice {
+                id: delay,
+                index: 0,
+            },
+            Command::SetDeviceEnabled {
+                id: utility,
+                enabled: false,
+            },
+        ])
+        .unwrap();
+    assert_eq!(project.snapshot().tracks()[0].devices()[0].id(), delay);
+    assert!(!project.snapshot().tracks()[0].devices()[1].enabled());
+    assert!(project.undo());
+    assert_eq!(project.snapshot().tracks()[0].devices()[0].id(), utility);
+
+    let before = project.snapshot();
+    assert_eq!(
+        project.apply(&[Command::SetDeviceKind {
+            id: utility,
+            kind: DeviceKind::StereoDelay {
+                delay_seconds: 1.0,
+                feedback: 1.0,
+                mix: 0.5,
+            },
+        }]),
+        Err(ProjectError::InvalidDevice)
+    );
+    assert_eq!(*project.snapshot(), *before);
 }
