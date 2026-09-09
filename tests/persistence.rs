@@ -1,5 +1,6 @@
 use nylon::persistence::PersistenceError;
 use nylon::project::{Command, MidiNote, Project, TrackKind};
+use nylon::routing::EdgeKind;
 
 fn session() -> Project {
     let mut project = Project::new();
@@ -63,6 +64,17 @@ fn session() -> Project {
         ])
         .unwrap();
     let audio_track = project.snapshot().tracks()[1].id();
+    project
+        .apply(&[
+            Command::SetTrackLatency { id, frames: 384 },
+            Command::CreateRoute {
+                source: id,
+                destination: audio_track,
+                kind: EdgeKind::Sidechain,
+                gain: 0.75,
+            },
+        ])
+        .unwrap();
     project
         .apply(&[Command::CreateAudioClip {
             track: audio_track,
@@ -132,7 +144,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 4;
+    future[4] = 5;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrackId(pub(crate) u64);
 
@@ -10,6 +12,9 @@ pub struct SceneId(pub(crate) u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClipId(pub(crate) u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RouteId(pub(crate) u64);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
@@ -168,6 +173,7 @@ pub struct Track {
     pub(crate) solo: bool,
     pub(crate) armed: bool,
     pub(crate) color_index: u8,
+    pub(crate) latency_frames: u32,
     pub(crate) session_slots: Vec<Option<ClipId>>,
     pub(crate) arrangement: Vec<ArrangementPlacement>,
 }
@@ -200,8 +206,38 @@ impl Track {
     pub fn color_index(&self) -> u8 {
         self.color_index
     }
+    pub fn latency_frames(&self) -> u32 {
+        self.latency_frames
+    }
     pub fn arrangement(&self) -> &[ArrangementPlacement] {
         &self.arrangement
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Route {
+    pub(crate) id: RouteId,
+    pub(crate) source: TrackId,
+    pub(crate) destination: TrackId,
+    pub(crate) kind: EdgeKind,
+    pub(crate) gain: f32,
+}
+
+impl Route {
+    pub fn id(&self) -> RouteId {
+        self.id
+    }
+    pub fn source(&self) -> TrackId {
+        self.source
+    }
+    pub fn destination(&self) -> TrackId {
+        self.destination
+    }
+    pub fn kind(&self) -> EdgeKind {
+        self.kind
+    }
+    pub fn gain(&self) -> f32 {
+        self.gain
     }
 }
 
@@ -215,6 +251,7 @@ pub struct Snapshot {
     pub(crate) scenes: Vec<Scene>,
     pub(crate) clips: Vec<MidiClip>,
     pub(crate) audio_clips: Vec<AudioClip>,
+    pub(crate) routes: Vec<Route>,
 }
 
 impl Snapshot {
@@ -238,6 +275,34 @@ impl Snapshot {
     }
     pub fn audio_clips(&self) -> &[AudioClip] {
         &self.audio_clips
+    }
+    pub fn routes(&self) -> &[Route] {
+        &self.routes
+    }
+    pub fn compiled_routing(&self) -> Result<CompiledRouting, RoutingError> {
+        let mut graph = RoutingGraph::new(self.tracks.len())?;
+        for (index, track) in self.tracks.iter().enumerate() {
+            graph.set_node_latency(index as u16, track.latency_frames)?;
+        }
+        for route in &self.routes {
+            let source = self
+                .tracks
+                .iter()
+                .position(|track| track.id == route.source)
+                .ok_or(RoutingError::InvalidNode)?;
+            let destination = self
+                .tracks
+                .iter()
+                .position(|track| track.id == route.destination)
+                .ok_or(RoutingError::InvalidNode)?;
+            graph.add_edge(Edge {
+                source: source as u16,
+                destination: destination as u16,
+                kind: route.kind,
+                gain: route.gain,
+            })?;
+        }
+        graph.compile()
     }
     pub fn clip_at(&self, track: usize, scene: usize) -> Option<&MidiClip> {
         let id = self.tracks.get(track)?.session_slots.get(scene)?.as_ref()?;
@@ -292,6 +357,17 @@ pub enum Command {
         id: TrackId,
         index: u8,
     },
+    SetTrackLatency {
+        id: TrackId,
+        frames: u32,
+    },
+    CreateRoute {
+        source: TrackId,
+        destination: TrackId,
+        kind: EdgeKind,
+        gain: f32,
+    },
+    DeleteRoute(RouteId),
     SetTimeSignature {
         numerator: u16,
         denominator: u16,
@@ -399,6 +475,9 @@ pub enum ProjectError {
     InvalidNote,
     MissingNote,
     MissingPlacement,
+    TrackCapacity,
+    InvalidRouting,
+    MissingRoute,
 }
 
 /// Control-thread state. Snapshots and history must never be destroyed in a
@@ -437,6 +516,7 @@ impl Project {
                 scenes,
                 clips: Vec::new(),
                 audio_clips: Vec::new(),
+                routes: Vec::new(),
             }),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -480,6 +560,9 @@ impl Project {
                 }
                 Command::CreateTrack { name, kind } => {
                     validate_name(name)?;
+                    if snapshot.tracks.len() == crate::mixer::MAX_TRACKS {
+                        return Err(ProjectError::TrackCapacity);
+                    }
                     let id = TrackId(next_id);
                     next_id = next_id
                         .checked_add(1)
@@ -494,6 +577,7 @@ impl Project {
                         solo: false,
                         armed: false,
                         color_index: (snapshot.tracks.len() % 16) as u8,
+                        latency_frames: 0,
                         session_slots: vec![None; snapshot.scenes.len()],
                         arrangement: Vec::new(),
                     });
@@ -505,6 +589,9 @@ impl Project {
                         .position(|track| track.id == *id)
                         .ok_or(ProjectError::MissingTrack)?;
                     snapshot.tracks.remove(index);
+                    snapshot
+                        .routes
+                        .retain(|route| route.source != *id && route.destination != *id);
                     remove_unreferenced_clips(&mut snapshot);
                 }
                 Command::RenameTrack { id, name } => {
@@ -532,6 +619,52 @@ impl Project {
                         return Err(ProjectError::InvalidColor);
                     }
                     snapshot.track_mut(*id)?.color_index = *index;
+                }
+                Command::SetTrackLatency { id, frames } => {
+                    snapshot.track_mut(*id)?.latency_frames = *frames;
+                    snapshot
+                        .compiled_routing()
+                        .map_err(|_| ProjectError::InvalidRouting)?;
+                }
+                Command::CreateRoute {
+                    source,
+                    destination,
+                    kind,
+                    gain,
+                } => {
+                    if snapshot.routes.len() == crate::routing::MAX_EDGES
+                        || !gain.is_finite()
+                        || !(0.0..=4.0).contains(gain)
+                        || snapshot.routes.iter().any(|route| {
+                            route.source == *source
+                                && route.destination == *destination
+                                && route.kind == *kind
+                        })
+                    {
+                        return Err(ProjectError::InvalidRouting);
+                    }
+                    snapshot.track_mut(*source)?;
+                    snapshot.track_mut(*destination)?;
+                    let id = RouteId(next_id);
+                    next_id = next_identifier(next_id)?;
+                    snapshot.routes.push(Route {
+                        id,
+                        source: *source,
+                        destination: *destination,
+                        kind: *kind,
+                        gain: *gain,
+                    });
+                    snapshot
+                        .compiled_routing()
+                        .map_err(|_| ProjectError::InvalidRouting)?;
+                }
+                Command::DeleteRoute(id) => {
+                    let index = snapshot
+                        .routes
+                        .iter()
+                        .position(|route| route.id == *id)
+                        .ok_or(ProjectError::MissingRoute)?;
+                    snapshot.routes.remove(index);
                 }
                 Command::SetTimeSignature {
                     numerator,

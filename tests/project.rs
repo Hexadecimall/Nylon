@@ -1,4 +1,5 @@
 use nylon::project::{Command, MidiNote, Project, ProjectError, TrackKind};
+use nylon::routing::EdgeKind;
 
 #[test]
 fn grouped_commands_undo_as_one_and_snapshots_stay_immutable() {
@@ -382,4 +383,60 @@ fn invalid_clip_edits_leave_the_snapshot_unchanged() {
         Err(ProjectError::InvalidClipLength)
     );
     assert_eq!(*project.snapshot(), *before);
+}
+
+#[test]
+fn routing_edits_are_validated_undoable_and_use_stable_track_ids() {
+    let mut project = Project::new();
+    for name in ["Source A", "Source B", "Bus"] {
+        project
+            .apply(&[Command::CreateTrack {
+                name: name.into(),
+                kind: TrackKind::Audio,
+            }])
+            .unwrap();
+    }
+    let snapshot = project.snapshot();
+    let a = snapshot.tracks()[0].id();
+    let b = snapshot.tracks()[1].id();
+    let bus = snapshot.tracks()[2].id();
+    project
+        .apply(&[
+            Command::SetTrackLatency { id: a, frames: 128 },
+            Command::SetTrackLatency { id: b, frames: 32 },
+            Command::CreateRoute {
+                source: a,
+                destination: bus,
+                kind: EdgeKind::Main,
+                gain: 1.0,
+            },
+            Command::CreateRoute {
+                source: b,
+                destination: bus,
+                kind: EdgeKind::SendPostFader,
+                gain: 0.5,
+            },
+        ])
+        .unwrap();
+    let routed = project.snapshot();
+    assert_eq!(routed.routes().len(), 2);
+    assert_eq!(routed.tracks()[0].latency_frames(), 128);
+    assert_eq!(routed.compiled_routing().unwrap().edge_delay(1), Some(96));
+
+    let before = project.snapshot();
+    assert_eq!(
+        project.apply(&[Command::CreateRoute {
+            source: bus,
+            destination: a,
+            kind: EdgeKind::Main,
+            gain: 1.0,
+        }]),
+        Err(ProjectError::InvalidRouting)
+    );
+    assert_eq!(*project.snapshot(), *before);
+
+    project.apply(&[Command::DeleteTrack(a)]).unwrap();
+    assert_eq!(project.snapshot().routes().len(), 1);
+    assert!(project.undo());
+    assert_eq!(project.snapshot().routes().len(), 2);
 }

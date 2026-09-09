@@ -1,9 +1,10 @@
 //! Versioned binary project documents and directory bundles.
 
 use crate::project::{
-    self, ArrangementPlacement, AudioClip, ClipId, MidiClip, MidiNote, Project, Scene, SceneId,
-    Snapshot, Track, TrackId, TrackKind,
+    self, ArrangementPlacement, AudioClip, ClipId, MidiClip, MidiNote, Project, Route, RouteId,
+    Scene, SceneId, Snapshot, Track, TrackId, TrackKind,
 };
+use crate::routing::EdgeKind;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -14,7 +15,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -62,6 +63,7 @@ impl Encoder {
             self.bytes(&[track.kind.code(), flags, track.color_index])?;
             self.bytes(&track.volume_db.to_le_bytes())?;
             self.bytes(&track.pan.to_le_bytes())?;
+            self.bytes(&track.latency_frames.to_le_bytes())?;
             self.count(track.name.len())?;
             self.bytes(track.name.as_bytes())?;
         }
@@ -99,6 +101,19 @@ impl Encoder {
             self.bytes(clip.name.as_bytes())?;
             self.count(clip.media_path.len())?;
             self.bytes(clip.media_path.as_bytes())?;
+        }
+        self.count(snapshot.routes.len())?;
+        for route in &snapshot.routes {
+            self.bytes(&route.id.0.to_le_bytes())?;
+            self.bytes(&route.source.0.to_le_bytes())?;
+            self.bytes(&route.destination.0.to_le_bytes())?;
+            self.bytes(&[match route.kind {
+                EdgeKind::Main => 0,
+                EdgeKind::SendPreFader => 1,
+                EdgeKind::SendPostFader => 2,
+                EdgeKind::Sidechain => 3,
+            }])?;
+            self.bytes(&route.gain.to_le_bytes())?;
         }
         for track in &snapshot.tracks {
             self.count(track.session_slots.len())?;
@@ -162,6 +177,11 @@ impl<'a> Decoder<'a> {
             let kind = TrackKind::from_code(kind).ok_or(PersistenceError::InvalidFormat)?;
             let volume_db = f64::from_le_bytes(self.array()?);
             let pan = f64::from_le_bytes(self.array()?);
+            let latency_frames = if version >= 4 {
+                u32::from_le_bytes(self.array()?)
+            } else {
+                0
+            };
             if flags & !7 != 0
                 || color_index >= 16
                 || project::validate_volume(volume_db).is_err()
@@ -186,6 +206,7 @@ impl<'a> Decoder<'a> {
                 solo: flags & 2 != 0,
                 armed: flags & 4 != 0,
                 color_index,
+                latency_frames,
                 session_slots: Vec::new(),
                 arrangement: Vec::new(),
             });
@@ -200,6 +221,7 @@ impl<'a> Decoder<'a> {
                 scenes: Vec::new(),
                 clips: Vec::new(),
                 audio_clips: Vec::new(),
+                routes: Vec::new(),
             }));
         }
 
@@ -349,6 +371,44 @@ impl<'a> Decoder<'a> {
             }
         }
 
+        let mut routes = Vec::new();
+        if version >= 4 {
+            let route_count = self.count()?;
+            if route_count > crate::routing::MAX_EDGES {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            for _ in 0..route_count {
+                let id = u64::from_le_bytes(self.array()?);
+                let source = TrackId(u64::from_le_bytes(self.array()?));
+                let destination = TrackId(u64::from_le_bytes(self.array()?));
+                let kind = match self.array::<1>()?[0] {
+                    0 => EdgeKind::Main,
+                    1 => EdgeKind::SendPreFader,
+                    2 => EdgeKind::SendPostFader,
+                    3 => EdgeKind::Sidechain,
+                    _ => return Err(PersistenceError::InvalidFormat),
+                };
+                let gain = f32::from_le_bytes(self.array()?);
+                if id == 0
+                    || id >= next_id
+                    || !ids.insert(id)
+                    || !tracks.iter().any(|track| track.id == source)
+                    || !tracks.iter().any(|track| track.id == destination)
+                    || !gain.is_finite()
+                    || !(0.0..=4.0).contains(&gain)
+                {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                routes.push(Route {
+                    id: RouteId(id),
+                    source,
+                    destination,
+                    kind,
+                    gain,
+                });
+            }
+        }
+
         for track in &mut tracks {
             let slot_count = self.count()?;
             if slot_count != scenes.len() {
@@ -423,7 +483,7 @@ impl<'a> Decoder<'a> {
         }) {
             return Err(PersistenceError::InvalidFormat);
         }
-        Ok(Arc::new(Snapshot {
+        let snapshot = Arc::new(Snapshot {
             tempo,
             numerator,
             denominator,
@@ -432,7 +492,12 @@ impl<'a> Decoder<'a> {
             scenes,
             clips,
             audio_clips,
-        }))
+            routes,
+        });
+        snapshot
+            .compiled_routing()
+            .map_err(|_| PersistenceError::InvalidFormat)?;
+        Ok(snapshot)
     }
 }
 
