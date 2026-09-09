@@ -55,7 +55,7 @@ typedef struct NylonRecordingReport {
 } NylonRecordingReport;
 
 /* Track device kinds: 0 utility, 1 equalizer, 2 compressor, 3 stereo delay,
- * 4 limiter, 5 saturator.
+ * 4 limiter, 5 saturator, 6 gate.
  * Parameter layouts:
  * utility: gain dB, width, balance
  * equalizer: filter kind 0..7, frequency, Q, gain dB
@@ -63,7 +63,9 @@ typedef struct NylonRecordingReport {
  * stereo delay: delay seconds, feedback, mix
  * limiter: ceiling dB, release seconds, lookahead seconds
  * saturator: drive dB, output dB, mix, curve 0..3, oversampling 0..2,
- * DC filter flag */
+ * DC filter flag
+ * gate: threshold dB, hysteresis dB, attack seconds, hold seconds,
+ * release seconds, sidechain flag */
 typedef struct NylonTrackDevice {
     int kind;
     int enabled;

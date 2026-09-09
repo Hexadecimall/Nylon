@@ -5,6 +5,7 @@ use crate::audio::{DeviceId, DeviceInfo, Direction, Name, Rates};
 use crate::bounce::{Options as BounceOptions, render_wave};
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::compressor::Parameters as CompressorParameters;
+use crate::dsp::gate::Parameters as GateParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
 use crate::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
@@ -374,6 +375,20 @@ fn track_device_kind(record: NylonTrackDevice) -> Option<TrackDeviceKind> {
                 },
             },
         }),
+        6 => Some(TrackDeviceKind::Gate {
+            parameters: GateParameters {
+                threshold_db: parameters[0],
+                hysteresis_db: parameters[1],
+                attack_seconds: parameters[2],
+                hold_seconds: parameters[3],
+                release_seconds: parameters[4],
+                external_sidechain: match parameters[5] {
+                    0.0 => false,
+                    1.0 => true,
+                    _ => return None,
+                },
+            },
+        }),
         _ => None,
     }
 }
@@ -464,6 +479,17 @@ fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice
                     SaturatorOversampling::Four => 2.0,
                 },
                 f32::from(u8::from(parameters.dc_filter)),
+            ]);
+        }
+        TrackDeviceKind::Gate { parameters } => {
+            record.kind = 6;
+            record.parameters[..6].copy_from_slice(&[
+                parameters.threshold_db,
+                parameters.hysteresis_db,
+                parameters.attack_seconds,
+                parameters.hold_seconds,
+                parameters.release_seconds,
+                f32::from(u8::from(parameters.external_sidechain)),
             ]);
         }
     }

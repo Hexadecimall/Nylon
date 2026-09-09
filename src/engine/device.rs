@@ -4,6 +4,7 @@ use crate::dsp::biquad::{Biquad, Coefficients, Kind as FilterKind};
 use crate::dsp::compressor::{Compressor, Parameters as CompressorParameters};
 use crate::dsp::db;
 use crate::dsp::delay::DelayLine;
+use crate::dsp::gate::{Gate, Parameters as GateParameters};
 use crate::dsp::limiter::{Limiter, Parameters as LimiterParameters};
 use crate::dsp::saturator::{Parameters as SaturatorParameters, Saturator};
 
@@ -63,6 +64,9 @@ pub enum DeviceKind {
     Saturator {
         parameters: SaturatorParameters,
     },
+    Gate {
+        parameters: GateParameters,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +107,9 @@ enum Processor {
     },
     Saturator {
         processor: Saturator,
+    },
+    Gate {
+        processor: Gate,
     },
 }
 
@@ -197,6 +204,9 @@ impl DeviceChain {
                 }
                 DeviceKind::Saturator { parameters } => Processor::Saturator {
                     processor: Saturator::new(sample_rate, parameters),
+                },
+                DeviceKind::Gate { parameters } => Processor::Gate {
+                    processor: Gate::new(sample_rate, parameters),
                 },
             };
             devices.push(Device {
@@ -312,6 +322,15 @@ fn validate_kind(kind: DeviceKind, sample_rate: f32) -> Result<usize, DeviceErro
         {
             Ok(0)
         }
+        DeviceKind::Gate { parameters }
+            if finite_range(parameters.threshold_db, -96.0, 0.0)
+                && finite_range(parameters.hysteresis_db, 0.0, 48.0)
+                && finite_range(parameters.attack_seconds, 0.0, 10.0)
+                && finite_range(parameters.hold_seconds, 0.0, 10.0)
+                && finite_range(parameters.release_seconds, 0.0, 30.0) =>
+        {
+            Ok(0)
+        }
         _ => Err(DeviceError::InvalidParameter),
     }
 }
@@ -383,6 +402,7 @@ impl Processor {
                     (frame[0], frame[1]) = processor.process_stereo(frame[0], frame[1]);
                 }
             }
+            Self::Gate { processor } => processor.process_block(audio, sidechain),
         }
     }
 
@@ -408,6 +428,7 @@ impl Processor {
                 processor.reset();
             }
             Self::Saturator { processor } => processor.reset(),
+            Self::Gate { processor } => processor.reset(),
             Self::Utility { .. } => {}
         }
     }
@@ -601,6 +622,32 @@ mod tests {
         let mut second = [[0.0; 2]; 16];
         chain.process(&input, &[], &mut second).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn gate_uses_the_chain_sidechain_and_reset_closes_it() {
+        let config = DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Gate {
+                parameters: GateParameters {
+                    threshold_db: -20.0,
+                    hysteresis_db: 6.0,
+                    attack_seconds: 0.0,
+                    hold_seconds: 0.0,
+                    release_seconds: 0.0,
+                    external_sidechain: true,
+                },
+            },
+        };
+        let mut chain = DeviceChain::new(&[config], RATE).unwrap();
+        let input = [[0.01, -0.02]; 2];
+        let sidechain = [[1.0, 0.5], [0.0, 0.0]];
+        let mut output = [[0.0; 2]; 2];
+        chain.process(&input, &sidechain, &mut output).unwrap();
+        assert_eq!(output, [[0.01, -0.02], [0.0, -0.0]]);
+        chain.reset();
+        chain.process(&input, &[[0.0; 2]; 2], &mut output).unwrap();
+        assert_eq!(output, [[0.0, -0.0]; 2]);
     }
 
     #[test]

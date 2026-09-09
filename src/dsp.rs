@@ -14,6 +14,7 @@ pub mod compressor;
 pub mod db;
 pub mod delay;
 pub mod env;
+pub mod gate;
 pub mod limiter;
 pub mod meter;
 pub mod osc;

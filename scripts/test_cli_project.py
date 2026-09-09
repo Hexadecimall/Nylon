@@ -78,9 +78,20 @@ def main():
             "outputDb": -4,
             "oversampling": "4x",
         }, saturator
+        call("add-device", "0", "gate", "-32", "8", "0.002", "0.04", "0.15", "on")
+        gate = call("track-devices", "0")["devices"][3]
+        assert gate["kind"] == "gate", gate
+        gate_parameters = gate["parameters"]
+        assert gate_parameters["externalSidechain"] is True, gate
+        assert gate_parameters["thresholdDb"] == -32, gate
+        assert gate_parameters["hysteresisDb"] == 8, gate
+        assert abs(gate_parameters["attackSeconds"] - 0.002) < 1e-7, gate
+        assert abs(gate_parameters["holdSeconds"] - 0.04) < 1e-7, gate
+        assert abs(gate_parameters["releaseSeconds"] - 0.15) < 1e-7, gate
         call("add-device", "0", "delay", "0.2", "1", "0.5", succeeds=False)
         call("add-device", "0", "limiter", "-0.3", "0.1", "0.1", succeeds=False)
         call("add-device", "0", "saturator", "9", "-4", "0.75", "bad", "4x", "on", succeeds=False)
+        call("add-device", "0", "gate", "-32", "8", "0.002", "0.04", "31", "on", succeeds=False)
         call("import-wave", "1", "0", str(source), "120")
         clips = call("clips", "1")["clips"]
         assert clips[0]["kind"] == "audio" and clips[0]["mediaPath"].startswith("Media/"), clips

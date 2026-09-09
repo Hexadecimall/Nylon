@@ -76,7 +76,8 @@ enum class DeviceKind : int {
     Compressor = 2,
     StereoDelay = 3,
     Limiter = 4,
-    Saturator = 5
+    Saturator = 5,
+    Gate = 6
 };
 
 enum class FilterKind : int {

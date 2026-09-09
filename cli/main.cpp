@@ -113,6 +113,7 @@ QString deviceKindName(nylon::DeviceKind kind)
     case nylon::DeviceKind::StereoDelay: return "delay";
     case nylon::DeviceKind::Limiter: return "limiter";
     case nylon::DeviceKind::Saturator: return "saturator";
+    case nylon::DeviceKind::Gate: return "gate";
     }
     return "utility";
 }
@@ -203,6 +204,17 @@ bool parseTrackDevice(
         device.parameters[5] = dcFilter ? 1.0F : 0.0F;
         return true;
     }
+    if (kind == "gate" && positional.size() == kindIndex + 7) {
+        device.kind = nylon::DeviceKind::Gate;
+        bool sidechain = false;
+        for (int index = 0; index < 5; ++index) {
+            if (!parameter(positional[kindIndex + 1 + index], device.parameters[index]))
+                return false;
+        }
+        if (!flag(positional[kindIndex + 6], sidechain)) return false;
+        device.parameters[5] = sidechain ? 1.0F : 0.0F;
+        return true;
+    }
     return false;
 }
 
@@ -244,6 +256,14 @@ QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
             {"dcFilter", device.parameters[5] == 1.0F}};
         break;
     }
+    case nylon::DeviceKind::Gate:
+        parameters = {{"thresholdDb", device.parameters[0]},
+            {"hysteresisDb", device.parameters[1]},
+            {"attackSeconds", device.parameters[2]},
+            {"holdSeconds", device.parameters[3]},
+            {"releaseSeconds", device.parameters[4]},
+            {"externalSidechain", device.parameters[5] == 1.0F}};
+        break;
     }
     return {{"index", static_cast<double>(index)}, {"kind", deviceKindName(device.kind)},
         {"enabled", device.enabled}, {"parameters", parameters}};

@@ -2,6 +2,7 @@
 
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::compressor::Parameters as CompressorParameters;
+use crate::dsp::gate::Parameters as GateParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
 use crate::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
@@ -23,7 +24,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 7;
+const VERSION: u32 = 8;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -153,6 +154,18 @@ impl Encoder {
                             u8::from(parameters.dc_filter),
                         ])?;
                         for value in [parameters.drive_db, parameters.output_db, parameters.mix] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::Gate { parameters } => {
+                        self.bytes(&[6, u8::from(parameters.external_sidechain)])?;
+                        for value in [
+                            parameters.threshold_db,
+                            parameters.hysteresis_db,
+                            parameters.attack_seconds,
+                            parameters.hold_seconds,
+                            parameters.release_seconds,
+                        ] {
                             self.bytes(&value.to_le_bytes())?;
                         }
                     }
@@ -375,6 +388,23 @@ impl<'a> Decoder<'a> {
                                     curve,
                                     oversampling,
                                     dc_filter,
+                                },
+                            }
+                        }
+                        6 if version >= 8 => {
+                            let external_sidechain = match self.array::<1>()?[0] {
+                                0 => false,
+                                1 => true,
+                                _ => return Err(PersistenceError::InvalidFormat),
+                            };
+                            DeviceKind::Gate {
+                                parameters: GateParameters {
+                                    threshold_db: f32::from_le_bytes(self.array()?),
+                                    hysteresis_db: f32::from_le_bytes(self.array()?),
+                                    attack_seconds: f32::from_le_bytes(self.array()?),
+                                    hold_seconds: f32::from_le_bytes(self.array()?),
+                                    release_seconds: f32::from_le_bytes(self.array()?),
+                                    external_sidechain,
                                 },
                             }
                         }

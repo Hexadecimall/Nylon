@@ -8,6 +8,7 @@ use nylon::dsp::biquad::{Biquad, Coefficients, Kind};
 use nylon::dsp::compressor::{Compressor, Parameters as CompressorParameters};
 use nylon::dsp::delay::DelayLine;
 use nylon::dsp::env::{Envelope, Settings};
+use nylon::dsp::gate::{Gate, Parameters as GateParameters};
 use nylon::dsp::limiter::{Limiter, Parameters as LimiterParameters};
 use nylon::dsp::meter::Meter;
 use nylon::dsp::osc::{Oscillator, Shape};
@@ -71,6 +72,16 @@ fn saturating_a_block_performs_no_allocator_operations() {
     let operations = measure(|| saturator.process_block(&mut left, &mut right));
     assert_eq!(operations, 0, "{operations} allocator operations");
     assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
+}
+
+#[test]
+fn gating_a_block_performs_no_allocator_operations() {
+    let mut gate = Gate::new(RATE, GateParameters::default());
+    let mut audio = vec![[0.25_f32, -0.1_f32]; BLOCK];
+    let sidechain = vec![[0.5_f32, 0.5_f32]; BLOCK];
+    let operations = measure(|| gate.process_block(&mut audio, &sidechain));
+    assert_eq!(operations, 0, "{operations} allocator operations");
+    assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
 }
 
 #[test]

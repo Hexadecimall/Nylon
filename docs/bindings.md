@@ -91,6 +91,7 @@ nylon-control --project Session.nylon add-device 0 compressor -18 4 6 0.01 0.1 0
 nylon-control --project Session.nylon add-device 0 delay 0.25 0.4 0.3
 nylon-control --project Session.nylon add-device 0 limiter -0.3 0.1 0.005
 nylon-control --project Session.nylon add-device 0 saturator 9 -4 0.75 diode 4x on
+nylon-control --project Session.nylon add-device 0 gate -32 8 0.002 0.04 0.15 on
 nylon-control --project Session.nylon track-devices 0
 nylon-control --project Session.nylon set-device-enabled 0 1 off
 nylon-control --project Session.nylon move-device 0 1 0

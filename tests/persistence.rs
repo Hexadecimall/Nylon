@@ -1,3 +1,4 @@
+use nylon::dsp::gate::Parameters as GateParameters;
 use nylon::dsp::limiter::Parameters as LimiterParameters;
 use nylon::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
@@ -36,6 +37,22 @@ fn session() -> Project {
                         delay_seconds: 0.375,
                         feedback: 0.45,
                         mix: 0.2,
+                    },
+                },
+            },
+            Command::AddDevice {
+                track: id,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Gate {
+                        parameters: GateParameters {
+                            threshold_db: -32.0,
+                            hysteresis_db: 8.0,
+                            attack_seconds: 0.002,
+                            hold_seconds: 0.04,
+                            release_seconds: 0.15,
+                            external_sidechain: true,
+                        },
                     },
                 },
             },
@@ -190,7 +207,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 8;
+    future[4] = 9;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)
