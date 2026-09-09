@@ -32,6 +32,7 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QElapsedTimer>
 #include <QtTest>
 
 #include <cmath>
@@ -79,6 +80,8 @@ private slots:
     void trackHeaderCarriesStateAndVolume();
     void theWorkspaceHoldsItsLayoutAtTheSmallestWindow();
     void theTransportFollowsTheAudioEngine();
+    void aClipDrawnInTheEditorIsHeardOnPlayback();
+    void theRulerScrubsAndACategoryOpensInItsOwnWindow();
     void detailClipPageHostsThePianoRoll();
 
 private:
@@ -112,7 +115,7 @@ void TestViews::emptyStateWhenNoTracks()
     const QImage img = w.sessionView()->viewport()->grab().toImage();
     QVERIFY(!img.isNull());
     // Inside the rounded panel outline the grid shows the panel color.
-    QCOMPARE(pixelAt(img, 12, img.height() / img.devicePixelRatio() - 12),
+    QCOMPARE(pixelAt(img, 12, static_cast<int>(img.height() / img.devicePixelRatio()) - 12),
         m_themes.theme().color(QStringLiteral("panel")));
 }
 
@@ -610,7 +613,9 @@ void TestViews::browserShowsLibraryCategories()
     probe.write("RIFF");
     probe.close();
     b->reload();
-    QTRY_COMPARE_WITH_TIMEOUT(b->visibleEntryCount(), 1, 3000);
+    // The file model lists a folder on its own thread, which takes longer
+    // on a loaded machine than the three seconds this used to allow.
+    QTRY_COMPARE_WITH_TIMEOUT(b->visibleEntryCount(), 1, 10000);
     QVERIFY(!b->isShowingEmptyState());
     b->searchField()->setText(QStringLiteral("snare"));
     QTRY_VERIFY_WITH_TIMEOUT(b->isShowingEmptyState(), 3000);
@@ -920,6 +925,125 @@ void TestViews::theTransportFollowsTheAudioEngine()
     QTRY_COMPARE_WITH_TIMEOUT(bridge.positionBeats(), 0.0, 2000);
     QVERIFY(bridge.closeAudio());
     QVERIFY(!bridge.isTransportAvailable());
+}
+
+void TestViews::aClipDrawnInTheEditorIsHeardOnPlayback()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    QVERIFY(bridge.addTrack(ProjectBridge::TrackKind::Midi));
+    w.showArrangement();
+    QCoreApplication::processEvents();
+
+    // A double-click in a lane makes a clip and puts it on the timeline.
+    emit w.arrangementView()->clipRequested(0, 0.0, 4.0);
+    QCoreApplication::processEvents();
+    QCOMPARE(bridge.arrangementClipCount(0), 1ull);
+    BeatRange placed {};
+    QVERIFY(bridge.arrangementClipRange(0, 0, placed));
+    QCOMPARE(placed.startBeats, 0.0);
+    QCOMPARE(placed.lengthBeats, 4.0);
+    // The editor opens on the new clip, which is where notes are drawn.
+    QCOMPARE(w.detail()->selectedClipTrack(), 0);
+    const int scene = w.detail()->selectedClipScene();
+    QVERIFY(scene >= 0);
+
+    // Four notes, one per beat.
+    for (int step = 0; step < 4; ++step) {
+        MidiNote note {};
+        note.startBeats = step;
+        note.lengthBeats = 0.9;
+        note.pitch = static_cast<unsigned char>(60 + step);
+        note.velocity = 100;
+        QVERIFY(bridge.addClipNote(0, static_cast<quint64>(scene), note));
+    }
+    QCOMPARE(bridge.clipNoteCount(0, static_cast<quint64>(scene)), 4ull);
+
+    if (!ProjectBridge::hasAudioOutput()) {
+        return;
+    }
+    QVERIFY(bridge.play());
+    QTRY_VERIFY_WITH_TIMEOUT(bridge.isPlaying(), 2000);
+
+    // The point of all of it: the track makes sound.
+    bool heard = false;
+    const QElapsedTimer started = [] { QElapsedTimer t; t.start(); return t; }();
+    while (started.elapsed() < 3000 && !heard) {
+        Levels levels {};
+        if (bridge.trackLevels(0, levels) && levels.peakLeft > 0.001f) {
+            heard = true;
+        }
+        QTest::qWait(20);
+    }
+    QVERIFY2(heard, "the clip produced no signal on its track");
+
+    Levels master {};
+    QVERIFY(bridge.masterLevels(master));
+    QVERIFY2(master.peakLeft > 0.001f || master.peakRight > 0.001f,
+        "the track was heard but the master was silent");
+    bridge.stop();
+    bridge.closeAudio();
+}
+
+void TestViews::theRulerScrubsAndACategoryOpensInItsOwnWindow()
+{
+    ProjectBridge bridge;
+    MainWindow w(&bridge, &m_themes);
+    w.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w));
+    w.newProject();
+    bridge.addTrack();
+    w.showArrangement();
+    QCoreApplication::processEvents();
+
+    ArrangementView* view = w.arrangementView();
+    const int start = view->barX(0);
+    QVERIFY(start >= 0);
+    const int perBar = m_themes.theme().metricInt(QStringLiteral("arrangement.pixels_per_bar"));
+
+    // Pressing the ruler locates, and holding drags the playhead with the
+    // pointer rather than jumping once.
+    QSignalSpy located(view, &ArrangementView::locateRequested);
+    QTest::mousePress(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(start + perBar, 4));
+    QCOMPARE(view->playheadBeats(), 4.0);
+    QTest::mouseMove(view->viewport(), QPoint(start + perBar * 2, 4));
+    QCOMPARE(view->playheadBeats(), 8.0);
+    QTest::mouseMove(view->viewport(), QPoint(start - perBar, 4));
+    QCOMPARE(view->playheadBeats(), 0.0);
+    QTest::mouseRelease(view->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(start, 4));
+    QVERIFY(located.count() >= 3);
+    // Once released the pointer no longer drags it.
+    QTest::mouseMove(view->viewport(), QPoint(start + perBar * 3, 4));
+    QCOMPARE(view->playheadBeats(), 0.0);
+
+    // A category opens in a window of its own, and asking twice raises the
+    // one that is already open.
+    const QString category = BrowserPanel::categories().first();
+    const auto windowsNamed = [&category] {
+        int count = 0;
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (widget->isWindow() && widget->windowTitle().startsWith(category)) {
+                ++count;
+            }
+        }
+        return count;
+    };
+    QCOMPARE(windowsNamed(), 0);
+    emit w.browser()->categoryDetached(category);
+    QCoreApplication::processEvents();
+    QCOMPARE(windowsNamed(), 1);
+    emit w.browser()->categoryDetached(category);
+    QCoreApplication::processEvents();
+    QCOMPARE(windowsNamed(), 1);
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (widget->isWindow() && widget->windowTitle().startsWith(category)) {
+            widget->close();
+        }
+    }
+    QCoreApplication::processEvents();
 }
 
 void TestViews::detailClipPageHostsThePianoRoll()
