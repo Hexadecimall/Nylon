@@ -1,12 +1,17 @@
 # Architecture
 
-## Desktop boundary
+## Front end boundary
 
-The desktop frontend uses Qt. Rust owns the engine, transport, DSP, project state,
-and plugin hosting. Qt owns windows, input, layout, and presentation. A narrow
-native interface carries edits to the control-thread command bus and returns
-immutable display state. The audio callback does not call Qt or enter its event
-loop. GUI code must not retain pointers into mutable render storage.
+The core owns the engine, transport, signal processing, project state, and
+plugin hosting. A front end owns windows, input, layout, and presentation. A
+narrow interface carries edits to the control-thread command bus and returns
+immutable display state. The audio callback never calls into a front end or
+its event loop, and front end code must not retain pointers into mutable
+render storage.
+
+A Qt front end was written against this boundary and is parked in
+`failedAttempts/`. The boundary itself is unchanged: it is what any front end,
+including a future one, links against.
 
 ## Render kernel
 

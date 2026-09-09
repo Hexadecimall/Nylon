@@ -53,6 +53,11 @@ per project C function, `std::string` for names, and `nylon::MidiNote` /
 range as stereo 24-bit WAVE and returns its frame count and peaks. Audio clip
 imports copy decoded WAVE sources into the bundle's `Media/` directory before
 the undoable clip edit is accepted.
+`Project::isModified` reports edits since the last primary save.
+`Project::autosave` atomically writes a recovery sidecar inside an opened or
+saved bundle. `Project::recoveryAvailable`, `Project::recover`, and
+`Project::discardRecovery` support startup recovery. Saving recovered state
+replaces the primary document and removes the sidecar.
 `nylon::AudioEngine` owns the platform
 stream and provides device enumeration, transport control, synchronization,
 configuration, dropout, and meter access. Consumers include the directory with
@@ -64,9 +69,7 @@ carries the core library and the C header directory.
 
 ## Command line
 
-`nylon-control --endpoint NAME COMMAND` sends transport, edit, view, and
-window commands to a running desktop process. Without an endpoint, it can
-operate directly on the library:
+`nylon-control COMMAND` operates directly on the library:
 
 ```text
 nylon-control --project Session.nylon new
@@ -79,6 +82,8 @@ nylon-control --project Session.nylon place-clip 1 0 0 16
 nylon-control --project Session.nylon set-audio-gain 1 0 -3
 nylon-control --project Session.nylon set-tempo 128
 nylon-control --project Session.nylon bounce mix.wav 0 64 48000
+nylon-control --project Session.nylon recovery-status
+nylon-control --project Session.nylon recover
 nylon-control devices
 ```
 

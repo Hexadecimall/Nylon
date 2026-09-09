@@ -27,7 +27,6 @@ Panels, controls, menus, clip slots, and the window itself use rounded
 corners, with the radii, panel gaps, and padding tokenized in the theme
 files (`radius`, `radius.small`, `panel.gap`, `panel.padding`). The window
 is frameless with a custom title bar that carries the menus and the window
-controls. This replaces the flat, square layout of the first desktop
-iteration; density and proportions still follow a session/arrangement
-workstation.
+controls. This described the parked Qt front end and is kept as a record of
+what it settled on, not as a rule the core follows.
 

@@ -1,10 +1,13 @@
 # Nylon
 
-Native digital audio workstation under development for macOS, Windows, and Linux.
-The C++ frontend uses Qt Widgets. Rust provides the project command history,
-sample clock, stereo gain rendering, sample-offset parameter events, and bounded
-thread communication. The frontend links through a C interface without a Rust Qt
-binding. Audio device playback and project persistence are not implemented yet.
+Native digital audio workstation core for macOS, Windows, and Linux, written in
+Rust with C and C++ interfaces. It carries the project model and its command
+history, the mixer, the transport, the instruments and note scheduling, device
+playback, and project persistence. A front end links it through the C interface
+without a Rust binding of its own.
+
+A Qt front end was written against it and is parked in `failedAttempts/`. The
+work now is the core.
 
 ## Build
 
@@ -24,25 +27,19 @@ cargo bench --locked --bench render
 cargo deny check
 ```
 
-## Desktop
+## Command line
 
-Install Qt 6 with the Widgets and Test components, a C++17 compiler, and CMake.
-Use the installed native Qt package. Build the core before the desktop target:
+`cli/` holds a headless tool that drives the core: it creates and opens
+project bundles, edits tracks and clips, imports audio, bounces, and lists
+output devices. It needs Qt 6 Core for its argument and reply handling, a
+C++17 compiler, and CMake.
 
 ```sh
 cargo build --locked --release
-cmake -S desktop -B target/desktop -DCMAKE_BUILD_TYPE=Release
-cmake --build target/desktop --config Release --parallel 2
-ctest --test-dir target/desktop -C Release --output-on-failure
+cmake -S cli -B target/cli -DCMAKE_BUILD_TYPE=Release
+cmake --build target/cli --parallel 2
+ctest --test-dir target/cli --output-on-failure
 ```
-
-If Qt is not in the package search path, pass its runtime-discovered prefix as
-`CMAKE_PREFIX_PATH` when configuring CMake. macOS produces `Nylon.app` in the
-desktop build directory. Windows and Linux produce the native executable.
-
-The initial desktop supports tempo edits, adding audio tracks, undo/redo,
-Session/Arrangement navigation, and four themes. Clip editing and playback are
-not connected yet.
 
 `cargo-deny` is a separate development prerequisite. CI installs version 0.20.2.
 The native compiler wrapper maps build and toolchain locations to relative

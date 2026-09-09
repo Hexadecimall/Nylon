@@ -6,9 +6,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  QT_VERSION: '6.8.3'
-
 jobs:
   macos-universal:
     name: macOS universal
@@ -19,38 +16,33 @@ jobs:
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       - run: python3 -B scripts/bootstrap.py
-      - name: Build core for both architectures
+      - name: Build the core for both architectures
         run: |
           cargo build --locked --release --target aarch64-apple-darwin
           cargo build --locked --release --target x86_64-apple-darwin
-          mkdir -p target/release
-          lipo -create -output target/release/libnylon.a \
+      - name: Join them into one library
+        run: |
+          mkdir -p target/package/lib
+          lipo -create -output target/package/lib/libnylon.a \
             target/aarch64-apple-darwin/release/libnylon.a \
             target/x86_64-apple-darwin/release/libnylon.a
-          lipo -info target/release/libnylon.a
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          cache: true
-      - name: Configure
-        run: >
-          cmake -S desktop -B target/desktop -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
-      - run: cmake --build target/desktop --parallel 3
-      - run: ctest --test-dir target/desktop --output-on-failure --timeout 600
+          lipo -create -output target/package/lib/libnylon.dylib \
+            target/aarch64-apple-darwin/release/libnylon.dylib \
+            target/x86_64-apple-darwin/release/libnylon.dylib
+          lipo -info target/package/lib/libnylon.a target/package/lib/libnylon.dylib
       - name: Verify both architectures are present
         run: |
-          lipo -info target/desktop/Nylon.app/Contents/MacOS/Nylon | tee /dev/stderr | grep -q 'x86_64 arm64\|arm64 x86_64'
-      - name: Install portable layout
-        run: cmake --install target/desktop --prefix target/package
-      - name: Verify the installed application starts
+          lipo -info target/package/lib/libnylon.a | tee /dev/stderr \
+            | grep -q 'x86_64 arm64\|arm64 x86_64'
+      - name: Collect the headers and the build rules
         run: |
-          cd "${{ runner.temp }}"
-          "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon" --tracks 2 --screenshot "${{ runner.temp }}/installed.png"
-          lipo -info "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon"
+          mkdir -p target/package/include target/package/cmake
+          cp bindings/c/nylon.h target/package/include/
+          cp bindings/cpp/nylon.hpp target/package/include/
+          cp bindings/cmake/NylonCore.cmake target/package/cmake/
+          cp LICENSE target/package/
       - name: Package
-        run: ditto -c -k --keepParent target/package/Nylon target/nylon-macos-universal.zip
+        run: ditto -c -k --keepParent target/package target/nylon-macos-universal.zip
       - uses: actions/upload-artifact@v4
         with:
           name: nylon-macos-universal
@@ -71,23 +63,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: python3 -B scripts/bootstrap.py
-      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev
       - run: cargo build --locked --release
-      - run: cmake -S desktop -B target/desktop -DCMAKE_BUILD_TYPE=Release
-      - run: cmake --build target/desktop --parallel 2
-      - run: ctest --test-dir target/desktop --output-on-failure --timeout 600
-      - name: Install portable layout
-        run: cmake --install target/desktop --prefix target/package
-      - name: Verify the installed application starts
-        # The portable layout ships no offscreen plugin; the headless smoke
-        # test borrows it from the system Qt.
+      - name: Collect the library, the headers and the build rules
         run: |
-          plugins="$(qtpaths6 --plugin-dir)"
-          cd "${{ runner.temp }}"
-          QT_QPA_PLATFORM=offscreen QT_PLUGIN_PATH="$plugins" \
-            "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon" --tracks 2 --screenshot "${{ runner.temp }}/installed.png"
+          mkdir -p target/package/lib target/package/include target/package/cmake
+          cp target/release/libnylon.a target/package/lib/
+          cp target/release/libnylon.so target/package/lib/
+          cp bindings/c/nylon.h target/package/include/
+          cp bindings/cpp/nylon.hpp target/package/include/
+          cp bindings/cmake/NylonCore.cmake target/package/cmake/
+          cp LICENSE target/package/
+          file target/package/lib/libnylon.so
       - name: Package
-        run: tar -C target/package -czf target/nylon-linux-${{ matrix.arch }}.tar.gz Nylon
+        run: tar -C target/package -czf target/nylon-linux-${{ matrix.arch }}.tar.gz .
       - uses: actions/upload-artifact@v4
         with:
           name: nylon-linux-${{ matrix.arch }}
@@ -101,14 +89,10 @@ jobs:
         include:
           - runner: windows-2025
             arch: x64
-            qt_arch: win64_msvc2022_64
-            qt_dir: msvc2022_64
-            cmake_platform: x64
+            target: x86_64-pc-windows-msvc
           - runner: windows-11-arm
             arch: arm64
-            qt_arch: win64_msvc2022_arm64_cross_compiled
-            qt_dir: msvc2022_arm64
-            cmake_platform: ARM64
+            target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -116,72 +100,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python3 -B scripts/bootstrap.py
-      - name: Install Qt
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Collect the library, the headers and the build rules
         run: |
-          pip install aqtinstall
-          aqt install-qt windows desktop ${{ env.QT_VERSION }} win64_msvc2022_64 -O "${{ runner.temp }}/qt"
-          if [ "${{ matrix.qt_arch }}" != "win64_msvc2022_64" ]; then
-            aqt install-qt windows desktop ${{ env.QT_VERSION }} ${{ matrix.qt_arch }} -O "${{ runner.temp }}/qt"
-          fi
-      - name: Put the Qt runtime on PATH
-        # Test executables load Qt DLLs from PATH; without this Windows
-        # blocks on a missing-DLL dialog and every test times out.
-        run: |
-          echo "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin" >> "$GITHUB_PATH"
-          echo "${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64/bin" >> "$GITHUB_PATH"
-      - run: cargo build --locked --release
-      - name: Locate the target kit's qtpaths
-        # windeployqt resolves the kit through qtpaths and looks for a
-        # qtpaths.bat beside itself, which an aqt-installed kit does not
-        # have, so the real one is located and passed explicitly.
-        run: |
-          bin="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/bin"
-          qtpaths=""
-          for candidate in qtpaths.bat qtpaths6.bat qtpaths.exe qtpaths6.exe; do
-            if [ -f "$bin/$candidate" ]; then
-              qtpaths="$bin/$candidate"
-              break
-            fi
-          done
-          if [ -z "$qtpaths" ]; then
-            echo "no qtpaths found in $bin" >&2
-            ls "$bin" >&2
-            exit 1
-          fi
-          echo "using $qtpaths"
-          echo "NYLON_QTPATHS=$qtpaths" >> "$GITHUB_ENV"
-      - name: Configure
-        run: >
-          cmake -S desktop -B target/desktop -A ${{ matrix.cmake_platform }}
-          -DCMAKE_PREFIX_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}"
-          -DQT_HOST_PATH="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64"
-          -DNYLON_WINDEPLOYQT="${{ runner.temp }}/qt/${{ env.QT_VERSION }}/msvc2022_64/bin/windeployqt.exe"
-          -DNYLON_WINDEPLOYQT_QTPATHS="$NYLON_QTPATHS"
-      - run: cmake --build target/desktop --config Release --parallel 2
-      - run: ctest --test-dir target/desktop -C Release --output-on-failure --timeout 600
-      - name: Show Qt test logs
-        if: failure()
-        run: |
-          for f in target/desktop/Testing/qt-*.txt; do
-            echo "===== $f"
-            cat "$f"
-          done
-      - name: Install portable layout
-        run: cmake --install target/desktop --config Release --prefix target/package
-      - name: Verify the installed application starts
-        run: |
-          cd "${{ runner.temp }}"
-          "$GITHUB_WORKSPACE/target/package/Nylon/Bin/Nylon.exe" --tracks 2 --screenshot "${{ runner.temp }}/installed.png"
-        env:
-          # The portable layout ships only the windows platform plugin; the
-          # headless smoke test borrows offscreen from the Qt kit.
-          QT_QPA_PLATFORM: offscreen
-          QT_PLUGIN_PATH: ${{ runner.temp }}/qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}/plugins
+          mkdir -p target/package/lib target/package/include target/package/cmake
+          cp target/${{ matrix.target }}/release/nylon.lib target/package/lib/
+          cp target/${{ matrix.target }}/release/nylon.dll target/package/lib/
+          cp target/${{ matrix.target }}/release/nylon.dll.lib target/package/lib/
+          cp bindings/c/nylon.h target/package/include/
+          cp bindings/cpp/nylon.hpp target/package/include/
+          cp bindings/cmake/NylonCore.cmake target/package/cmake/
+          cp LICENSE target/package/
+      - name: Package
+        run: 7z a target/nylon-windows-${{ matrix.arch }}.zip ./target/package/*
       - uses: actions/upload-artifact@v4
         with:
           name: nylon-windows-${{ matrix.arch }}
-          path: target/package/Nylon
+          path: target/nylon-windows-${{ matrix.arch }}.zip
