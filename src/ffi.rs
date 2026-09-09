@@ -25,6 +25,7 @@ use crate::plugin::Catalog as PluginCatalog;
 use crate::plugin::clap::{
     Instance as ClapInstance, NoteEvent as ClapNoteEvent, ParameterEvent as ClapParameterEvent,
 };
+use crate::plugin::worker::Client as ClapWorker;
 use crate::project::{
     AutomationCurve, AutomationParameter, AutomationPoint, ClipId, Command, MidiNote, Project,
     SceneId, TrackId, TrackKind,
@@ -4107,4 +4108,229 @@ pub unsafe extern "C" fn nylon_clap_instance_take_requests(instance: *const Clap
         | (u32::from(requests.latency_changed) << 6)
         | (u32::from(requests.state_dirty) << 7)
         | (u32::from(requests.note_ports_changed) << 8)
+}
+
+/// # Safety
+/// All strings must be terminated and readable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_open(
+    executable: *const c_char,
+    path: *const c_char,
+    identifier: *const c_char,
+    sample_rate: f64,
+    max_frames: u32,
+) -> *mut ClapWorker {
+    if executable.is_null() || path.is_null() || identifier.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: The caller supplies terminated strings.
+    let (Ok(executable), Ok(path), Ok(identifier)) = (unsafe {
+        (
+            CStr::from_ptr(executable).to_str(),
+            CStr::from_ptr(path).to_str(),
+            CStr::from_ptr(identifier).to_str(),
+        )
+    }) else {
+        return std::ptr::null_mut();
+    };
+    ClapWorker::spawn(
+        executable,
+        std::path::Path::new(path),
+        identifier,
+        sample_rate,
+        max_frames as usize,
+    )
+    .map(Box::new)
+    .map_or(std::ptr::null_mut(), Box::into_raw)
+}
+
+/// # Safety
+/// The handle must be null or returned by `nylon_clap_worker_open` and not freed yet.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_free(worker: *mut ClapWorker) {
+    if !worker.is_null() {
+        // SAFETY: Ownership transfers back exactly once.
+        drop(unsafe { Box::from_raw(worker) });
+    }
+}
+
+/// # Safety
+/// The handle and buffers must remain live and exclusive. Audio regions contain
+/// `frames` values. Event regions contain the corresponding number of records.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_process_stereo(
+    worker: *mut ClapWorker,
+    input_left: *const f32,
+    input_right: *const f32,
+    output_left: *mut f32,
+    output_right: *mut f32,
+    frames: u32,
+    parameter_events: *const ClapParameterEvent,
+    parameter_event_count: u32,
+    note_events: *const ClapNoteEvent,
+    note_event_count: u32,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    let Some(worker) = (unsafe { worker.as_mut() }) else {
+        return 0;
+    };
+    if output_left.is_null()
+        || output_right.is_null()
+        || frames == 0
+        || (input_left.is_null() != input_right.is_null())
+        || (parameter_events.is_null() && parameter_event_count != 0)
+        || (note_events.is_null() && note_event_count != 0)
+    {
+        return 0;
+    }
+    let frames = frames as usize;
+    let input = if input_left.is_null() {
+        None
+    } else {
+        // SAFETY: The caller supplies two readable regions containing frames samples.
+        Some(unsafe {
+            (
+                std::slice::from_raw_parts(input_left, frames),
+                std::slice::from_raw_parts(input_right, frames),
+            )
+        })
+    };
+    let parameter_events = if parameter_event_count == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller supplies parameter_event_count readable records.
+        unsafe { std::slice::from_raw_parts(parameter_events, parameter_event_count as usize) }
+    };
+    let note_events = if note_event_count == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller supplies note_event_count readable records.
+        unsafe { std::slice::from_raw_parts(note_events, note_event_count as usize) }
+    };
+    // SAFETY: The caller supplies two writable regions containing frames samples.
+    let (output_left, output_right) = unsafe {
+        (
+            std::slice::from_raw_parts_mut(output_left, frames),
+            std::slice::from_raw_parts_mut(output_right, frames),
+        )
+    };
+    worker
+        .process_stereo(
+            input,
+            output_left,
+            output_right,
+            parameter_events,
+            note_events,
+        )
+        .is_ok()
+        .into()
+}
+
+/// # Safety
+/// The handle must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_input_note_ports(worker: *const ClapWorker) -> u32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { worker.as_ref() }.map_or(0, ClapWorker::input_note_ports)
+}
+
+/// # Safety
+/// The handle must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_input_audio_ports(worker: *const ClapWorker) -> u32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { worker.as_ref() }.map_or(0, ClapWorker::input_audio_ports)
+}
+
+/// # Safety
+/// The handle must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_parameter_count(worker: *const ClapWorker) -> u64 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { worker.as_ref() }.map_or(0, |worker| worker.parameters().len() as u64)
+}
+
+/// # Safety
+/// The handle must remain live and info must point to one writable record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_parameter_info(
+    worker: *const ClapWorker,
+    index: u64,
+    info: *mut NylonClapParameterInfo,
+) -> i32 {
+    // SAFETY: Handle and output validity are required by the interface.
+    let (Some(worker), Some(info)) = (unsafe { worker.as_ref() }, unsafe { info.as_mut() }) else {
+        return 0;
+    };
+    let Some(parameter) = usize::try_from(index)
+        .ok()
+        .and_then(|index| worker.parameters().get(index))
+    else {
+        return 0;
+    };
+    *info = NylonClapParameterInfo::default();
+    info.identifier = parameter.identifier;
+    info.flags = parameter.flags;
+    info.minimum = parameter.minimum;
+    info.maximum = parameter.maximum;
+    info.default_value = parameter.default_value;
+    write_fixed_text(&parameter.name, &mut info.name);
+    write_fixed_text(&parameter.module, &mut info.module);
+    1
+}
+
+/// # Safety
+/// The handle must remain live and frames must point to writable storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_latency(
+    worker: *const ClapWorker,
+    frames: *mut u32,
+) -> i32 {
+    // SAFETY: Handle and output validity are required by the interface.
+    let (Some(worker), Some(frames)) = (unsafe { worker.as_ref() }, unsafe { frames.as_mut() })
+    else {
+        return 0;
+    };
+    *frames = worker.latency_frames();
+    1
+}
+
+/// # Safety
+/// The handle must remain live and exclusive. The returned state belongs to
+/// the caller and must be released with `nylon_clap_state_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_save_state(worker: *mut ClapWorker) -> *mut Vec<u8> {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { worker.as_mut() }
+        .and_then(|worker| worker.save_state().ok())
+        .map(Box::new)
+        .map_or(std::ptr::null_mut(), Box::into_raw)
+}
+
+/// # Safety
+/// The handle must remain live and exclusive. Bytes must be null when length
+/// is zero or point to length readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_worker_load_state(
+    worker: *mut ClapWorker,
+    bytes: *const u8,
+    length: u64,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    let Some(worker) = (unsafe { worker.as_mut() }) else {
+        return 0;
+    };
+    let Ok(length) = usize::try_from(length) else {
+        return 0;
+    };
+    if bytes.is_null() && length != 0 {
+        return 0;
+    }
+    let bytes = if length == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller supplies length readable bytes.
+        unsafe { std::slice::from_raw_parts(bytes, length) }
+    };
+    worker.load_state(bytes).is_ok().into()
 }

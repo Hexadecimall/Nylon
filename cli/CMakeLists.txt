@@ -67,5 +67,10 @@ add_test(NAME cli_server COMMAND "${Python3_EXECUTABLE}"
 add_test(NAME plugin_worker COMMAND "${Python3_EXECUTABLE}"
     "${NYLON_REPO_ROOT}/scripts/test_plugin_worker.py" "${NYLON_PLUGIN_WORKER}"
     "$<TARGET_FILE:nylon_clap_fixture>" "$<TARGET_FILE:nylon_clap_crash_fixture>")
+add_executable(test_clap_worker tests/test_clap_worker.cpp)
+target_link_libraries(test_clap_worker PRIVATE nyloncpp)
+add_test(NAME cpp_clap_worker COMMAND test_clap_worker
+    "${NYLON_PLUGIN_WORKER}" "$<TARGET_FILE:nylon_clap_fixture>")
 set_tests_properties(cli_server PROPERTIES TIMEOUT 20)
 set_tests_properties(plugin_worker PROPERTIES TIMEOUT 20)
+set_tests_properties(cpp_clap_worker PROPERTIES TIMEOUT 20)

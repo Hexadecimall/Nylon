@@ -2,6 +2,7 @@
 
 pub mod clap;
 pub mod probe;
+pub mod worker;
 
 use std::collections::HashSet;
 use std::fs;

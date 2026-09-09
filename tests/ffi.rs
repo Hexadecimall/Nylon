@@ -134,6 +134,45 @@ fn null_handles_are_rejected() {
         assert_eq!(nylon_clap_instance_reset(std::ptr::null_mut()), 0);
         assert_eq!(nylon_clap_instance_take_requests(std::ptr::null()), 0);
         nylon_clap_instance_free(std::ptr::null_mut());
+        assert!(
+            nylon_clap_worker_open(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                48_000.0,
+                256,
+            )
+            .is_null()
+        );
+        assert_eq!(
+            nylon_clap_worker_process_stereo(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            ),
+            0
+        );
+        assert_eq!(nylon_clap_worker_input_note_ports(std::ptr::null()), 0);
+        assert_eq!(nylon_clap_worker_input_audio_ports(std::ptr::null()), 0);
+        assert_eq!(nylon_clap_worker_parameter_count(std::ptr::null()), 0);
+        assert_eq!(
+            nylon_clap_worker_parameter_info(std::ptr::null(), 0, &mut parameter),
+            0
+        );
+        assert_eq!(nylon_clap_worker_latency(std::ptr::null(), &mut latency), 0);
+        assert!(nylon_clap_worker_save_state(std::ptr::null_mut()).is_null());
+        assert_eq!(
+            nylon_clap_worker_load_state(std::ptr::null_mut(), std::ptr::null(), 0),
+            0
+        );
+        nylon_clap_worker_free(std::ptr::null_mut());
         let mut device = NylonTrackDevice::default();
         assert_eq!(nylon_track_device_count(std::ptr::null(), 0), 0);
         assert_eq!(

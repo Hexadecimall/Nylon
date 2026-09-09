@@ -41,7 +41,8 @@ Groups of functions:
 | `nylon_transport_*` | play, stop, locate, position |
 | `nylon_track_levels`, `nylon_master_levels` | live linear peak and RMS readings |
 | `nylon_render_*` | deterministic offline file rendering |
-| `nylon_clap_*` | CLAP lifecycle, parameter metadata, latency, and stereo processing |
+| `nylon_clap_instance_*` | in-process CLAP lifecycle and worker-side processing |
+| `nylon_clap_worker_*` | isolated process ownership, metadata, state, and blocking processing |
 
 Track kinds: 0 audio, 1 MIDI, 2 return, 3 master, 4 group, 5 cue.
 
@@ -77,10 +78,11 @@ project, opens stopped, and creates one undoable audio clip when finished.
 values, reported latency, and stereo processing. A caller can pass a bounded,
 sample-ordered array of parameter and note events to processing without
 allocating in the binding. Note events retain their identifier, port, channel,
-key, velocity, and exact frame offset. Production playback places each instance in a separate worker
-process so a plugin fault does not terminate the controlling process. State
-save returns an owned opaque byte buffer in C and a byte vector in C++. Loading
-restores the same opaque data with a 256 MiB upper bound.
+key, velocity, and exact frame offset. `nylon::ClapWorker` owns that instance in
+a separate process so a plugin fault does not terminate the controlling process.
+Worker calls block on IPC and belong on a dedicated thread. State save returns
+an owned opaque byte buffer in C and a byte vector in C++. Loading restores the
+same opaque data with a 256 MiB upper bound.
 
 `bindings/cmake/NylonCore.cmake` defines the imported `nylon_core` target;
 `NYLON_CORE_LIBRARY` selects a static or shared core.

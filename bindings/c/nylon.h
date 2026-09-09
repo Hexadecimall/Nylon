@@ -462,6 +462,27 @@ const unsigned char* nylon_clap_state_data(const void* state);
 int nylon_clap_instance_reset(void* instance);
 unsigned int nylon_clap_instance_take_requests(const void* instance);
 
+/* Isolated CLAP workers keep plugin code outside the calling process. These
+ * functions perform blocking pipe I/O and belong on a dedicated IPC thread. */
+void* nylon_clap_worker_open(const char* executable, const char* path,
+    const char* identifier, double sample_rate, unsigned int max_frames);
+void nylon_clap_worker_free(void* worker);
+int nylon_clap_worker_process_stereo(void* worker,
+    const float* input_left, const float* input_right,
+    float* output_left, float* output_right, unsigned int frames,
+    const NylonClapParameterEvent* parameter_events,
+    unsigned int parameter_event_count,
+    const NylonClapNoteEvent* note_events, unsigned int note_event_count);
+unsigned int nylon_clap_worker_input_note_ports(const void* worker);
+unsigned int nylon_clap_worker_input_audio_ports(const void* worker);
+unsigned long long nylon_clap_worker_parameter_count(const void* worker);
+int nylon_clap_worker_parameter_info(const void* worker,
+    unsigned long long index, NylonClapParameterInfo* info);
+int nylon_clap_worker_latency(const void* worker, unsigned int* frames);
+void* nylon_clap_worker_save_state(void* worker);
+int nylon_clap_worker_load_state(void* worker,
+    const unsigned char* bytes, unsigned long long length);
+
 /* Live audio is owned by a separate control-thread handle. The platform
  * stream remains open while the musical transport is stopped, allowing
  * meters and edits to continue crossing block boundaries. */

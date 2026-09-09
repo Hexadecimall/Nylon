@@ -243,6 +243,41 @@ private:
     void* m_handle{};
 };
 
+class ClapWorker {
+public:
+    using ParameterEvent = ClapInstance::ParameterEvent;
+    using ParameterInfo = ClapInstance::ParameterInfo;
+    using NoteEvent = ClapInstance::NoteEvent;
+
+    ClapWorker() = default;
+    ~ClapWorker();
+    ClapWorker(const ClapWorker&) = delete;
+    ClapWorker& operator=(const ClapWorker&) = delete;
+    ClapWorker(ClapWorker&& other) noexcept;
+    ClapWorker& operator=(ClapWorker&& other) noexcept;
+
+    static ClapWorker open(const std::string& executable, const std::string& path,
+        const std::string& identifier, double sampleRate, std::uint32_t maxFrames);
+    explicit operator bool() const { return m_handle != nullptr; }
+    bool processStereo(const float* inputLeft, const float* inputRight,
+        float* outputLeft, float* outputRight, std::uint32_t frames,
+        const ParameterEvent* parameterEvents, std::uint32_t parameterEventCount,
+        const NoteEvent* noteEvents, std::uint32_t noteEventCount);
+    std::uint32_t inputNotePorts() const;
+    std::uint32_t inputAudioPorts() const;
+    std::vector<ParameterInfo> parameters() const;
+    bool latency(std::uint32_t& frames) const;
+    bool saveState(std::vector<std::uint8_t>& state);
+    bool loadState(const std::vector<std::uint8_t>& state);
+
+private:
+    explicit ClapWorker(void* handle)
+        : m_handle(handle)
+    {
+    }
+    void* m_handle{};
+};
+
 class CompiledRouting {
 public:
     CompiledRouting();

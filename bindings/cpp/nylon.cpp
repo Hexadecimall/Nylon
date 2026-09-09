@@ -247,6 +247,90 @@ std::uint32_t ClapInstance::takeRequests()
     return nylon_clap_instance_take_requests(m_handle);
 }
 
+ClapWorker::~ClapWorker() { nylon_clap_worker_free(m_handle); }
+ClapWorker::ClapWorker(ClapWorker&& other) noexcept
+    : m_handle(std::exchange(other.m_handle, nullptr))
+{
+}
+ClapWorker& ClapWorker::operator=(ClapWorker&& other) noexcept
+{
+    if (this != &other) {
+        nylon_clap_worker_free(m_handle);
+        m_handle = std::exchange(other.m_handle, nullptr);
+    }
+    return *this;
+}
+ClapWorker ClapWorker::open(const std::string& executable, const std::string& path,
+    const std::string& identifier, double sampleRate, std::uint32_t maxFrames)
+{
+    return ClapWorker(nylon_clap_worker_open(executable.c_str(), path.c_str(),
+        identifier.c_str(), sampleRate, maxFrames));
+}
+bool ClapWorker::processStereo(const float* inputLeft, const float* inputRight,
+    float* outputLeft, float* outputRight, std::uint32_t frames,
+    const ParameterEvent* parameterEvents, std::uint32_t parameterEventCount,
+    const NoteEvent* noteEvents, std::uint32_t noteEventCount)
+{
+    static_assert(sizeof(ParameterEvent) == sizeof(NylonClapParameterEvent));
+    static_assert(alignof(ParameterEvent) == alignof(NylonClapParameterEvent));
+    static_assert(sizeof(NoteEvent) == sizeof(NylonClapNoteEvent));
+    static_assert(alignof(NoteEvent) == alignof(NylonClapNoteEvent));
+    return nylon_clap_worker_process_stereo(m_handle, inputLeft, inputRight,
+               outputLeft, outputRight, frames,
+               reinterpret_cast<const NylonClapParameterEvent*>(parameterEvents),
+               parameterEventCount,
+               reinterpret_cast<const NylonClapNoteEvent*>(noteEvents), noteEventCount)
+        != 0;
+}
+std::uint32_t ClapWorker::inputNotePorts() const
+{
+    return nylon_clap_worker_input_note_ports(m_handle);
+}
+std::uint32_t ClapWorker::inputAudioPorts() const
+{
+    return nylon_clap_worker_input_audio_ports(m_handle);
+}
+std::vector<ClapWorker::ParameterInfo> ClapWorker::parameters() const
+{
+    std::vector<ParameterInfo> result;
+    const auto count = nylon_clap_worker_parameter_count(m_handle);
+    result.reserve(static_cast<std::size_t>(count));
+    for (unsigned long long index = 0; index < count; ++index) {
+        NylonClapParameterInfo info{};
+        if (nylon_clap_worker_parameter_info(m_handle, index, &info) == 0) break;
+        result.push_back({info.identifier, info.flags, info.name, info.module,
+            info.minimum, info.maximum, info.default_value});
+    }
+    return result;
+}
+bool ClapWorker::latency(std::uint32_t& frames) const
+{
+    return nylon_clap_worker_latency(m_handle, &frames) != 0;
+}
+bool ClapWorker::saveState(std::vector<std::uint8_t>& state)
+{
+    void* saved = nylon_clap_worker_save_state(m_handle);
+    if (saved == nullptr) return false;
+    struct StateGuard {
+        void* handle;
+        ~StateGuard() { nylon_clap_state_free(handle); }
+    } guard{saved};
+    const auto size = nylon_clap_state_size(saved);
+    const auto* data = nylon_clap_state_data(saved);
+    if (size == 0)
+        state.clear();
+    else
+        state.assign(data, data + size);
+    return true;
+}
+bool ClapWorker::loadState(const std::vector<std::uint8_t>& state)
+{
+    return nylon_clap_worker_load_state(m_handle,
+               state.empty() ? nullptr : state.data(),
+               static_cast<unsigned long long>(state.size()))
+        != 0;
+}
+
 CompiledRouting::CompiledRouting() = default;
 CompiledRouting::CompiledRouting(void* handle)
     : m_handle(handle)

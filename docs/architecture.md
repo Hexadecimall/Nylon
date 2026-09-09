@@ -216,9 +216,11 @@ opened. The worker protocol publishes latency and parameter metadata during its
 handshake, then carries bounded audio blocks, parameter events, and CLAP note
 on, off, and choke events. The host follows the declared audio-input topology,
 so instruments with no audio input receive events and produce stereo output.
-State save
-and load commands transfer opaque plugin state with a 256 MiB limit. State I/O
-runs on the worker control thread and never enters an audio callback.
+The core worker client starts and owns the process, validates bounded handshake
+metadata, reuses request and response buffers, and rejects malformed event
+ranges before sending a block. It performs blocking pipe I/O and therefore runs
+on a dedicated IPC thread. State save and load commands transfer opaque plugin
+state with a 256 MiB limit. State I/O never enters an audio callback.
 
 ## Benchmarks
 
