@@ -1024,7 +1024,7 @@ fn fixed_text(text: &[c_char]) -> Result<String, Error> {
     };
     let bytes = text[..end]
         .iter()
-        .map(|byte| *byte as u8)
+        .map(|byte| byte.to_ne_bytes()[0])
         .collect::<Vec<_>>();
     String::from_utf8(bytes).map_err(|_| Error::InvalidParameters)
 }

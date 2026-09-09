@@ -18,7 +18,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         "-fdebug-prefix-map=${NYLON_REPO_ROOT}=."
         "-fmacro-prefix-map=${NYLON_REPO_ROOT}=.")
 elseif(MSVC)
-    add_compile_options("/pathmap:${NYLON_REPO_ROOT}=.")
+    add_compile_options("/experimental:deterministic" "/pathmap:${NYLON_REPO_ROOT}=.")
 endif()
 
 # Core and Network only: this tool has no interface of its own.
@@ -28,6 +28,12 @@ add_subdirectory("${NYLON_REPO_ROOT}/bindings/cpp" bindings_cpp)
 add_executable(nylon_control main.cpp control_server.cpp control_server.hpp device_codec.hpp)
 target_link_libraries(nylon_control PRIVATE Qt6::Core Qt6::Network nyloncpp)
 set_target_properties(nylon_control PROPERTIES OUTPUT_NAME "nylon-control")
+if(WIN32)
+    add_custom_command(TARGET nylon_control POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "$<TARGET_FILE:nylon_core>" "$<TARGET_FILE_DIR:nylon_control>"
+        VERBATIM)
+endif()
 
 include(GNUInstallDirs)
 install(TARGETS nylon_control RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
