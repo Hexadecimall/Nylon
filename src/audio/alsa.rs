@@ -206,9 +206,9 @@ impl AlsaBackend {
     }
 
     /// The ALSA name of a device, by identifier.
-    fn name_of(&self, device: DeviceId) -> Option<String> {
+    fn name_of(&self, device: DeviceId, wanted: Direction) -> Option<String> {
         let mut found = None;
-        self.for_each_device(|name, _| {
+        self.for_each_device(wanted, |name, _| {
             if identifier(name) == device.0 {
                 found = Some(name.to_string());
             }
@@ -216,9 +216,8 @@ impl AlsaBackend {
         found
     }
 
-    /// Calls `visit` with the ALSA name and description of every playback
-    /// device the host lists.
-    fn for_each_device(&self, mut visit: impl FnMut(&str, &str)) {
+    /// Calls `visit` with each device available in one direction.
+    fn for_each_device(&self, wanted: Direction, mut visit: impl FnMut(&str, &str)) {
         let mut hints: *mut *mut c_void = core::ptr::null_mut();
         // SAFETY: The call fills `hints` with a null-terminated array on
         // success and leaves it untouched otherwise.
@@ -242,8 +241,8 @@ impl AlsaBackend {
             // both, which are playback devices too.
             let direction = unsafe { hint_field(&self.library, entry, c"IOID") };
             if let Some(name) = name {
-                let plays = direction.as_deref().is_none_or(|value| value == "Output");
-                if plays {
+                let supports = supports_direction(wanted, direction.as_deref());
+                if supports {
                     let shown = description.unwrap_or_else(|| name.clone());
                     // A description carries a second line with the card's
                     // long name, which is not wanted in a list.
@@ -272,8 +271,13 @@ impl AlsaBackend {
         if config.channels != 2 {
             return Err(AudioError::Unsupported("channel count"));
         }
+        let wanted = if direction == SND_PCM_STREAM_CAPTURE {
+            Direction::Input
+        } else {
+            Direction::Output
+        };
         let name = self
-            .name_of(config.device)
+            .name_of(config.device, wanted)
             .ok_or(AudioError::DeviceMissing)?;
         let c_name = std::ffi::CString::new(name).map_err(|_| AudioError::DeviceMissing)?;
 
@@ -342,6 +346,15 @@ impl AlsaBackend {
     }
 }
 
+fn supports_direction(wanted: Direction, hint: Option<&str>) -> bool {
+    hint.is_none_or(|value| {
+        matches!(
+            (wanted, value),
+            (Direction::Input, "Input") | (Direction::Output, "Output")
+        )
+    })
+}
+
 /// Reads one field of a device hint as text.
 ///
 /// # Safety
@@ -371,7 +384,7 @@ impl Backend for AlsaBackend {
 
     fn devices(&self, out: &mut [DeviceInfo]) -> Result<usize, AudioError> {
         let mut written = 0;
-        self.for_each_device(|name, description| {
+        self.for_each_device(Direction::Output, |name, description| {
             if written >= out.len() {
                 return;
             }
@@ -396,7 +409,7 @@ impl Backend for AlsaBackend {
 
     fn default_output(&self) -> Result<DeviceId, AudioError> {
         let mut found = None;
-        self.for_each_device(|name, _| {
+        self.for_each_device(Direction::Output, |name, _| {
             if found.is_none() || name == "default" {
                 if found.is_some() && name != "default" {
                     return;
@@ -413,6 +426,7 @@ impl Backend for AlsaBackend {
         renderer: R,
     ) -> Result<Self::Stream, AudioError> {
         let (device, running) = self.open_device(config, SND_PCM_STREAM_PLAYBACK)?;
+        let device = Arc::new(device);
 
         let shared = Arc::new(Shared {
             running: AtomicBool::new(false),
@@ -421,12 +435,13 @@ impl Backend for AlsaBackend {
             dropouts: AtomicU64::new(0),
             realtime: AtomicBool::new(false),
             lost: AtomicBool::new(false),
+            device: Arc::clone(&device),
         });
         let worker = Worker {
             device,
             shared: Arc::clone(&shared),
             renderer: Box::new(renderer),
-            config: running,
+            block: vec![[0.0; 2]; running.block_frames],
         };
         let thread = std::thread::Builder::new()
             .name("nylon-alsa".to_string())
@@ -450,7 +465,7 @@ impl InputBackend for AlsaBackend {
         // by opening it, so the same list is offered for capture with the
         // direction it would be used in.
         let mut written = 0;
-        self.for_each_device(|name, description| {
+        self.for_each_device(Direction::Input, |name, description| {
             if written >= out.len() {
                 return;
             }
@@ -472,7 +487,16 @@ impl InputBackend for AlsaBackend {
     }
 
     fn default_input(&self) -> Result<DeviceId, AudioError> {
-        self.default_output()
+        let mut found = None;
+        self.for_each_device(Direction::Input, |name, _| {
+            if found.is_none() || name == "default" {
+                if found.is_some() && name != "default" {
+                    return;
+                }
+                found = Some(DeviceId(identifier(name)));
+            }
+        });
+        found.ok_or(AudioError::DeviceMissing)
     }
 
     fn open_input<C: Capturer + 'static>(
@@ -481,6 +505,7 @@ impl InputBackend for AlsaBackend {
         capturer: C,
     ) -> Result<Self::Capture, AudioError> {
         let (device, running) = self.open_device(config, SND_PCM_STREAM_CAPTURE)?;
+        let device = Arc::new(device);
 
         let shared = Arc::new(Shared {
             running: AtomicBool::new(false),
@@ -489,6 +514,7 @@ impl InputBackend for AlsaBackend {
             dropouts: AtomicU64::new(0),
             realtime: AtomicBool::new(false),
             lost: AtomicBool::new(false),
+            device: Arc::clone(&device),
         });
         let mut prepared = capturer;
         prepared.prepare(running);
@@ -496,7 +522,7 @@ impl InputBackend for AlsaBackend {
             device,
             shared: Arc::clone(&shared),
             capturer: Box::new(prepared),
-            config: running,
+            block: vec![[0.0; 2]; running.block_frames],
         };
         let thread = std::thread::Builder::new()
             .name("nylon-alsa-in".to_string())
@@ -514,10 +540,10 @@ impl InputBackend for AlsaBackend {
 
 /// The capture thread's own state.
 struct CaptureWorker {
-    device: Handle,
+    device: Arc<Handle>,
     shared: Arc<Shared>,
     capturer: Box<dyn Capturer>,
-    config: StreamConfig,
+    block: Vec<[f32; 2]>,
 }
 
 impl CaptureWorker {
@@ -529,12 +555,11 @@ impl CaptureWorker {
         self.shared
             .realtime
             .store(request_realtime(), Ordering::Relaxed);
-        let frames = self.config.block_frames;
-        let mut block = vec![[0.0_f32; 2]; frames];
+        let frames = self.block.len();
         let mut position = 0_u64;
         let mut was_running = false;
 
-        while !self.shared.finished.load(Ordering::Acquire) {
+        'stream: while !self.shared.finished.load(Ordering::Acquire) {
             if !self.shared.running.load(Ordering::Acquire) {
                 was_running = false;
                 std::thread::sleep(core::time::Duration::from_millis(2));
@@ -553,13 +578,24 @@ impl CaptureWorker {
                 let count = unsafe {
                     (self.device.library.readi)(
                         self.device.pcm,
-                        block[taken..].as_mut_ptr().cast::<c_void>(),
+                        self.block[taken..].as_mut_ptr().cast::<c_void>(),
                         (frames - taken) as u64,
                     )
                 };
-                if count >= 0 {
+                if count > 0 {
                     taken += count as usize;
                     continue;
+                }
+                if count == 0 {
+                    self.shared.lost.store(true, Ordering::Release);
+                    self.shared.finished.store(true, Ordering::Release);
+                    break 'stream;
+                }
+                if self.shared.finished.load(Ordering::Acquire) {
+                    break 'stream;
+                }
+                if !self.shared.running.load(Ordering::Acquire) {
+                    continue 'stream;
                 }
                 // The device overran or was suspended, so material was
                 // lost. Recovering keeps the take going and counts it.
@@ -581,7 +617,7 @@ impl CaptureWorker {
                 frame: position,
                 dropouts: self.shared.dropouts.load(Ordering::Relaxed),
             };
-            self.capturer.capture(&block[..taken], timing);
+            self.capturer.capture(&self.block[..taken], timing);
             position += taken as u64;
             self.shared
                 .frames
@@ -623,6 +659,7 @@ impl Stream for AlsaCapture {
             return Err(AudioError::WrongState);
         }
         self.shared.running.store(false, Ordering::Release);
+        self.shared.interrupt();
         Ok(())
     }
 
@@ -647,6 +684,7 @@ impl Drop for AlsaCapture {
     fn drop(&mut self) {
         self.shared.running.store(false, Ordering::Release);
         self.shared.finished.store(true, Ordering::Release);
+        self.shared.interrupt();
         if let Some(thread) = self.thread.take() {
             // The capturer lives on that thread, so it has to finish
             // before this returns.
@@ -663,6 +701,9 @@ struct Handle {
 
 // SAFETY: A handle is moved to the playback thread and used only there.
 unsafe impl Send for Handle {}
+// SAFETY: ALSA serializes calls on a handle in its default thread-safe
+// build. The control thread only interrupts a blocking transfer.
+unsafe impl Sync for Handle {}
 
 impl Drop for Handle {
     fn drop(&mut self) {
@@ -687,14 +728,25 @@ struct Shared {
     realtime: AtomicBool,
     /// Set when the device stops accepting audio for good.
     lost: AtomicBool,
+    device: Arc<Handle>,
+}
+
+impl Shared {
+    /// Stops a blocking transfer so the worker can observe control state.
+    fn interrupt(&self) {
+        // SAFETY: The stream keeps the handle live until the worker exits.
+        // ALSA serializes calls made on one handle when thread safety is
+        // enabled, which is the library default.
+        unsafe { (self.device.library.drop_stream)(self.device.pcm) };
+    }
 }
 
 /// The playback thread's own state.
 struct Worker {
-    device: Handle,
+    device: Arc<Handle>,
     shared: Arc<Shared>,
     renderer: Box<dyn Renderer>,
-    config: StreamConfig,
+    block: Vec<[f32; 2]>,
 }
 
 impl Worker {
@@ -706,11 +758,10 @@ impl Worker {
         self.shared
             .realtime
             .store(request_realtime(), Ordering::Relaxed);
-        let frames = self.config.block_frames;
-        let mut block = vec![[0.0_f32; 2]; frames];
+        let frames = self.block.len();
         let mut position = 0_u64;
         let mut was_running = false;
-        while !self.shared.finished.load(Ordering::Acquire) {
+        'stream: while !self.shared.finished.load(Ordering::Acquire) {
             if !self.shared.running.load(Ordering::Acquire) {
                 // Stopped: wait without touching the device, so it keeps
                 // whatever it has already been given.
@@ -729,7 +780,7 @@ impl Worker {
                 frame: position,
                 dropouts: self.shared.dropouts.load(Ordering::Relaxed),
             };
-            self.renderer.render(&mut block, timing);
+            self.renderer.render(&mut self.block, timing);
             position += frames as u64;
 
             let mut written = 0;
@@ -740,13 +791,24 @@ impl Worker {
                 let count = unsafe {
                     (self.device.library.writei)(
                         self.device.pcm,
-                        block[written..].as_ptr().cast::<c_void>(),
+                        self.block[written..].as_ptr().cast::<c_void>(),
                         remaining as u64,
                     )
                 };
-                if count >= 0 {
+                if count > 0 {
                     written += count as usize;
                     continue;
+                }
+                if count == 0 {
+                    self.shared.lost.store(true, Ordering::Release);
+                    self.shared.finished.store(true, Ordering::Release);
+                    break 'stream;
+                }
+                if self.shared.finished.load(Ordering::Acquire) {
+                    break 'stream;
+                }
+                if !self.shared.running.load(Ordering::Acquire) {
+                    continue 'stream;
                 }
                 // The device ran dry or was suspended. Recovering keeps
                 // playback going and counts against the stream.
@@ -804,6 +866,7 @@ impl Stream for AlsaStream {
             return Err(AudioError::WrongState);
         }
         self.shared.running.store(false, Ordering::Release);
+        self.shared.interrupt();
         Ok(())
     }
 
@@ -828,6 +891,7 @@ impl Drop for AlsaStream {
     fn drop(&mut self) {
         self.shared.running.store(false, Ordering::Release);
         self.shared.finished.store(true, Ordering::Release);
+        self.shared.interrupt();
         if let Some(thread) = self.thread.take() {
             // The renderer lives on that thread, so it has to be joined
             // before this returns.
@@ -872,6 +936,16 @@ mod tests {
         assert_eq!(identifier("default"), identifier("default"));
         assert_ne!(identifier("default"), identifier("hw:0,0"));
         assert_ne!(identifier(""), 0, "no name may take the reserved value");
+    }
+
+    #[test]
+    fn direction_hints_keep_input_and_output_devices_apart() {
+        assert!(supports_direction(Direction::Input, None));
+        assert!(supports_direction(Direction::Output, None));
+        assert!(supports_direction(Direction::Input, Some("Input")));
+        assert!(!supports_direction(Direction::Input, Some("Output")));
+        assert!(supports_direction(Direction::Output, Some("Output")));
+        assert!(!supports_direction(Direction::Output, Some("Input")));
     }
 
     #[test]
