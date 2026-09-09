@@ -451,58 +451,7 @@ int listDevices(bool input)
     return writeJson({{"ok", true}, {"devices", devices}});
 }
 
-bool readProbeCount(const QByteArray& bytes, qsizetype& cursor, std::uint32_t& value)
-{
-    if (cursor < 0 || cursor + 4 > bytes.size()) return false;
-    const auto* input = reinterpret_cast<const unsigned char*>(bytes.constData() + cursor);
-    value = static_cast<std::uint32_t>(input[0])
-        | (static_cast<std::uint32_t>(input[1]) << 8U)
-        | (static_cast<std::uint32_t>(input[2]) << 16U)
-        | (static_cast<std::uint32_t>(input[3]) << 24U);
-    cursor += 4;
-    return true;
-}
-
-bool readProbeText(const QByteArray& bytes, qsizetype& cursor, QString& value)
-{
-    std::uint32_t length = 0;
-    if (!readProbeCount(bytes, cursor, length) || length > 4096U
-        || static_cast<quint64>(cursor) + length > static_cast<quint64>(bytes.size()))
-        return false;
-    value = QString::fromUtf8(bytes.constData() + cursor, static_cast<qsizetype>(length));
-    cursor += static_cast<qsizetype>(length);
-    return true;
-}
-
-bool parseProbeOutput(const QByteArray& bytes, QJsonArray& descriptors)
-{
-    if (bytes.size() < 12 || bytes.first(8) != QByteArray("NYCLAP1\0", 8)) return false;
-    qsizetype cursor = 8;
-    std::uint32_t count = 0;
-    if (!readProbeCount(bytes, cursor, count) || count > 4096U) return false;
-    for (std::uint32_t index = 0; index < count; ++index) {
-        QString id;
-        QString name;
-        QString vendor;
-        QString version;
-        if (!readProbeText(bytes, cursor, id) || !readProbeText(bytes, cursor, name)
-            || !readProbeText(bytes, cursor, vendor) || !readProbeText(bytes, cursor, version))
-            return false;
-        std::uint32_t featureCount = 0;
-        if (!readProbeCount(bytes, cursor, featureCount) || featureCount > 256U) return false;
-        QJsonArray features;
-        for (std::uint32_t feature = 0; feature < featureCount; ++feature) {
-            QString text;
-            if (!readProbeText(bytes, cursor, text)) return false;
-            features.append(text);
-        }
-        descriptors.append(QJsonObject{{"id", id}, {"name", name}, {"vendor", vendor},
-            {"version", version}, {"features", features}});
-    }
-    return cursor == bytes.size();
-}
-
-bool probeClap(const QString& executable, const QString& path, QJsonArray& descriptors,
+bool probeClap(const QString& executable, const QString& path, std::vector<std::uint8_t>& bytes,
     std::string& reason)
 {
     QProcess process;
@@ -545,10 +494,8 @@ bool probeClap(const QString& executable, const QString& path, QJsonArray& descr
                                   : detail.toStdString();
         return false;
     }
-    if (!parseProbeOutput(output, descriptors)) {
-        reason = "Probe process returned malformed metadata";
-        return false;
-    }
+    const auto* first = reinterpret_cast<const std::uint8_t*>(output.constData());
+    bytes.assign(first, first + output.size());
     return true;
 }
 
@@ -560,14 +507,17 @@ int scanPlugins(const QStringList& roots, const QString& probeExecutable, bool p
     auto catalog = nylon::PluginCatalog::scan(nativeRoots);
     if (!catalog) return fail("Could not create the plugin catalog");
     auto found = catalog.entries();
-    std::vector<QJsonArray> metadata(found.size());
     if (probe) {
         if (probeExecutable.isEmpty()) return fail("Plugin probe executable is required");
         for (std::size_t index = 0; index < found.size(); ++index) {
             if (found[index].format != nylon::PluginFormat::Clap) continue;
             std::string reason;
-            if (!probeClap(probeExecutable, QString::fromStdString(found[index].path),
-                    metadata[index], reason))
+            std::vector<std::uint8_t> bytes;
+            const bool ran = probeClap(
+                probeExecutable, QString::fromStdString(found[index].path), bytes, reason);
+            if (ran && !catalog.applyProbe(static_cast<std::uint64_t>(index), bytes))
+                reason = "Probe process returned malformed metadata";
+            if (!ran || !reason.empty())
                 catalog.quarantine(static_cast<std::uint64_t>(index), reason);
         }
         found = catalog.entries();
@@ -575,13 +525,24 @@ int scanPlugins(const QStringList& roots, const QString& probeExecutable, bool p
     QJsonArray entries;
     for (std::size_t index = 0; index < found.size(); ++index) {
         const auto& entry = found[index];
+        QJsonArray descriptors;
+        for (const auto& descriptor : entry.descriptors) {
+            QJsonArray features;
+            for (const auto& feature : descriptor.features)
+                features.append(QString::fromStdString(feature));
+            descriptors.append(QJsonObject{{"id", QString::fromStdString(descriptor.id)},
+                {"name", QString::fromStdString(descriptor.name)},
+                {"vendor", QString::fromStdString(descriptor.vendor)},
+                {"version", QString::fromStdString(descriptor.version)},
+                {"features", features}});
+        }
         entries.append(QJsonObject{{"path", QString::fromStdString(entry.path)},
             {"name", QString::fromStdString(entry.name)},
             {"format", pluginFormatName(entry.format)},
             {"state", pluginStateName(entry.state)},
             {"probeSupported", entry.format == nylon::PluginFormat::Clap},
             {"quarantineReason", QString::fromStdString(entry.quarantineReason)},
-            {"descriptors", metadata[index]}});
+            {"descriptors", descriptors}});
     }
     QJsonArray issues;
     for (const auto& issue : catalog.issues()) {

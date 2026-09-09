@@ -34,7 +34,7 @@ jobs:
       - run: cargo build --locked --all-targets
       - run: cargo test --locked
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo bench --locked --bench render
+      - run: cargo bench --locked --bench render --no-default-features
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || github.event.repository.default_branch }}

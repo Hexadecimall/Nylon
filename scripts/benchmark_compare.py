@@ -62,9 +62,19 @@ def build(root, name):
     try:
         output = subprocess.check_output([
             "cargo", "bench", "--locked", "--bench", name, "--no-run",
-            "--message-format=json",
-        ], cwd=root, text=True)
+            "--no-default-features", "--message-format=json",
+        ], cwd=root, text=True, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as error:
+        for line in (error.output or "").splitlines():
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = item.get("message", {}).get("rendered")
+            if message:
+                print(message, file=sys.stderr, end="")
+        if error.stderr:
+            print(error.stderr, file=sys.stderr, end="")
         raise Unbuildable(f"{root} does not build") from error
     for line in output.splitlines():
         item = json.loads(line)

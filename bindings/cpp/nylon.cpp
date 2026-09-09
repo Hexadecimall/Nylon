@@ -8,6 +8,7 @@ namespace nylon {
 
 namespace {
 using CatalogTextGetter = decltype(&nylon_plugin_catalog_entry_path);
+using DescriptorTextGetter = decltype(&nylon_plugin_catalog_descriptor_id);
 
 std::string catalogText(
     const void* catalog, std::uint64_t index, CatalogTextGetter getter)
@@ -15,6 +16,27 @@ std::string catalogText(
     const auto needed = getter(catalog, index, nullptr, 0);
     std::vector<char> bytes(static_cast<std::size_t>(needed) + 1U, '\0');
     getter(catalog, index, bytes.data(), static_cast<unsigned long long>(bytes.size()));
+    return std::string(bytes.data(), static_cast<std::size_t>(needed));
+}
+
+std::string descriptorText(const void* catalog, std::uint64_t entry,
+    std::uint64_t descriptor, DescriptorTextGetter getter)
+{
+    const auto needed = getter(catalog, entry, descriptor, nullptr, 0);
+    std::vector<char> bytes(static_cast<std::size_t>(needed) + 1U, '\0');
+    getter(catalog, entry, descriptor, bytes.data(),
+        static_cast<unsigned long long>(bytes.size()));
+    return std::string(bytes.data(), static_cast<std::size_t>(needed));
+}
+
+std::string descriptorFeature(const void* catalog, std::uint64_t entry,
+    std::uint64_t descriptor, std::uint64_t feature)
+{
+    const auto needed = nylon_plugin_catalog_descriptor_feature(
+        catalog, entry, descriptor, feature, nullptr, 0);
+    std::vector<char> bytes(static_cast<std::size_t>(needed) + 1U, '\0');
+    nylon_plugin_catalog_descriptor_feature(catalog, entry, descriptor, feature,
+        bytes.data(), static_cast<unsigned long long>(bytes.size()));
     return std::string(bytes.data(), static_cast<std::size_t>(needed));
 }
 } // namespace
@@ -52,10 +74,31 @@ std::vector<PluginInfo> PluginCatalog::entries() const
         const int format = nylon_plugin_catalog_entry_format(m_handle, index);
         const int state = nylon_plugin_catalog_entry_state(m_handle, index);
         if (format < 0 || state < 0) return {};
+        std::vector<PluginDescriptor> descriptors;
+        const auto descriptorCount = nylon_plugin_catalog_descriptor_count(m_handle, index);
+        descriptors.reserve(static_cast<std::size_t>(descriptorCount));
+        for (std::uint64_t descriptor = 0; descriptor < descriptorCount; ++descriptor) {
+            std::vector<std::string> features;
+            const auto featureCount = nylon_plugin_catalog_descriptor_feature_count(
+                m_handle, index, descriptor);
+            features.reserve(static_cast<std::size_t>(featureCount));
+            for (std::uint64_t feature = 0; feature < featureCount; ++feature)
+                features.push_back(descriptorFeature(m_handle, index, descriptor, feature));
+            descriptors.push_back({descriptorText(m_handle, index, descriptor,
+                                       nylon_plugin_catalog_descriptor_id),
+                descriptorText(m_handle, index, descriptor,
+                    nylon_plugin_catalog_descriptor_name),
+                descriptorText(m_handle, index, descriptor,
+                    nylon_plugin_catalog_descriptor_vendor),
+                descriptorText(m_handle, index, descriptor,
+                    nylon_plugin_catalog_descriptor_version),
+                std::move(features)});
+        }
         result.push_back({catalogText(m_handle, index, nylon_plugin_catalog_entry_path),
             catalogText(m_handle, index, nylon_plugin_catalog_entry_name),
             static_cast<PluginFormat>(format), static_cast<PluginState>(state),
-            catalogText(m_handle, index, nylon_plugin_catalog_entry_reason)});
+            catalogText(m_handle, index, nylon_plugin_catalog_entry_reason),
+            std::move(descriptors)});
     }
     return result;
 }
@@ -80,6 +123,14 @@ bool PluginCatalog::quarantine(std::uint64_t index, const std::string& reason)
 bool PluginCatalog::retry(std::uint64_t index)
 {
     return nylon_plugin_catalog_retry(m_handle, index) != 0;
+}
+
+bool PluginCatalog::applyProbe(std::uint64_t index, const std::vector<std::uint8_t>& bytes)
+{
+    return nylon_plugin_catalog_apply_probe(m_handle, index,
+               bytes.empty() ? nullptr : bytes.data(),
+               static_cast<unsigned long long>(bytes.size()))
+        != 0;
 }
 
 CompiledRouting::CompiledRouting() = default;

@@ -682,6 +682,7 @@ fn native_plugin_catalog_exposes_discovery_and_quarantine() {
     let root = std::path::PathBuf::from("target").join(format!("native-plugins-{tick}"));
     std::fs::create_dir_all(root.join("Alpha.component")).unwrap();
     std::fs::create_dir_all(root.join("Nested/Beta.vst3")).unwrap();
+    std::fs::write(root.join("Effect.clap"), b"binary").unwrap();
     let root_text = std::ffi::CString::new(root.to_str().unwrap()).unwrap();
     let missing_text = std::ffi::CString::new(root.join("missing").to_str().unwrap()).unwrap();
     let roots = [root_text.as_ptr(), missing_text.as_ptr()];
@@ -689,7 +690,7 @@ fn native_plugin_catalog_exposes_discovery_and_quarantine() {
     unsafe {
         let catalog = nylon_plugin_catalog_scan(roots.as_ptr(), roots.len() as u64);
         assert!(!catalog.is_null());
-        assert_eq!(nylon_plugin_catalog_entry_count(catalog), 2);
+        assert_eq!(nylon_plugin_catalog_entry_count(catalog), 3);
         assert_eq!(nylon_plugin_catalog_issue_count(catalog), 1);
         assert_eq!(nylon_plugin_catalog_entry_format(catalog, 0), 1);
         assert_eq!(nylon_plugin_catalog_entry_state(catalog, 0), 0);
@@ -699,6 +700,39 @@ fn native_plugin_catalog_exposes_discovery_and_quarantine() {
             5
         );
         assert_eq!(std::ffi::CStr::from_ptr(name.as_ptr()).to_bytes(), b"Alpha");
+        let descriptors = [nylon::plugin::probe::Descriptor {
+            id: "app.nylon.fixture".into(),
+            name: "Fixture".into(),
+            vendor: "Nylon Contributors".into(),
+            version: "1.0".into(),
+            features: vec!["audio-effect".into()],
+        }];
+        let mut protocol = Vec::new();
+        nylon::plugin::probe::write_protocol(&descriptors, &mut protocol).unwrap();
+        assert_eq!(
+            nylon_plugin_catalog_apply_probe(catalog, 1, protocol.as_ptr(), protocol.len() as u64),
+            1
+        );
+        assert_eq!(nylon_plugin_catalog_descriptor_count(catalog, 1), 1);
+        let mut identifier = [0 as std::ffi::c_char; 32];
+        assert_eq!(
+            nylon_plugin_catalog_descriptor_id(
+                catalog,
+                1,
+                0,
+                identifier.as_mut_ptr(),
+                identifier.len() as u64
+            ),
+            17
+        );
+        assert_eq!(
+            std::ffi::CStr::from_ptr(identifier.as_ptr()).to_bytes(),
+            b"app.nylon.fixture"
+        );
+        assert_eq!(
+            nylon_plugin_catalog_descriptor_feature_count(catalog, 1, 0),
+            1
+        );
         assert_eq!(
             nylon_plugin_catalog_quarantine(catalog, 0, c"Probe process exited".as_ptr()),
             1

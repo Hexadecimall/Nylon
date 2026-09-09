@@ -3411,3 +3411,153 @@ pub unsafe extern "C" fn nylon_plugin_catalog_retry(
     };
     i32::from(catalog.retry(index).is_ok())
 }
+
+/// # Safety
+/// The catalog must remain live and exclusive. `bytes` must point to `length`
+/// readable bytes, or be null when length is zero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_apply_probe(
+    catalog: *mut PluginCatalog,
+    index: u64,
+    bytes: *const u8,
+    length: u64,
+) -> i32 {
+    // SAFETY: The caller provides a live exclusive handle.
+    let Some(catalog) = (unsafe { catalog.as_mut() }) else {
+        return 0;
+    };
+    let (Ok(index), Ok(length)) = (usize::try_from(index), usize::try_from(length)) else {
+        return 0;
+    };
+    let bytes = if length == 0 {
+        &[]
+    } else {
+        if bytes.is_null() {
+            return 0;
+        }
+        // SAFETY: The caller provides the readable region described above.
+        unsafe { std::slice::from_raw_parts(bytes, length) }
+    };
+    i32::from(catalog.apply_probe(index, bytes).is_ok())
+}
+
+fn with_plugin_descriptor<T>(
+    catalog: *const PluginCatalog,
+    entry: u64,
+    descriptor: u64,
+    select: impl FnOnce(&crate::plugin::probe::Descriptor) -> T,
+) -> Option<T> {
+    // SAFETY: Native callers keep the catalog live and immutable during access.
+    let catalog = unsafe { catalog.as_ref() }?;
+    let entry = usize::try_from(entry).ok()?;
+    let descriptor = usize::try_from(descriptor).ok()?;
+    let value = catalog
+        .entries()
+        .get(entry)?
+        .descriptors()
+        .get(descriptor)?;
+    Some(select(value))
+}
+
+/// # Safety
+/// The catalog must remain live and immutable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_descriptor_count(
+    catalog: *const PluginCatalog,
+    entry: u64,
+) -> u64 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { catalog.as_ref() }
+        .and_then(|catalog| {
+            usize::try_from(entry)
+                .ok()
+                .and_then(|entry| catalog.entries().get(entry))
+        })
+        .map_or(0, |entry| entry.descriptors().len() as u64)
+}
+
+fn plugin_descriptor_text(
+    catalog: *const PluginCatalog,
+    entry: u64,
+    descriptor: u64,
+    select: impl FnOnce(&crate::plugin::probe::Descriptor) -> &str,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    let Some(text) =
+        with_plugin_descriptor(catalog, entry, descriptor, |value| select(value).to_owned())
+    else {
+        return copy_text("", buffer, capacity);
+    };
+    copy_text(&text, buffer, capacity)
+}
+
+macro_rules! plugin_descriptor_accessor {
+    ($name:ident, $field:ident) => {
+        /// Copies one descriptor field as UTF-8.
+        ///
+        /// # Safety
+        /// The catalog must remain live and immutable. `buffer` must be null or
+        /// point to `capacity` writable bytes.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name(
+            catalog: *const PluginCatalog,
+            entry: u64,
+            descriptor: u64,
+            buffer: *mut c_char,
+            capacity: u64,
+        ) -> u64 {
+            plugin_descriptor_text(
+                catalog,
+                entry,
+                descriptor,
+                |value| &value.$field,
+                buffer,
+                capacity,
+            )
+        }
+    };
+}
+
+plugin_descriptor_accessor!(nylon_plugin_catalog_descriptor_id, id);
+plugin_descriptor_accessor!(nylon_plugin_catalog_descriptor_name, name);
+plugin_descriptor_accessor!(nylon_plugin_catalog_descriptor_vendor, vendor);
+plugin_descriptor_accessor!(nylon_plugin_catalog_descriptor_version, version);
+
+/// # Safety
+/// The catalog must remain live and immutable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_descriptor_feature_count(
+    catalog: *const PluginCatalog,
+    entry: u64,
+    descriptor: u64,
+) -> u64 {
+    with_plugin_descriptor(catalog, entry, descriptor, |value| {
+        value.features.len() as u64
+    })
+    .unwrap_or(0)
+}
+
+/// # Safety
+/// The catalog must remain live and immutable. `buffer` must be null or point
+/// to `capacity` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_plugin_catalog_descriptor_feature(
+    catalog: *const PluginCatalog,
+    entry: u64,
+    descriptor: u64,
+    feature: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    let Some(feature) = with_plugin_descriptor(catalog, entry, descriptor, |value| {
+        usize::try_from(feature)
+            .ok()
+            .and_then(|feature| value.features.get(feature))
+            .cloned()
+    })
+    .flatten() else {
+        return copy_text("", buffer, capacity);
+    };
+    copy_text(&feature, buffer, capacity)
+}

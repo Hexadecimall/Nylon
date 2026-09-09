@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 pub const MAX_DESCRIPTORS: usize = 4_096;
 pub const MAX_FEATURES: usize = 256;
 pub const MAX_TEXT_BYTES: usize = 4_096;
+pub const MAX_PROTOCOL_BYTES: usize = 16 * 1_024 * 1_024;
 pub const PROTOCOL_HEADER: [u8; 8] = *b"NYCLAP1\0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +42,16 @@ pub enum Error {
     DuplicateIdentifier,
     InvalidText,
     TooManyFeatures,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProtocolError {
+    Size,
+    Header,
+    Count,
+    Text,
+    DuplicateIdentifier,
+    TrailingData,
 }
 
 impl fmt::Display for Error {
@@ -214,6 +225,12 @@ unsafe fn optional_text(value: *const c_char) -> Result<String, Error> {
 }
 
 pub fn write_protocol(descriptors: &[Descriptor], mut output: impl Write) -> Result<(), io::Error> {
+    if descriptors.len() > MAX_DESCRIPTORS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Descriptor count exceeds protocol",
+        ));
+    }
     output.write_all(&PROTOCOL_HEADER)?;
     write_count(descriptors.len(), &mut output)?;
     for descriptor in descriptors {
@@ -221,12 +238,85 @@ pub fn write_protocol(descriptors: &[Descriptor], mut output: impl Write) -> Res
         write_text(&descriptor.name, &mut output)?;
         write_text(&descriptor.vendor, &mut output)?;
         write_text(&descriptor.version, &mut output)?;
+        if descriptor.features.len() > MAX_FEATURES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Feature count exceeds protocol",
+            ));
+        }
         write_count(descriptor.features.len(), &mut output)?;
         for feature in &descriptor.features {
             write_text(feature, &mut output)?;
         }
     }
     Ok(())
+}
+
+pub fn read_protocol(input: &[u8]) -> Result<Vec<Descriptor>, ProtocolError> {
+    if input.len() > MAX_PROTOCOL_BYTES {
+        return Err(ProtocolError::Size);
+    }
+    if input.get(..PROTOCOL_HEADER.len()) != Some(PROTOCOL_HEADER.as_slice()) {
+        return Err(ProtocolError::Header);
+    }
+    let mut cursor = PROTOCOL_HEADER.len();
+    let count = read_count(input, &mut cursor)?;
+    if count > MAX_DESCRIPTORS {
+        return Err(ProtocolError::Count);
+    }
+    let mut identifiers = HashSet::with_capacity(count);
+    let mut descriptors = Vec::with_capacity(count);
+    for _ in 0..count {
+        let id = read_text(input, &mut cursor, true)?;
+        let name = read_text(input, &mut cursor, true)?;
+        let vendor = read_text(input, &mut cursor, false)?;
+        let version = read_text(input, &mut cursor, false)?;
+        let feature_count = read_count(input, &mut cursor)?;
+        if feature_count > MAX_FEATURES {
+            return Err(ProtocolError::Count);
+        }
+        let mut features = Vec::with_capacity(feature_count);
+        for _ in 0..feature_count {
+            features.push(read_text(input, &mut cursor, true)?);
+        }
+        if !identifiers.insert(id.clone()) {
+            return Err(ProtocolError::DuplicateIdentifier);
+        }
+        descriptors.push(Descriptor {
+            id,
+            name,
+            vendor,
+            version,
+            features,
+        });
+    }
+    if cursor != input.len() {
+        return Err(ProtocolError::TrailingData);
+    }
+    Ok(descriptors)
+}
+
+fn read_count(input: &[u8], cursor: &mut usize) -> Result<usize, ProtocolError> {
+    let end = cursor.checked_add(4).ok_or(ProtocolError::Size)?;
+    let bytes: [u8; 4] = input
+        .get(*cursor..end)
+        .ok_or(ProtocolError::Size)?
+        .try_into()
+        .map_err(|_| ProtocolError::Size)?;
+    *cursor = end;
+    usize::try_from(u32::from_le_bytes(bytes)).map_err(|_| ProtocolError::Count)
+}
+
+fn read_text(input: &[u8], cursor: &mut usize, required: bool) -> Result<String, ProtocolError> {
+    let length = read_count(input, cursor)?;
+    if length > MAX_TEXT_BYTES || (required && length == 0) {
+        return Err(ProtocolError::Text);
+    }
+    let end = cursor.checked_add(length).ok_or(ProtocolError::Size)?;
+    let bytes = input.get(*cursor..end).ok_or(ProtocolError::Size)?;
+    let text = std::str::from_utf8(bytes).map_err(|_| ProtocolError::Text)?;
+    *cursor = end;
+    Ok(text.to_owned())
 }
 
 fn write_count(value: usize, output: &mut impl Write) -> Result<(), io::Error> {
@@ -265,6 +355,7 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 1);
         let id_length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
         assert_eq!(&bytes[16..16 + id_length], b"app.nylon.fixture");
+        assert_eq!(read_protocol(&bytes).unwrap(), descriptors);
     }
 
     #[test]
@@ -298,5 +389,24 @@ mod tests {
                 .kind(),
             io::ErrorKind::InvalidInput
         );
+    }
+
+    #[test]
+    fn malformed_protocol_is_rejected_without_partial_results() {
+        assert_eq!(read_protocol(b"bad"), Err(ProtocolError::Header));
+        let descriptors = [Descriptor {
+            id: "app.nylon.fixture".into(),
+            name: "Fixture".into(),
+            vendor: String::new(),
+            version: String::new(),
+            features: Vec::new(),
+        }];
+        let mut bytes = Vec::new();
+        write_protocol(&descriptors, &mut bytes).unwrap();
+        bytes.push(0);
+        assert_eq!(read_protocol(&bytes), Err(ProtocolError::TrailingData));
+        bytes.pop();
+        bytes.truncate(bytes.len() - 1);
+        assert_eq!(read_protocol(&bytes), Err(ProtocolError::Size));
     }
 }

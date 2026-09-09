@@ -10,6 +10,17 @@ description = "Native digital audio workstation"
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]
 
+[features]
+default = ["plugin-probe"]
+plugin-probe = []
+
+[[bin]]
+name = "nylon-plugin-probe"
+path = "src/bin/nylon-plugin-probe.rs"
+bench = false
+test = false
+required-features = ["plugin-probe"]
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

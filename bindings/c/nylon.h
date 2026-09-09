@@ -369,6 +369,27 @@ unsigned long long nylon_plugin_catalog_issue_message(const void* catalog,
 int nylon_plugin_catalog_quarantine(
     void* catalog, unsigned long long index, const char* reason);
 int nylon_plugin_catalog_retry(void* catalog, unsigned long long index);
+int nylon_plugin_catalog_apply_probe(void* catalog, unsigned long long index,
+    const unsigned char* bytes, unsigned long long length);
+unsigned long long nylon_plugin_catalog_descriptor_count(
+    const void* catalog, unsigned long long entry);
+unsigned long long nylon_plugin_catalog_descriptor_id(const void* catalog,
+    unsigned long long entry, unsigned long long descriptor,
+    char* buffer, unsigned long long capacity);
+unsigned long long nylon_plugin_catalog_descriptor_name(const void* catalog,
+    unsigned long long entry, unsigned long long descriptor,
+    char* buffer, unsigned long long capacity);
+unsigned long long nylon_plugin_catalog_descriptor_vendor(const void* catalog,
+    unsigned long long entry, unsigned long long descriptor,
+    char* buffer, unsigned long long capacity);
+unsigned long long nylon_plugin_catalog_descriptor_version(const void* catalog,
+    unsigned long long entry, unsigned long long descriptor,
+    char* buffer, unsigned long long capacity);
+unsigned long long nylon_plugin_catalog_descriptor_feature_count(const void* catalog,
+    unsigned long long entry, unsigned long long descriptor);
+unsigned long long nylon_plugin_catalog_descriptor_feature(const void* catalog,
+    unsigned long long entry, unsigned long long descriptor,
+    unsigned long long feature, char* buffer, unsigned long long capacity);
 
 /* Live audio is owned by a separate control-thread handle. The platform
  * stream remains open while the musical transport is stopped, allowing

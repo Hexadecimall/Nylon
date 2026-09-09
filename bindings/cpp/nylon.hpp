@@ -131,12 +131,21 @@ struct InstrumentPatch {
 enum class PluginFormat : int { Vst3 = 0, AudioUnit = 1, Clap = 2, Lv2 = 3 };
 enum class PluginState : int { Discovered = 0, Quarantined = 1 };
 
+struct PluginDescriptor {
+    std::string id;
+    std::string name;
+    std::string vendor;
+    std::string version;
+    std::vector<std::string> features;
+};
+
 struct PluginInfo {
     std::string path;
     std::string name;
     PluginFormat format;
     PluginState state;
     std::string quarantineReason;
+    std::vector<PluginDescriptor> descriptors;
 };
 
 struct PluginScanIssue {
@@ -158,6 +167,7 @@ public:
     explicit operator bool() const { return valid(); }
     std::vector<PluginInfo> entries() const;
     std::vector<PluginScanIssue> issues() const;
+    bool applyProbe(std::uint64_t index, const std::vector<std::uint8_t>& bytes);
     bool quarantine(std::uint64_t index, const std::string& reason);
     bool retry(std::uint64_t index);
 

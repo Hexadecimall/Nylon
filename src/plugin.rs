@@ -58,6 +58,7 @@ pub struct Entry {
     format: Format,
     state: State,
     reason: String,
+    descriptors: Vec<probe::Descriptor>,
 }
 
 impl Entry {
@@ -85,6 +86,11 @@ impl Entry {
     pub fn quarantine_reason(&self) -> &str {
         &self.reason
     }
+
+    #[must_use]
+    pub fn descriptors(&self) -> &[probe::Descriptor] {
+        &self.descriptors
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +115,7 @@ impl ScanIssue {
 pub enum CatalogError {
     MissingEntry,
     InvalidReason,
+    InvalidProbe,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -157,6 +164,7 @@ impl Catalog {
         entry.state = State::Quarantined;
         entry.reason.clear();
         entry.reason.push_str(reason);
+        entry.descriptors.clear();
         Ok(())
     }
 
@@ -165,6 +173,22 @@ impl Catalog {
             .entries
             .get_mut(index)
             .ok_or(CatalogError::MissingEntry)?;
+        entry.state = State::Discovered;
+        entry.reason.clear();
+        entry.descriptors.clear();
+        Ok(())
+    }
+
+    pub fn apply_probe(&mut self, index: usize, bytes: &[u8]) -> Result<(), CatalogError> {
+        let descriptors = probe::read_protocol(bytes).map_err(|_| CatalogError::InvalidProbe)?;
+        let entry = self
+            .entries
+            .get_mut(index)
+            .ok_or(CatalogError::MissingEntry)?;
+        if entry.format != Format::Clap {
+            return Err(CatalogError::InvalidProbe);
+        }
+        entry.descriptors = descriptors;
         entry.state = State::Discovered;
         entry.reason.clear();
         Ok(())
@@ -202,6 +226,7 @@ impl Catalog {
                     format,
                     state: State::Discovered,
                     reason: String::new(),
+                    descriptors: Vec::new(),
                 });
             }
             return;
@@ -345,6 +370,43 @@ mod tests {
         assert_eq!(catalog.retry(0), Ok(()));
         assert_eq!(catalog.entries()[0].state(), State::Discovered);
         assert_eq!(catalog.retry(1), Err(CatalogError::MissingEntry));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn probe_metadata_is_applied_atomically_only_to_clap_entries() {
+        let root = directory("probe");
+        fs::write(root.join("Effect.clap"), b"binary").unwrap();
+        fs::create_dir_all(root.join("Other.vst3")).unwrap();
+        let mut catalog = Catalog::scan(std::slice::from_ref(&root));
+        let clap = catalog
+            .entries()
+            .iter()
+            .position(|entry| entry.format() == Format::Clap)
+            .unwrap();
+        let other = 1 - clap;
+        let descriptors = [probe::Descriptor {
+            id: "app.nylon.fixture".into(),
+            name: "Fixture".into(),
+            vendor: "Nylon Contributors".into(),
+            version: "1.0".into(),
+            features: vec!["audio-effect".into()],
+        }];
+        let mut bytes = Vec::new();
+        probe::write_protocol(&descriptors, &mut bytes).unwrap();
+        assert_eq!(catalog.apply_probe(clap, &bytes), Ok(()));
+        assert_eq!(catalog.entries()[clap].descriptors(), descriptors);
+        let before = catalog.clone();
+        assert_eq!(
+            catalog.apply_probe(other, &bytes),
+            Err(CatalogError::InvalidProbe)
+        );
+        assert_eq!(catalog, before);
+        assert_eq!(
+            catalog.apply_probe(clap, b"invalid"),
+            Err(CatalogError::InvalidProbe)
+        );
+        assert_eq!(catalog, before);
         fs::remove_dir_all(root).unwrap();
     }
 }
