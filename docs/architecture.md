@@ -168,6 +168,20 @@ when it wants audio and a thread waits on it, renders, and copies into the
 buffer the client hands out; the client converts for a device mixing at
 another rate. A wait that times out is counted as a dropout.
 
+## Recording
+
+A `Capturer` is the mirror of a `Renderer` and makes the same promise
+about the audio thread. A host that can record implements `InputBackend`
+rather than a wider `Backend`, because a host may play without recording,
+and every backend implements it: the offline one takes whatever it is
+handed, and the three platform backends read from a device. A capture
+stream reports frames, dropouts and a lost device exactly as a playback
+stream does.
+
+Nothing in the core opens an input on its own. A recording begins when a
+caller opens a capture stream, which is what keeps a microphone from
+being read by a program that was only asked to play.
+
 Tests that need a real device are marked ignored and run deliberately.
 
 ## Benchmarks
