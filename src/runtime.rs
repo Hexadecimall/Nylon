@@ -12,6 +12,8 @@ use crate::engine::schedule::ScheduledNote;
 use crate::media::timeline_from_project;
 use crate::project::{Project, Snapshot, TrackKind};
 
+#[cfg(target_os = "linux")]
+use crate::audio::alsa::{AlsaBackend, AlsaStream};
 #[cfg(target_os = "macos")]
 use crate::audio::coreaudio::{CoreAudioBackend, CoreAudioStream};
 
@@ -20,13 +22,33 @@ pub const MAX_DEVICES: usize = 64;
 
 #[cfg(target_os = "macos")]
 type PlatformStream = CoreAudioStream;
+#[cfg(target_os = "linux")]
+type PlatformStream = AlsaStream;
+
+/// Opens the host's output and starts it.
+///
+/// Each platform has one backend; a platform with none does not compile
+/// this and reports the absence at the call.
+#[cfg(platform_audio)]
+fn start_platform_stream(
+    config: StreamConfig,
+    engine: PlaybackEngine,
+) -> Result<PlatformStream, AudioError> {
+    #[cfg(target_os = "macos")]
+    let backend = CoreAudioBackend::new();
+    #[cfg(target_os = "linux")]
+    let backend = AlsaBackend::new()?;
+    let mut stream = backend.open_output(config, engine)?;
+    stream.start()?;
+    Ok(stream)
+}
 
 /// Live engine state owned by the control thread.
 pub struct AudioRuntime {
     settings: MixSettings,
     score: Box<Score>,
     publisher: Option<Publisher>,
-    #[cfg(target_os = "macos")]
+    #[cfg(platform_audio)]
     stream: Option<PlatformStream>,
     state: PlaybackState,
     dirty_settings: bool,
@@ -47,7 +69,7 @@ impl AudioRuntime {
             settings: MixSettings::new(),
             score: Score::boxed(),
             publisher: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(platform_audio)]
             stream: None,
             state: PlaybackState::default(),
             dirty_settings: false,
@@ -89,11 +111,9 @@ impl AudioRuntime {
             return Err(AudioError::Host("initial state could not be published"));
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(platform_audio)]
         {
-            let backend = CoreAudioBackend::new();
-            let mut stream = backend.open_output(config, engine)?;
-            stream.start()?;
+            let stream = start_platform_stream(config, engine)?;
             let granted = stream.config();
             self.publisher = Some(publisher);
             self.stream = Some(stream);
@@ -103,7 +123,7 @@ impl AudioRuntime {
             Ok(granted)
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(platform_audio))]
         {
             let _ = engine;
             let _ = publisher;
@@ -114,7 +134,7 @@ impl AudioRuntime {
     /// Stops and releases the platform stream. A closed runtime may be
     /// opened again.
     pub fn close(&mut self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(platform_audio)]
         {
             self.stream = None;
         }
@@ -128,11 +148,11 @@ impl AudioRuntime {
     /// Whether a platform stream is open and producing callbacks.
     #[must_use]
     pub fn is_open(&self) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(platform_audio)]
         {
             self.stream.as_ref().is_some_and(Stream::is_running)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(platform_audio))]
         {
             false
         }
@@ -141,11 +161,11 @@ impl AudioRuntime {
     /// Configuration granted by the host.
     #[must_use]
     pub fn config(&self) -> Option<StreamConfig> {
-        #[cfg(target_os = "macos")]
+        #[cfg(platform_audio)]
         {
             self.stream.as_ref().map(Stream::config)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(platform_audio))]
         {
             None
         }
@@ -154,11 +174,11 @@ impl AudioRuntime {
     /// Blocks dropped by the host callback.
     #[must_use]
     pub fn dropouts(&self) -> u64 {
-        #[cfg(target_os = "macos")]
+        #[cfg(platform_audio)]
         {
             self.stream.as_ref().map_or(0, Stream::dropouts)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(platform_audio))]
         {
             0
         }
@@ -274,7 +294,13 @@ pub fn output_devices(out: &mut [DeviceInfo]) -> Result<usize, AudioError> {
     {
         CoreAudioBackend::new().devices(out)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        // A machine without the sound library has no devices rather than
+        // an error to report.
+        AlsaBackend::new().map_or(Ok(0), |backend| backend.devices(out))
+    }
+    #[cfg(not(platform_audio))]
     {
         let _ = out;
         Ok(0)
@@ -292,7 +318,11 @@ pub fn default_output() -> Result<DeviceId, AudioError> {
     {
         CoreAudioBackend::new().default_output()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        AlsaBackend::new()?.default_output()
+    }
+    #[cfg(not(platform_audio))]
     {
         Err(AudioError::DeviceMissing)
     }
