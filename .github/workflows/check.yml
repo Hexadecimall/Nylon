@@ -44,3 +44,11 @@ jobs:
       - run: cargo install cargo-deny --version 0.20.2 --locked
       - run: cargo deny check
       - run: cargo build --locked --release
+      - uses: jurplel/install-qt-action@v4.3.1
+        with:
+          version: '6.8.*'
+          archives: qtbase
+          cache: true
+      - run: cmake -S cli -B target/cli -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build target/cli --config Release --parallel 2
+      - run: ctest --test-dir target/cli -C Release --output-on-failure

@@ -10,6 +10,9 @@ import wave
 
 def main():
     binary = sys.argv[1]
+    clap_fixture = sys.argv[2]
+    plugin_probe = sys.argv[3]
+    crash_fixture = sys.argv[4]
     with tempfile.TemporaryDirectory() as directory:
         root = pathlib.Path(directory)
         project = root / "Session.nylon"
@@ -178,6 +181,37 @@ def main():
         ], catalog
         assert all(entry["state"] == "discovered" for entry in catalog["plugins"]), catalog
         assert len(catalog["issues"]) == 1, catalog
+        probed = subprocess.run(
+            [binary, "--plugin-probe", plugin_probe, "probe-plugins", clap_fixture],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert probed.returncode == 0, (probed.stdout, probed.stderr)
+        probe_catalog = json.loads(probed.stdout)
+        fixture = probe_catalog["plugins"][0]
+        assert fixture["state"] == "discovered", fixture
+        assert fixture["descriptors"] == [{
+            "features": ["audio-effect", "stereo"],
+            "id": "app.nylon.fixture",
+            "name": "Fixture Effect",
+            "vendor": "Nylon Contributors",
+            "version": "1.0",
+        }], fixture
+        rejected = subprocess.run(
+            [binary, "--plugin-probe", plugin_probe, "probe-plugins", str(plugins)],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert rejected.returncode == 0, (rejected.stdout, rejected.stderr)
+        rejected_catalog = json.loads(rejected.stdout)
+        bad = next(entry for entry in rejected_catalog["plugins"] if entry["name"] == "Gamma")
+        assert bad["state"] == "quarantined" and bad["quarantineReason"], bad
+        crashed = subprocess.run(
+            [binary, "--plugin-probe", plugin_probe, "probe-plugins", crash_fixture],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert crashed.returncode == 0, (crashed.stdout, crashed.stderr)
+        crashed_entry = json.loads(crashed.stdout)["plugins"][0]
+        assert crashed_entry["state"] == "quarantined", crashed_entry
+        assert crashed_entry["quarantineReason"] == "Probe process crashed", crashed_entry
         print("Direct project CLI: pass")
 
 

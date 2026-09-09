@@ -4,11 +4,13 @@
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalSocket>
+#include <QProcess>
 #include <QStringList>
 #include <QThread>
 #include <cmath>
@@ -449,20 +451,137 @@ int listDevices(bool input)
     return writeJson({{"ok", true}, {"devices", devices}});
 }
 
-int scanPlugins(const QStringList& roots)
+bool readProbeCount(const QByteArray& bytes, qsizetype& cursor, std::uint32_t& value)
+{
+    if (cursor < 0 || cursor + 4 > bytes.size()) return false;
+    const auto* input = reinterpret_cast<const unsigned char*>(bytes.constData() + cursor);
+    value = static_cast<std::uint32_t>(input[0])
+        | (static_cast<std::uint32_t>(input[1]) << 8U)
+        | (static_cast<std::uint32_t>(input[2]) << 16U)
+        | (static_cast<std::uint32_t>(input[3]) << 24U);
+    cursor += 4;
+    return true;
+}
+
+bool readProbeText(const QByteArray& bytes, qsizetype& cursor, QString& value)
+{
+    std::uint32_t length = 0;
+    if (!readProbeCount(bytes, cursor, length) || length > 4096U
+        || static_cast<quint64>(cursor) + length > static_cast<quint64>(bytes.size()))
+        return false;
+    value = QString::fromUtf8(bytes.constData() + cursor, static_cast<qsizetype>(length));
+    cursor += static_cast<qsizetype>(length);
+    return true;
+}
+
+bool parseProbeOutput(const QByteArray& bytes, QJsonArray& descriptors)
+{
+    if (bytes.size() < 12 || bytes.first(8) != QByteArray("NYCLAP1\0", 8)) return false;
+    qsizetype cursor = 8;
+    std::uint32_t count = 0;
+    if (!readProbeCount(bytes, cursor, count) || count > 4096U) return false;
+    for (std::uint32_t index = 0; index < count; ++index) {
+        QString id;
+        QString name;
+        QString vendor;
+        QString version;
+        if (!readProbeText(bytes, cursor, id) || !readProbeText(bytes, cursor, name)
+            || !readProbeText(bytes, cursor, vendor) || !readProbeText(bytes, cursor, version))
+            return false;
+        std::uint32_t featureCount = 0;
+        if (!readProbeCount(bytes, cursor, featureCount) || featureCount > 256U) return false;
+        QJsonArray features;
+        for (std::uint32_t feature = 0; feature < featureCount; ++feature) {
+            QString text;
+            if (!readProbeText(bytes, cursor, text)) return false;
+            features.append(text);
+        }
+        descriptors.append(QJsonObject{{"id", id}, {"name", name}, {"vendor", vendor},
+            {"version", version}, {"features", features}});
+    }
+    return cursor == bytes.size();
+}
+
+bool probeClap(const QString& executable, const QString& path, QJsonArray& descriptors,
+    std::string& reason)
+{
+    QProcess process;
+    process.setProgram(executable);
+    process.setArguments({"clap", path});
+    process.start(QIODevice::ReadOnly);
+    if (!process.waitForStarted(5000)) {
+        reason = "Probe process could not start";
+        return false;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    QByteArray output;
+    QByteArray errors;
+    constexpr qsizetype outputLimit = 16 * 1024 * 1024;
+    while (!process.waitForFinished(25)) {
+        output += process.readAllStandardOutput();
+        errors += process.readAllStandardError();
+        if (timer.elapsed() > 10'000 || output.size() + errors.size() > outputLimit) {
+            process.kill();
+            process.waitForFinished(1000);
+            reason = timer.elapsed() > 10'000 ? "Probe process timed out"
+                                              : "Probe process output limit exceeded";
+            return false;
+        }
+    }
+    output += process.readAllStandardOutput();
+    errors += process.readAllStandardError();
+    if (output.size() + errors.size() > outputLimit) {
+        reason = "Probe process output limit exceeded";
+        return false;
+    }
+    if (process.exitStatus() != QProcess::NormalExit) {
+        reason = "Probe process crashed";
+        return false;
+    }
+    if (process.exitCode() != 0) {
+        const QString detail = QString::fromUtf8(errors.first(256)).simplified();
+        reason = detail.isEmpty() ? "Probe process rejected plugin"
+                                  : detail.toStdString();
+        return false;
+    }
+    if (!parseProbeOutput(output, descriptors)) {
+        reason = "Probe process returned malformed metadata";
+        return false;
+    }
+    return true;
+}
+
+int scanPlugins(const QStringList& roots, const QString& probeExecutable, bool probe)
 {
     std::vector<std::string> nativeRoots;
     nativeRoots.reserve(static_cast<std::size_t>(roots.size()));
     for (const auto& root : roots) nativeRoots.push_back(root.toStdString());
     auto catalog = nylon::PluginCatalog::scan(nativeRoots);
     if (!catalog) return fail("Could not create the plugin catalog");
+    auto found = catalog.entries();
+    std::vector<QJsonArray> metadata(found.size());
+    if (probe) {
+        if (probeExecutable.isEmpty()) return fail("Plugin probe executable is required");
+        for (std::size_t index = 0; index < found.size(); ++index) {
+            if (found[index].format != nylon::PluginFormat::Clap) continue;
+            std::string reason;
+            if (!probeClap(probeExecutable, QString::fromStdString(found[index].path),
+                    metadata[index], reason))
+                catalog.quarantine(static_cast<std::uint64_t>(index), reason);
+        }
+        found = catalog.entries();
+    }
     QJsonArray entries;
-    for (const auto& entry : catalog.entries()) {
+    for (std::size_t index = 0; index < found.size(); ++index) {
+        const auto& entry = found[index];
         entries.append(QJsonObject{{"path", QString::fromStdString(entry.path)},
             {"name", QString::fromStdString(entry.name)},
             {"format", pluginFormatName(entry.format)},
             {"state", pluginStateName(entry.state)},
-            {"quarantineReason", QString::fromStdString(entry.quarantineReason)}});
+            {"probeSupported", entry.format == nylon::PluginFormat::Clap},
+            {"quarantineReason", QString::fromStdString(entry.quarantineReason)},
+            {"descriptors", metadata[index]}});
     }
     QJsonArray issues;
     for (const auto& issue : catalog.issues()) {
@@ -472,13 +591,16 @@ int scanPlugins(const QStringList& roots)
     return writeJson({{"ok", true}, {"plugins", entries}, {"issues", issues}});
 }
 
-int directCommand(const QString& bundle, const QStringList& positional)
+int directCommand(
+    const QString& bundle, const QStringList& positional, const QString& probeExecutable)
 {
     const QString command = positional[0];
     if (command == "devices" && positional.size() == 1) return listDevices(false);
     if (command == "input-devices" && positional.size() == 1) return listDevices(true);
     if (command == "scan-plugins" && positional.size() > 1)
-        return scanPlugins(positional.sliced(1));
+        return scanPlugins(positional.sliced(1), probeExecutable, false);
+    if (command == "probe-plugins" && positional.size() > 1)
+        return scanPlugins(positional.sliced(1), probeExecutable, true);
     if (bundle.isEmpty()) return fail("A project bundle is required with --project");
     if (command == "recovery-status" && positional.size() == 1) {
         return writeJson({{"ok", true},
@@ -902,7 +1024,9 @@ int main(int argc, char** argv)
         "sample-rate", "Output sample rate for serve.", "rate", "48000");
     const QCommandLineOption blockFrames(
         "block-frames", "Output block size for serve.", "frames", "256");
-    parser.addOptions({endpoint, project, noAudio, device, sampleRate, blockFrames});
+    const QCommandLineOption pluginProbe(
+        "plugin-probe", "Plugin probe executable.", "path");
+    parser.addOptions({endpoint, project, noAudio, device, sampleRate, blockFrames, pluginProbe});
     parser.addPositionalArgument("command", "Command to execute.");
     parser.addPositionalArgument("args", "Command arguments.", "[args...]");
     parser.setOptionsAfterPositionalArgumentsMode(
@@ -928,5 +1052,5 @@ int main(int argc, char** argv)
         return runControlServer(app, options);
     }
     if (!parser.value(endpoint).isEmpty()) return remoteCommand(parser.value(endpoint), positional);
-    return directCommand(parser.value(project), positional);
+    return directCommand(parser.value(project), positional, parser.value(pluginProbe));
 }

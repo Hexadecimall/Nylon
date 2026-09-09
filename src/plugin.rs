@@ -1,5 +1,7 @@
 //! Plugin discovery and quarantine state.
 
+pub mod probe;
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};

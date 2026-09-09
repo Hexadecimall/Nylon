@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(NylonControl VERSION 0.1.0 LANGUAGES CXX)
+project(NylonControl VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,8 +34,23 @@ install(TARGETS nylon_control RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 enable_testing()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_library(nylon_clap_fixture MODULE tests/clap_fixture.c)
+set_target_properties(nylon_clap_fixture PROPERTIES PREFIX "" SUFFIX ".clap")
+add_library(nylon_clap_crash_fixture MODULE tests/clap_fixture.c)
+target_compile_definitions(nylon_clap_crash_fixture PRIVATE NYLON_FIXTURE_CRASH=1)
+set_target_properties(nylon_clap_crash_fixture PROPERTIES PREFIX "" SUFFIX ".clap")
+if(WIN32)
+    set(NYLON_PLUGIN_PROBE_DEFAULT "${NYLON_REPO_ROOT}/target/release/nylon-plugin-probe.exe")
+else()
+    set(NYLON_PLUGIN_PROBE_DEFAULT "${NYLON_REPO_ROOT}/target/release/nylon-plugin-probe")
+endif()
+set(NYLON_PLUGIN_PROBE "${NYLON_PLUGIN_PROBE_DEFAULT}"
+    CACHE FILEPATH "Path to the Nylon plugin probe executable")
+install(PROGRAMS "${NYLON_PLUGIN_PROBE}" DESTINATION "${CMAKE_INSTALL_BINDIR}")
 add_test(NAME cli_project COMMAND "${Python3_EXECUTABLE}"
-    "${NYLON_REPO_ROOT}/scripts/test_cli_project.py" "$<TARGET_FILE:nylon_control>")
+    "${NYLON_REPO_ROOT}/scripts/test_cli_project.py" "$<TARGET_FILE:nylon_control>"
+    "$<TARGET_FILE:nylon_clap_fixture>" "${NYLON_PLUGIN_PROBE}"
+    "$<TARGET_FILE:nylon_clap_crash_fixture>")
 add_test(NAME cli_server COMMAND "${Python3_EXECUTABLE}"
     "${NYLON_REPO_ROOT}/scripts/test_cli_server.py" "$<TARGET_FILE:nylon_control>")
 set_tests_properties(cli_server PROPERTIES TIMEOUT 20)

@@ -3,7 +3,7 @@ version = 2
 
 [licenses]
 version = 2
-allow = ["MIT"]
+allow = ["ISC", "MIT"]
 
 [bans]
 multiple-versions = "deny"
