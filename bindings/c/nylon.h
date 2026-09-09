@@ -282,12 +282,19 @@ unsigned long long nylon_track_plugin_identifier(const void* project,
 unsigned long long nylon_track_plugin_state(const void* project,
     unsigned long long track, unsigned long long device, unsigned char* buffer,
     unsigned long long capacity);
+unsigned long long nylon_track_plugin_parameter_count(const void* project,
+    unsigned long long track, unsigned long long device);
+int nylon_track_plugin_parameter_get(const void* project, unsigned long long track,
+    unsigned long long device, unsigned long long index, unsigned int* identifier,
+    double* value);
 int nylon_track_plugin_add(void* project, unsigned long long track, int format,
     const char* package, const char* identifier, unsigned int latency_frames,
     const unsigned char* state, unsigned long long state_length, int enabled);
 int nylon_track_plugin_set_state(void* project, unsigned long long track,
     unsigned long long device, const unsigned char* state,
     unsigned long long state_length);
+int nylon_track_plugin_parameter_set(void* project, unsigned long long track,
+    unsigned long long device, unsigned int identifier, double value);
 
 unsigned long long nylon_track_automation_count(
     const void* project, unsigned long long track, int parameter);

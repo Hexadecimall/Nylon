@@ -133,6 +133,11 @@ struct InstrumentPatch {
 enum class PluginFormat : int { Vst3 = 0, AudioUnit = 1, Clap = 2, Lv2 = 3 };
 enum class PluginState : int { Discovered = 0, Quarantined = 1 };
 
+struct PluginParameterValue {
+    std::uint32_t identifier{};
+    double value{};
+};
+
 struct TrackPluginDevice {
     PluginFormat format{PluginFormat::Clap};
     bool enabled{true};
@@ -140,6 +145,7 @@ struct TrackPluginDevice {
     std::string identifier;
     std::uint32_t latencyFrames{};
     std::vector<std::uint8_t> state;
+    std::vector<PluginParameterValue> parameters;
 };
 
 struct PluginDescriptor {
@@ -442,6 +448,8 @@ public:
     bool setTrackDeviceEnabled(std::uint64_t track, std::uint64_t index, bool enabled);
     bool setTrackPluginState(std::uint64_t track, std::uint64_t index,
         const std::vector<std::uint8_t>& state);
+    bool setTrackPluginParameter(std::uint64_t track, std::uint64_t index,
+        std::uint32_t identifier, double value);
     bool deleteTrackDevice(std::uint64_t track, std::uint64_t index);
     bool moveTrackDevice(std::uint64_t track, std::uint64_t from, std::uint64_t to);
 

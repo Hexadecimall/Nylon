@@ -1140,6 +1140,56 @@ pub unsafe extern "C" fn nylon_track_plugin_state(
     plugin.state().len() as u64
 }
 
+/// Returns the number of persistent parameter values stored for a plugin.
+///
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_plugin_parameter_count(
+    handle: *const Project,
+    track: u64,
+    device: u64,
+) -> u64 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    (unsafe { handle.as_ref() })
+        .and_then(|project| plugin_at(project, track, device))
+        .map_or(0, |plugin| plugin.parameters().len() as u64)
+}
+
+/// Reads one persistent plugin parameter value.
+///
+/// # Safety
+/// Both output pointers must address writable values. The handle must be live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_plugin_parameter_get(
+    handle: *const Project,
+    track: u64,
+    device: u64,
+    index: u64,
+    identifier: *mut u32,
+    value: *mut f64,
+) -> i32 {
+    if identifier.is_null() || value.is_null() {
+        return 0;
+    }
+    let Ok(index) = usize::try_from(index) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(parameter) = (unsafe { handle.as_ref() })
+        .and_then(|project| plugin_at(project, track, device))
+        .and_then(|plugin| plugin.parameters().get(index))
+    else {
+        return 0;
+    };
+    // SAFETY: The interface requires both pointers to address writable values.
+    unsafe {
+        identifier.write(parameter.identifier);
+        value.write(parameter.value);
+    }
+    1
+}
+
 /// Adds an external plugin at the end of a track chain.
 ///
 /// # Safety
@@ -1257,6 +1307,44 @@ pub unsafe extern "C" fn nylon_track_plugin_set_state(
     };
     project
         .apply(&[Command::SetPluginState { id, state }])
+        .is_ok()
+        .into()
+}
+
+/// Sets one persistent plugin parameter value as an undoable edit.
+///
+/// # Safety
+/// The project handle must be live and exclusive.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_plugin_parameter_set(
+    handle: *mut Project,
+    track: u64,
+    index: u64,
+    identifier: u32,
+    value: f64,
+) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let (Ok(track), Ok(index)) = (usize::try_from(track), usize::try_from(index)) else {
+        return 0;
+    };
+    let Some(id) = project
+        .current
+        .tracks
+        .get(track)
+        .and_then(|track| track.devices().get(index))
+        .map(|device| device.id())
+    else {
+        return 0;
+    };
+    project
+        .apply(&[Command::SetPluginParameter {
+            id,
+            identifier,
+            value,
+        }])
         .is_ok()
         .into()
 }

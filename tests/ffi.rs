@@ -93,6 +93,22 @@ fn native_plugin_devices_preserve_metadata_state_and_shared_order() {
             4
         );
         assert_eq!(restored, state);
+        assert_eq!(nylon_track_plugin_parameter_count(handle, 0, 0), 0);
+        assert_eq!(nylon_track_plugin_parameter_set(handle, 0, 0, 71, 0.625), 1);
+        assert_eq!(nylon_track_plugin_parameter_count(handle, 0, 0), 1);
+        let mut identifier = 0;
+        let mut value = 0.0;
+        assert_eq!(
+            nylon_track_plugin_parameter_get(handle, 0, 0, 0, &mut identifier, &mut value,),
+            1
+        );
+        assert_eq!((identifier, value), (71, 0.625));
+        assert_eq!(
+            nylon_track_plugin_parameter_set(handle, 0, 0, 71, f64::NAN),
+            0
+        );
+        assert_eq!(nylon_project_undo(handle), 1);
+        assert_eq!(nylon_track_plugin_parameter_count(handle, 0, 0), 0);
         assert_eq!(nylon_track_device_set_enabled(handle, 0, 0, 0), 1);
         assert_eq!(nylon_track_device_enabled(handle, 0, 0), 0);
         assert_eq!(

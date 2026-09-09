@@ -1119,7 +1119,7 @@ impl PlaybackEngine {
                         .get(usize::from(node))
                         .map_or(&[][..], TrackPluginEvents::as_slice);
                     if devices[usize::from(node)]
-                        .process_events(main, sidechain, pre, &[], note_events)
+                        .process_events(main, sidechain, pre, note_events)
                         .is_err()
                     {
                         pre.fill([0.0; 2]);

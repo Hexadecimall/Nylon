@@ -454,12 +454,18 @@ QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
 
 QJsonObject pluginDeviceJson(const nylon::TrackPluginDevice& device, std::uint64_t index)
 {
+    QJsonArray parameters;
+    for (const auto& parameter : device.parameters) {
+        parameters.append(QJsonObject{{"identifier", static_cast<double>(parameter.identifier)},
+            {"value", parameter.value}});
+    }
     return {{"index", static_cast<double>(index)}, {"kind", "plugin"},
         {"enabled", device.enabled}, {"format", pluginFormatName(device.format)},
         {"package", QString::fromStdString(device.package)},
         {"identifier", QString::fromStdString(device.identifier)},
         {"latencyFrames", static_cast<double>(device.latencyFrames)},
-        {"stateBytes", static_cast<double>(device.state.size())}};
+        {"stateBytes", static_cast<double>(device.state.size())},
+        {"parameters", parameters}};
 }
 
 bool parsePluginFormat(const QString& text, nylon::PluginFormat& format)
@@ -1062,6 +1068,15 @@ int directCommand(
             || !flag(positional[3], enabled))
             return fail("Invalid device state");
         changed = project.setTrackDeviceEnabled(track, index, enabled);
+    } else if (command == "set-plugin-parameter" && positional.size() == 5) {
+        std::uint64_t track = 0;
+        std::uint64_t index = 0;
+        std::uint32_t identifier = 0;
+        double value = 0.0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], index)
+            || !unsignedNumber(positional[3], identifier) || !number(positional[4], value))
+            return fail("Invalid plugin parameter");
+        changed = project.setTrackPluginParameter(track, index, identifier, value);
     } else if (command == "move-device" && positional.size() == 4) {
         std::uint64_t track = 0;
         std::uint64_t from = 0;

@@ -307,6 +307,20 @@ public:
                 return error("Invalid track device state");
             return commitEdit();
         }
+        if (command == "set-plugin-parameter" && args.size() == 4) {
+            std::uint64_t track = 0;
+            std::uint64_t index = 0;
+            std::uint64_t identifier = 0;
+            double value = 0.0;
+            if (!indexValue(args[0], track) || !indexValue(args[1], index)
+                || !indexValue(args[2], identifier)
+                || identifier > std::numeric_limits<std::uint32_t>::max()
+                || !numberValue(args[3], value)
+                || !m_project.setTrackPluginParameter(
+                    track, index, static_cast<std::uint32_t>(identifier), value))
+                return error("Invalid plugin parameter");
+            return commitEdit();
+        }
         if (command == "create-midi-clip" && args.size() == 3) {
             std::uint64_t track = 0;
             std::uint64_t scene = 0;

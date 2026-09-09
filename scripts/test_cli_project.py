@@ -149,7 +149,11 @@ def main():
         plugin = call("track-devices", "0")["devices"][8]
         assert plugin == {"enabled": True, "format": "clap", "identifier": "app.nylon.effect",
                           "index": 8, "kind": "plugin", "latencyFrames": 96,
-                          "package": "Effect.clap", "stateBytes": 0}, plugin
+                          "package": "Effect.clap", "stateBytes": 0,
+                          "parameters": []}, plugin
+        call("set-plugin-parameter", "0", "8", "42", "0.625")
+        plugin = call("track-devices", "0")["devices"][8]
+        assert plugin["parameters"] == [{"identifier": 42, "value": 0.625}], plugin
         call("set-device-enabled", "0", "8", "off")
         assert call("track-devices", "0")["devices"][8]["enabled"] is False
         call("move-device", "0", "8", "0")

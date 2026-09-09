@@ -55,6 +55,7 @@ nylon-control --endpoint nylon-live quantize-notes 0 0 0.25 1
 nylon-control --endpoint nylon-live set-instrument 0 saw square 0.6 -7 0.35 0.04 4 18 0.01 0.2 0.7 0.3 2400 1.2 -9
 nylon-control --endpoint nylon-live add-device 0 reverb 0.6 2.8 0.35 0.7 0.02 1 0.3
 nylon-control --endpoint nylon-live add-plugin 0 clap Effect.clap app.nylon.effect 96 on
+nylon-control --endpoint nylon-live set-plugin-parameter 0 0 42 0.75
 nylon-control --endpoint nylon-live track-devices 0
 nylon-control --endpoint nylon-live launch-clip 0 0 1
 nylon-control --endpoint nylon-live stop-clip 0

@@ -22,6 +22,7 @@ use crate::media::{ImportReport, MediaError, PendingRecording, prepare_recording
 use crate::media::{SessionAudioRegion, timeline_from_project, timeline_from_project_with_session};
 use crate::mixer::{AutomationCurve as PlaybackAutomationCurve, MAX_TRACKS, Parameter};
 use crate::plugin::bridge::Bridge;
+use crate::plugin::clap::ParameterEvent;
 use crate::plugin::worker::Client as PluginClient;
 use crate::plugin::{Catalog as PluginCatalog, Format as PluginFormat, State as PluginState};
 use crate::project::{AutomationCurve, AutomationParameter, Project, Snapshot, TrackKind};
@@ -856,7 +857,16 @@ fn playback_racks(
             }
             let bridge = Bridge::from_client(client, block_frames, 3)
                 .map_err(|_| AudioError::Host("plugin bridge could not be prepared"))?;
-            rack.push_plugin(bridge)
+            let parameter_events: Vec<_> = plugin
+                .parameters()
+                .iter()
+                .map(|parameter| ParameterEvent {
+                    sample_offset: 0,
+                    identifier: parameter.identifier,
+                    value: parameter.value,
+                })
+                .collect();
+            rack.push_plugin_with_parameters(bridge, &parameter_events)
                 .map_err(|_| AudioError::Host("plugin rack could not be prepared"))?;
         }
         if !native.is_empty() {

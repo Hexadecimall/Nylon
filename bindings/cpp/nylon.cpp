@@ -692,10 +692,21 @@ bool Project::trackPluginDevice(
     std::vector<std::uint8_t> state(static_cast<std::size_t>(stateLength));
     if (stateLength != 0)
         nylon_track_plugin_state(m_handle, track, index, state.data(), state.size());
+    const auto parameterCount = nylon_track_plugin_parameter_count(m_handle, track, index);
+    std::vector<PluginParameterValue> parameters;
+    parameters.reserve(static_cast<std::size_t>(parameterCount));
+    for (std::uint64_t parameterIndex = 0; parameterIndex < parameterCount; ++parameterIndex) {
+        PluginParameterValue parameter;
+        if (!nylon_track_plugin_parameter_get(m_handle, track, index, parameterIndex,
+                &parameter.identifier, &parameter.value))
+            return false;
+        parameters.push_back(parameter);
+    }
     device = {static_cast<PluginFormat>(format),
         nylon_track_device_enabled(m_handle, track, index) == 1,
         package.data(), identifier.data(),
-        nylon_track_plugin_latency(m_handle, track, index), std::move(state)};
+        nylon_track_plugin_latency(m_handle, track, index), std::move(state),
+        std::move(parameters)};
     return true;
 }
 
@@ -732,6 +743,12 @@ bool Project::setTrackPluginState(std::uint64_t track, std::uint64_t index,
     return nylon_track_plugin_set_state(m_handle, track, index,
                state.empty() ? nullptr : state.data(), state.size())
         != 0;
+}
+
+bool Project::setTrackPluginParameter(std::uint64_t track, std::uint64_t index,
+    std::uint32_t identifier, double value)
+{
+    return nylon_track_plugin_parameter_set(m_handle, track, index, identifier, value) != 0;
 }
 
 bool Project::deleteTrackDevice(std::uint64_t track, std::uint64_t index)

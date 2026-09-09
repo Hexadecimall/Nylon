@@ -198,6 +198,25 @@ fn session() -> Project {
             },
         ])
         .unwrap();
+    let plugin = project.snapshot().tracks()[0]
+        .devices()
+        .last()
+        .unwrap()
+        .id();
+    project
+        .apply(&[
+            Command::SetPluginParameter {
+                id: plugin,
+                identifier: 12,
+                value: 0.25,
+            },
+            Command::SetPluginParameter {
+                id: plugin,
+                identifier: 99,
+                value: 0.875,
+            },
+        ])
+        .unwrap();
     project
         .apply(&[Command::CreateScene {
             name: "Verse".into(),
@@ -314,7 +333,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 16;
+    future[4] = 17;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

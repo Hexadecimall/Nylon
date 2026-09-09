@@ -3,7 +3,7 @@ use nylon::engine::voice::Patch;
 use nylon::plugin::Format as PluginFormat;
 use nylon::project::{
     AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, PluginDevice,
-    Project, ProjectError, TrackKind,
+    PluginParameterValue, Project, ProjectError, TrackKind,
 };
 use nylon::routing::EdgeKind;
 
@@ -889,6 +889,11 @@ fn plugin_devices_share_order_history_and_latency_with_native_devices() {
                 id: plugin_id,
                 state: vec![9, 8],
             },
+            Command::SetPluginParameter {
+                id: plugin_id,
+                identifier: 42,
+                value: 0.75,
+            },
         ])
         .unwrap();
     let changed = project.snapshot();
@@ -897,6 +902,16 @@ fn plugin_devices_share_order_history_and_latency_with_native_devices() {
         changed.tracks()[0].devices()[0].plugin().unwrap().state(),
         &[9, 8]
     );
+    assert_eq!(
+        changed.tracks()[0].devices()[0]
+            .plugin()
+            .unwrap()
+            .parameters(),
+        &[PluginParameterValue {
+            identifier: 42,
+            value: 0.75,
+        }]
+    );
     assert!(project.undo());
     assert_eq!(
         project.snapshot().tracks()[0].devices()[1]
@@ -904,5 +919,21 @@ fn plugin_devices_share_order_history_and_latency_with_native_devices() {
             .unwrap()
             .state(),
         &[1, 2, 3]
+    );
+    assert!(
+        project.snapshot().tracks()[0].devices()[1]
+            .plugin()
+            .unwrap()
+            .parameters()
+            .is_empty()
+    );
+
+    assert_eq!(
+        project.apply(&[Command::SetPluginParameter {
+            id: plugin_id,
+            identifier: 42,
+            value: f64::NAN,
+        }]),
+        Err(ProjectError::InvalidDevice)
     );
 }

@@ -20,7 +20,8 @@ use crate::plugin::Format as PluginFormat;
 use crate::project::{
     self, ArrangementPlacement, AudioClip, AutomationCurve, AutomationLane, AutomationParameter,
     AutomationPoint, ClipId, Device, DeviceId, DeviceProcessor, MidiClip, MidiNote, PluginDevice,
-    Project, Route, RouteId, Scene, SceneId, Snapshot, Track, TrackId, TrackKind,
+    PluginParameterValue, Project, Route, RouteId, Scene, SceneId, Snapshot, Track, TrackId,
+    TrackKind,
 };
 use crate::routing::EdgeKind;
 use std::collections::HashSet;
@@ -33,7 +34,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 15;
+const VERSION: u32 = 16;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -258,6 +259,11 @@ impl Encoder {
                         self.bytes(plugin.identifier().as_bytes())?;
                         self.count(plugin.state().len())?;
                         self.bytes(plugin.state())?;
+                        self.count(plugin.parameters().len())?;
+                        for parameter in plugin.parameters() {
+                            self.bytes(&parameter.identifier.to_le_bytes())?;
+                            self.bytes(&parameter.value.to_le_bytes())?;
+                        }
                     }
                 }
             }
@@ -466,9 +472,25 @@ impl<'a> Decoder<'a> {
                             .to_owned();
                         let state_length = self.count()?;
                         let state = self.bytes(state_length)?.to_vec();
-                        let plugin =
+                        let mut plugin =
                             PluginDevice::new(format, package, identifier, latency_frames, state)
                                 .map_err(|_| PersistenceError::InvalidFormat)?;
+                        if version >= 16 {
+                            let parameter_count = self.count()?;
+                            if parameter_count > project::MAX_PLUGIN_PARAMETER_VALUES {
+                                return Err(PersistenceError::InvalidFormat);
+                            }
+                            let mut parameters = Vec::with_capacity(parameter_count);
+                            for _ in 0..parameter_count {
+                                parameters.push(PluginParameterValue {
+                                    identifier: u32::from_le_bytes(self.array()?),
+                                    value: f64::from_le_bytes(self.array()?),
+                                });
+                            }
+                            plugin
+                                .set_parameters(parameters)
+                                .map_err(|_| PersistenceError::InvalidFormat)?;
+                        }
                         DeviceProcessor::Plugin(plugin)
                     } else {
                         let kind = match processor_code {

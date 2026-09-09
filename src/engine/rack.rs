@@ -21,6 +21,7 @@ impl From<DeviceError> for RackError {
 
 struct PluginStage {
     bridge: Bridge,
+    parameter_events: Vec<ParameterEvent>,
     input_left: Vec<f32>,
     input_right: Vec<f32>,
     output_left: Vec<f32>,
@@ -28,12 +29,24 @@ struct PluginStage {
 }
 
 impl PluginStage {
-    fn new(bridge: Bridge, max_frames: usize) -> Result<Self, RackError> {
+    fn new(
+        bridge: Bridge,
+        max_frames: usize,
+        parameter_events: &[ParameterEvent],
+    ) -> Result<Self, RackError> {
         if max_frames == 0 || bridge.block_frames() != max_frames {
+            return Err(RackError::BufferSize);
+        }
+        if parameter_events.len() > crate::plugin::clap::MAX_PARAMETER_EVENTS
+            || parameter_events
+                .iter()
+                .any(|event| event.sample_offset != 0 || !event.value.is_finite())
+        {
             return Err(RackError::BufferSize);
         }
         Ok(Self {
             bridge,
+            parameter_events: parameter_events.to_vec(),
             input_left: zeroed(max_frames)?,
             input_right: zeroed(max_frames)?,
             output_left: zeroed(max_frames)?,
@@ -122,6 +135,14 @@ impl DeviceRack {
     }
 
     pub fn push_plugin(&mut self, bridge: Bridge) -> Result<(), RackError> {
+        self.push_plugin_with_parameters(bridge, &[])
+    }
+
+    pub fn push_plugin_with_parameters(
+        &mut self,
+        bridge: Bridge,
+        parameter_events: &[ParameterEvent],
+    ) -> Result<(), RackError> {
         if self.device_count == MAX_DEVICES {
             return Err(RackError::Capacity);
         }
@@ -129,7 +150,7 @@ impl DeviceRack {
             .latency_frames
             .checked_add(bridge.latency_frames())
             .ok_or(RackError::StorageCapacity)?;
-        let stage = PluginStage::new(bridge, self.max_frames)?;
+        let stage = PluginStage::new(bridge, self.max_frames, parameter_events)?;
         self.stages.push(Stage::Plugin(Box::new(stage)));
         self.device_count += 1;
         self.latency_frames = latency_frames;
@@ -163,7 +184,7 @@ impl DeviceRack {
         sidechain: &[[f32; 2]],
         output: &mut [[f32; 2]],
     ) -> Result<(), RackError> {
-        self.process_events(input, sidechain, output, &[], &[])
+        self.process_events(input, sidechain, output, &[])
     }
 
     pub fn process_events(
@@ -171,7 +192,6 @@ impl DeviceRack {
         input: &[[f32; 2]],
         sidechain: &[[f32; 2]],
         output: &mut [[f32; 2]],
-        parameter_events: &[ParameterEvent],
         note_events: &[NoteEvent],
     ) -> Result<(), RackError> {
         let frames = input.len();
@@ -195,7 +215,6 @@ impl DeviceRack {
                     sidechain,
                     &mut self.second[..frames],
                     self.max_frames,
-                    parameter_events,
                     note_events,
                 )
             } else {
@@ -205,7 +224,6 @@ impl DeviceRack {
                     sidechain,
                     &mut self.first[..frames],
                     self.max_frames,
-                    parameter_events,
                     note_events,
                 )
             };
@@ -228,7 +246,6 @@ fn process_stage(
     sidechain: &[[f32; 2]],
     output: &mut [[f32; 2]],
     max_frames: usize,
-    parameter_events: &[ParameterEvent],
     note_events: &[NoteEvent],
 ) -> Result<(), RackError> {
     match stage {
@@ -251,7 +268,7 @@ fn process_stage(
                     Some((&stage.input_left, &stage.input_right)),
                     &mut stage.output_left,
                     &mut stage.output_right,
-                    parameter_events,
+                    &stage.parameter_events,
                     note_events,
                 )
                 .map_err(|_| RackError::BufferSize)?;
@@ -296,6 +313,8 @@ mod tests {
 
     struct Gain(f32);
 
+    struct ParameterGain(u32);
+
     struct NoteSignal;
 
     impl BlockProcessor for Gain {
@@ -311,6 +330,28 @@ mod tests {
             for index in 0..left.len() {
                 output_left[index] = left[index] * self.0;
                 output_right[index] = right[index] * self.0;
+            }
+            true
+        }
+    }
+
+    impl BlockProcessor for ParameterGain {
+        fn process_block(
+            &mut self,
+            input: Option<(&[f32], &[f32])>,
+            output_left: &mut [f32],
+            output_right: &mut [f32],
+            parameter_events: &[ParameterEvent],
+            _: &[NoteEvent],
+        ) -> bool {
+            let gain = match parameter_events {
+                [event] if event.identifier == self.0 => event.value as f32,
+                _ => 0.0,
+            };
+            let (left, right) = input.unwrap();
+            for index in 0..left.len() {
+                output_left[index] = left[index] * gain;
+                output_right[index] = right[index] * gain;
             }
             true
         }
@@ -406,7 +447,7 @@ mod tests {
         };
         let mut output = [[0.0; 2]; 8];
         for _ in 0..10_000 {
-            rack.process_events(&input, &[], &mut output, &[], &[event])
+            rack.process_events(&input, &[], &mut output, &[event])
                 .unwrap();
             if output[5][0] == 0.75 {
                 break;
@@ -416,5 +457,38 @@ mod tests {
         assert_eq!(output[4], [0.0, 0.0]);
         assert_eq!(output[5], [0.75, 64.0 / 127.0]);
         assert_eq!(output[6], [0.0, 0.0]);
+    }
+
+    #[test]
+    fn plugin_parameter_values_are_delivered_only_to_their_stage() {
+        let mut rack = DeviceRack::new(4).unwrap();
+        rack.push_plugin_with_parameters(
+            Bridge::new(ParameterGain(11), 4, 2, 0).unwrap(),
+            &[ParameterEvent {
+                sample_offset: 0,
+                identifier: 11,
+                value: 2.0,
+            }],
+        )
+        .unwrap();
+        rack.push_plugin_with_parameters(
+            Bridge::new(ParameterGain(29), 4, 2, 0).unwrap(),
+            &[ParameterEvent {
+                sample_offset: 0,
+                identifier: 29,
+                value: 3.0,
+            }],
+        )
+        .unwrap();
+        let input = [[1.0, -1.0]; 4];
+        let mut output = [[0.0; 2]; 4];
+        for _ in 0..10_000 {
+            rack.process(&input, &[], &mut output).unwrap();
+            if output == [[6.0, -6.0]; 4] {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(output, [[6.0, -6.0]; 4]);
     }
 }

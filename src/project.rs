@@ -110,14 +110,23 @@ pub struct RouteId(pub(crate) u64);
 pub struct DeviceId(pub(crate) u64);
 
 pub const MAX_PLUGIN_TEXT_BYTES: usize = 1_024;
+pub const MAX_PLUGIN_PARAMETER_VALUES: usize = crate::plugin::clap::MAX_PARAMETER_EVENTS;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One persistent value override for an external plugin parameter.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PluginParameterValue {
+    pub identifier: u32,
+    pub value: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct PluginDevice {
     format: PluginFormat,
     package: String,
     identifier: String,
     latency_frames: u32,
     state: Arc<[u8]>,
+    parameters: Arc<[PluginParameterValue]>,
 }
 
 impl PluginDevice {
@@ -134,6 +143,7 @@ impl PluginDevice {
             identifier: identifier.into(),
             latency_frames,
             state: state.into(),
+            parameters: Arc::from([]),
         };
         value.validate()?;
         Ok(value)
@@ -154,6 +164,16 @@ impl PluginDevice {
     pub fn state(&self) -> &[u8] {
         &self.state
     }
+    pub fn parameters(&self) -> &[PluginParameterValue] {
+        &self.parameters
+    }
+    pub(crate) fn set_parameters(
+        &mut self,
+        parameters: impl Into<Arc<[PluginParameterValue]>>,
+    ) -> Result<(), ProjectError> {
+        self.parameters = parameters.into();
+        self.validate()
+    }
     fn validate(&self) -> Result<(), ProjectError> {
         if self.package.is_empty()
             || self.package.len() > MAX_PLUGIN_TEXT_BYTES
@@ -165,6 +185,15 @@ impl PluginDevice {
             || self.identifier.len() > MAX_PLUGIN_TEXT_BYTES
             || self.identifier.contains('\0')
             || self.state.len() > MAX_STATE_BYTES
+            || self.parameters.len() > MAX_PLUGIN_PARAMETER_VALUES
+            || self
+                .parameters
+                .iter()
+                .any(|parameter| !parameter.value.is_finite())
+            || self
+                .parameters
+                .windows(2)
+                .any(|pair| pair[0].identifier >= pair[1].identifier)
         {
             return Err(ProjectError::InvalidDevice);
         }
@@ -623,6 +652,11 @@ pub enum Command {
         id: DeviceId,
         state: Vec<u8>,
     },
+    SetPluginParameter {
+        id: DeviceId,
+        identifier: u32,
+        value: f64,
+    },
     SetAutomation {
         track: TrackId,
         parameter: AutomationParameter,
@@ -1037,6 +1071,43 @@ impl Project {
                         return Err(ProjectError::InvalidDevice);
                     };
                     plugin.state = Arc::from(state.as_slice());
+                }
+                Command::SetPluginParameter {
+                    id,
+                    identifier,
+                    value,
+                } => {
+                    if !value.is_finite() {
+                        return Err(ProjectError::InvalidDevice);
+                    }
+                    let device = snapshot
+                        .tracks
+                        .iter_mut()
+                        .flat_map(|track| &mut track.devices)
+                        .find(|device| device.id == *id)
+                        .ok_or(ProjectError::MissingDevice)?;
+                    let DeviceProcessor::Plugin(plugin) = &mut device.processor else {
+                        return Err(ProjectError::InvalidDevice);
+                    };
+                    let mut parameters = plugin.parameters.to_vec();
+                    match parameters
+                        .binary_search_by_key(identifier, |parameter| parameter.identifier)
+                    {
+                        Ok(index) => parameters[index].value = *value,
+                        Err(index) => {
+                            if parameters.len() == MAX_PLUGIN_PARAMETER_VALUES {
+                                return Err(ProjectError::DeviceCapacity);
+                            }
+                            parameters.insert(
+                                index,
+                                PluginParameterValue {
+                                    identifier: *identifier,
+                                    value: *value,
+                                },
+                            );
+                        }
+                    }
+                    plugin.parameters = Arc::from(parameters);
                 }
                 Command::SetAutomation {
                     track,
