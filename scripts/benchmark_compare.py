@@ -52,12 +52,19 @@ def regression(baseline, candidate):
     return moved and separated
 
 
+class Unbuildable(Exception):
+    """The revision does not compile, so it cannot be measured."""
+
+
 def build(root, name):
     subprocess.run([sys.executable, "-B", "scripts/bootstrap.py"], cwd=root, check=True)
-    output = subprocess.check_output([
-        "cargo", "bench", "--locked", "--bench", name, "--no-run",
-        "--message-format=json",
-    ], cwd=root, text=True)
+    try:
+        output = subprocess.check_output([
+            "cargo", "bench", "--locked", "--bench", name, "--no-run",
+            "--message-format=json",
+        ], cwd=root, text=True)
+    except subprocess.CalledProcessError as error:
+        raise Unbuildable(f"{root} does not build") from error
     for line in output.splitlines():
         item = json.loads(line)
         if item.get("reason") == "compiler-artifact" and item.get("executable"):
@@ -75,8 +82,18 @@ def measure(executable, key):
 
 
 def compare(root, name, key):
-    """Measures both revisions and reports whether the candidate regressed."""
-    baseline_binary = build(root, name)
+    """Measures both revisions and reports whether the candidate regressed.
+
+    A baseline that does not build gives nothing to compare against. That
+    is reported and skipped rather than failing the run, since the point
+    of this check is the change under test, not the state of the revision
+    behind it. A candidate that does not build is a failure.
+    """
+    try:
+        baseline_binary = build(root, name)
+    except Unbuildable:
+        print(f"{name}: the baseline revision does not build, skipped")
+        return False
     candidate_binary = build(pathlib.Path.cwd(), name)
     baseline, candidate = [], []
     for index in range(SAMPLES):
