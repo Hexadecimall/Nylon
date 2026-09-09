@@ -112,9 +112,33 @@ impl Compressor {
     #[inline]
     #[must_use]
     pub fn process_stereo(&mut self, left: f32, right: f32) -> (f32, f32) {
+        self.process_stereo_sidechain(left, right, left, right)
+    }
+
+    /// Processes stereo audio while deriving gain reduction from a separate
+    /// stereo detector signal.
+    #[inline]
+    #[must_use]
+    pub fn process_stereo_sidechain(
+        &mut self,
+        left: f32,
+        right: f32,
+        detector_left: f32,
+        detector_right: f32,
+    ) -> (f32, f32) {
         let left = if left.is_finite() { left } else { 0.0 };
         let right = if right.is_finite() { right } else { 0.0 };
-        let detector = left.abs().max(right.abs());
+        let detector_left = if detector_left.is_finite() {
+            detector_left
+        } else {
+            0.0
+        };
+        let detector_right = if detector_right.is_finite() {
+            detector_right
+        } else {
+            0.0
+        };
+        let detector = detector_left.abs().max(detector_right.abs());
         let input_db = from_linear(detector);
         let target = self.static_gain_db(input_db);
         let coefficient = if target < self.gain_reduction_db {
@@ -262,6 +286,14 @@ mod tests {
         let mut compressor = Compressor::new(RATE, hard(-20.0, 4.0));
         let (left, right) = compressor.process_stereo(1.0, 0.25);
         close(left / right, 4.0, 1e-5);
+    }
+
+    #[test]
+    fn external_sidechain_controls_gain_without_replacing_audio() {
+        let mut compressor = Compressor::new(RATE, hard(-20.0, 4.0));
+        let (left, right) = compressor.process_stereo_sidechain(0.1, -0.05, 1.0, 0.5);
+        assert!(left < 0.1);
+        close(left / right, -2.0, 1e-5);
     }
 
     #[test]

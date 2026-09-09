@@ -310,6 +310,65 @@ fn routing_a_block_performs_no_allocator_operations() {
 }
 
 #[test]
+fn a_device_chain_processes_without_allocating() {
+    use nylon::dsp::biquad::Kind as FilterKind;
+    use nylon::dsp::compressor::Parameters as CompressorParameters;
+    use nylon::engine::device::{DeviceChain, DeviceConfig, DeviceKind};
+
+    let configs = [
+        DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Utility {
+                gain_db: -3.0,
+                width: 1.2,
+                balance: 0.1,
+            },
+        },
+        DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Equalizer {
+                kind: FilterKind::Peaking,
+                frequency: 1_200.0,
+                q: 0.8,
+                gain_db: 2.0,
+            },
+        },
+        DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Compressor {
+                parameters: CompressorParameters::default(),
+                external_sidechain: true,
+            },
+        },
+        DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::StereoDelay {
+                delay_seconds: 0.01,
+                feedback: 0.25,
+                mix: 0.2,
+            },
+        },
+    ];
+    let mut chain = DeviceChain::new(&configs, RATE).unwrap();
+    let input = vec![[0.2, -0.1]; BLOCK];
+    let sidechain = vec![[0.8, 0.4]; BLOCK];
+    let mut output = vec![[0.0; 2]; BLOCK];
+    chain.process(&input, &sidechain, &mut output).unwrap();
+
+    let operations = measure(|| {
+        for _ in 0..32 {
+            chain.process(&input, &sidechain, &mut output).unwrap();
+        }
+        chain.reset();
+    });
+    assert_eq!(
+        operations, 0,
+        "{operations} allocator operations in device chain"
+    );
+    assert!(output.iter().flatten().all(|sample| sample.is_finite()));
+}
+
+#[test]
 fn a_voice_bank_sounds_notes_without_allocating() {
     use nylon::engine::voice::{MAX_VOICES, Patch, VoiceBank};
 

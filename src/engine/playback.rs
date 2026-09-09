@@ -11,6 +11,7 @@
 //! instrument output enter the same latency-compensated routing graph.
 
 use crate::audio::{BlockTiming, Renderer, StreamConfig};
+use crate::engine::device::{DeviceChain, DeviceConfig, DeviceError, MAX_DELAY_STORAGE_FRAMES};
 use crate::engine::graph::{GraphRenderError, GraphRenderer, NodeInput};
 use crate::engine::schedule::{
     MAX_NOTE_EVENTS, NoteAction, NoteEvent, ScheduledNote, Span, schedule_block, sort_notes,
@@ -390,6 +391,13 @@ pub struct Publisher {
     audio: ControlSlot<Box<AudioTimeline>>,
     routing: ControlSlot<Option<Box<PublishedRouting>>>,
     state: Reader<PlaybackState>,
+    sample_rate: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoutingPublishError {
+    Graph(GraphRenderError),
+    Device(DeviceError),
 }
 
 impl Publisher {
@@ -434,19 +442,57 @@ impl Publisher {
         &mut self,
         compiled: &CompiledRouting,
         output_node: u16,
-    ) -> Result<bool, GraphRenderError> {
+    ) -> Result<bool, RoutingPublishError> {
         if compiled.output_latency(output_node).is_none() {
-            return Err(GraphRenderError::InvalidNode);
+            return Err(RoutingPublishError::Graph(GraphRenderError::InvalidNode));
         }
         while self.routing.reclaim().is_some() {}
         let routing = PublishedRouting {
-            renderer: GraphRenderer::new(compiled, MAX_FRAMES)?,
+            renderer: GraphRenderer::new(compiled, MAX_FRAMES)
+                .map_err(RoutingPublishError::Graph)?,
             output_node,
+            devices: empty_device_chains(compiled.node_count(), self.sample_rate)
+                .map_err(RoutingPublishError::Device)?,
         };
         Ok(self.routing.publish(Some(Box::new(routing))).is_ok())
     }
-    // back on the audio thread
 
+    /// Builds routing and per-node device chains as one callback revision.
+    pub fn publish_routing_with_devices(
+        &mut self,
+        compiled: &CompiledRouting,
+        output_node: u16,
+        node_devices: &[&[DeviceConfig]],
+    ) -> Result<bool, RoutingPublishError> {
+        if compiled.output_latency(output_node).is_none() {
+            return Err(RoutingPublishError::Graph(GraphRenderError::InvalidNode));
+        }
+        while self.routing.reclaim().is_some() {}
+        let mut devices = Vec::new();
+        devices
+            .try_reserve_exact(compiled.node_count())
+            .map_err(|_| RoutingPublishError::Device(DeviceError::StorageCapacity))?;
+        let mut delay_storage = 0_usize;
+        for node in 0..compiled.node_count() {
+            let chain = DeviceChain::new(
+                node_devices.get(node).copied().unwrap_or(&[]),
+                self.sample_rate,
+            )
+            .map_err(RoutingPublishError::Device)?;
+            delay_storage = delay_storage
+                .checked_add(chain.delay_storage_frames())
+                .filter(|frames| *frames <= MAX_DELAY_STORAGE_FRAMES)
+                .ok_or(RoutingPublishError::Device(DeviceError::StorageCapacity))?;
+            devices.push(chain);
+        }
+        let routing = PublishedRouting {
+            renderer: GraphRenderer::new(compiled, MAX_FRAMES)
+                .map_err(RoutingPublishError::Graph)?,
+            output_node,
+            devices,
+        };
+        Ok(self.routing.publish(Some(Box::new(routing))).is_ok())
+    }
     /// Reads whatever the engine last reported. Repeats the previous
     /// reading when no new one has arrived.
     pub fn state(&mut self) -> PlaybackState {
@@ -457,9 +503,20 @@ impl Publisher {
 struct PublishedRouting {
     renderer: GraphRenderer,
     output_node: u16,
+    devices: Vec<DeviceChain>,
 }
 
-// off the audio thread
+fn empty_device_chains(count: usize, sample_rate: f32) -> Result<Vec<DeviceChain>, DeviceError> {
+    let mut chains = Vec::new();
+    chains
+        .try_reserve_exact(count)
+        .map_err(|_| DeviceError::StorageCapacity)?;
+    for _ in 0..count {
+        chains.push(DeviceChain::new(&[], sample_rate)?);
+    }
+    Ok(chains)
+}
+
 /// Builds the per-track buffers directly on the heap.
 ///
 /// A vector grows into an allocation of its own, so the whole block of
@@ -536,6 +593,7 @@ impl PlaybackEngine {
             audio: audio_control,
             routing: routing_control,
             state: state_reader,
+            sample_rate: rate as f32,
         };
         (engine, publisher)
     }
@@ -819,7 +877,12 @@ impl PlaybackEngine {
                 output[start..end].fill([0.0; 2]);
                 return;
             };
-            let output_node = routing.output_node;
+            let PublishedRouting {
+                renderer,
+                output_node,
+                devices,
+            } = routing.as_mut();
+            let output_node = *output_node;
             let mut span_inputs = [NodeInput {
                 node: 0,
                 samples: &[],
@@ -833,18 +896,22 @@ impl PlaybackEngine {
                     samples: &source.samples[start..end],
                 };
             }
-            if routing
-                .renderer
+            if renderer
                 .render(
                     &span_inputs[..track_count],
                     output_node,
                     &mut output[start..end],
-                    |node, main, _, pre, post| {
-                        pre.copy_from_slice(main);
+                    |node, main, sidechain, pre, post| {
+                        if devices[usize::from(node)]
+                            .process(main, sidechain, pre)
+                            .is_err()
+                        {
+                            pre.fill([0.0; 2]);
+                        }
                         if node == output_node {
-                            mixer.process_master(main, post);
+                            mixer.process_master(pre, post);
                         } else {
-                            mixer.process_track(node, main, post);
+                            mixer.process_track(node, pre, post);
                         }
                     },
                 )
@@ -1078,11 +1145,20 @@ mod tests {
             .unwrap();
         assert_eq!(
             publisher.publish_routing(&graph.compile().unwrap(), 9),
-            Err(GraphRenderError::InvalidNode)
+            Err(RoutingPublishError::Graph(GraphRenderError::InvalidNode))
         );
+        let utility = [DeviceConfig {
+            enabled: true,
+            kind: crate::engine::device::DeviceKind::Utility {
+                gain_db: -6.020_6,
+                width: 1.0,
+                balance: 0.0,
+            },
+        }];
+        let node_devices: [&[DeviceConfig]; 3] = [&utility, &[], &[]];
         assert!(
             publisher
-                .publish_routing(&graph.compile().unwrap(), 2)
+                .publish_routing_with_devices(&graph.compile().unwrap(), 2, &node_devices)
                 .unwrap()
         );
 
@@ -1098,8 +1174,8 @@ mod tests {
         let mut output = [[0.0_f32; 2]; 64];
         engine.render_block(&mut output, &[]);
         for frame in output {
-            assert!((frame[0] - 0.1).abs() < 1e-4);
-            assert!((frame[1] + 0.1).abs() < 1e-4);
+            assert!((frame[0] - 0.05).abs() < 1e-4, "{frame:?}");
+            assert!((frame[1] + 0.05).abs() < 1e-4, "{frame:?}");
         }
     }
 

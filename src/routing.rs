@@ -189,6 +189,10 @@ pub struct CompiledRouting {
 }
 
 impl CompiledRouting {
+    pub const fn node_count(&self) -> usize {
+        self.node_count
+    }
+
     pub fn order(&self) -> &[u16] {
         &self.order[..self.node_count]
     }
