@@ -1,3 +1,4 @@
+use nylon::dsp::auto_filter::{Mode as AutoFilterMode, Parameters as AutoFilterParameters};
 use nylon::dsp::chorus::Parameters as ChorusParameters;
 use nylon::dsp::gate::Parameters as GateParameters;
 use nylon::dsp::limiter::Parameters as LimiterParameters;
@@ -138,6 +139,27 @@ fn session() -> Project {
                     },
                 },
             },
+            Command::AddDevice {
+                track: id,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::AutoFilter {
+                        parameters: AutoFilterParameters {
+                            mode: AutoFilterMode::BandPass,
+                            cutoff_hz: 1_600.0,
+                            resonance: 2.5,
+                            drive_db: 8.0,
+                            envelope_amount_octaves: -1.5,
+                            envelope_attack_seconds: 0.004,
+                            envelope_release_seconds: 0.2,
+                            lfo_rate_hz: 0.75,
+                            lfo_amount_octaves: 1.25,
+                            mix: 0.6,
+                        },
+                        external_sidechain: true,
+                    },
+                },
+            },
             Command::SetTimeSignature {
                 numerator: 7,
                 denominator: 8,
@@ -260,7 +282,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 13;
+    future[4] = 14;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

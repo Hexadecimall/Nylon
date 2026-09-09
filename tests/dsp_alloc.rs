@@ -4,6 +4,7 @@
 //! while a flag is set, the same technique the render kernel test uses.
 //! Storage that outlives a call is allocated before the flag goes up.
 
+use nylon::dsp::auto_filter::{AutoFilter, Parameters as AutoFilterParameters};
 use nylon::dsp::biquad::{Biquad, Coefficients, Kind};
 use nylon::dsp::chorus::{Chorus, Parameters as ChorusParameters};
 use nylon::dsp::compressor::{Compressor, Parameters as CompressorParameters};
@@ -65,6 +66,16 @@ fn measure(body: impl FnOnce()) -> usize {
 
 const RATE: f32 = 48_000.0;
 const BLOCK: usize = 512;
+
+#[test]
+fn filtering_a_block_performs_no_allocator_operations() {
+    let mut filter = AutoFilter::new(RATE, AutoFilterParameters::default());
+    let mut audio = vec![[0.25_f32, -0.1_f32]; BLOCK];
+    let sidechain = vec![[0.5_f32, 0.5_f32]; BLOCK];
+    let operations = measure(|| filter.process_block(&mut audio, Some(&sidechain)));
+    assert_eq!(operations, 0, "{operations} allocator operations");
+    assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
+}
 
 #[test]
 fn saturating_a_block_performs_no_allocator_operations() {

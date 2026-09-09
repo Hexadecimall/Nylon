@@ -132,12 +132,21 @@ def main():
         assert reverb["kind"] == "reverb", reverb
         assert abs(reverb["parameters"]["decaySeconds"] - 2.8) < 1e-6, reverb
         assert reverb["parameters"]["width"] == 1, reverb
+        call("add-device", "0", "auto-filter", "band-pass", "1600", "2.5", "8",
+             "-1.5", "0.004", "0.2", "0.75", "1.25", "0.6", "on")
+        auto_filter = call("track-devices", "0")["devices"][6]
+        assert auto_filter["kind"] == "auto-filter", auto_filter
+        assert auto_filter["parameters"]["mode"] == "band-pass", auto_filter
+        assert auto_filter["parameters"]["cutoffHz"] == 1600, auto_filter
+        assert auto_filter["parameters"]["externalSidechain"] is True, auto_filter
         call("add-device", "0", "delay", "0.2", "1", "0.5", succeeds=False)
         call("add-device", "0", "limiter", "-0.3", "0.1", "0.1", succeeds=False)
         call("add-device", "0", "saturator", "9", "-4", "0.75", "bad", "4x", "on", succeeds=False)
         call("add-device", "0", "gate", "-32", "8", "0.002", "0.04", "31", "on", succeeds=False)
         call("add-device", "0", "chorus", "0.8", "0.01", "0.02", "0.1", "0.5", "0.25", succeeds=False)
         call("add-device", "0", "reverb", "0.6", "31", "0.35", "0.7", "0.02", "1", "0.3", succeeds=False)
+        call("add-device", "0", "auto-filter", "bad", "1600", "2.5", "8", "-1.5",
+             "0.004", "0.2", "0.75", "1.25", "0.6", "on", succeeds=False)
         call("import-wave", "1", "0", str(source), "120")
         clips = call("clips", "1")["clips"]
         assert clips[0]["kind"] == "audio" and clips[0]["mediaPath"].startswith("Media/"), clips

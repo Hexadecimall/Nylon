@@ -3,6 +3,7 @@
 
 use crate::audio::{DeviceId, DeviceInfo, Direction, Name, Rates};
 use crate::bounce::{Options as BounceOptions, render_wave};
+use crate::dsp::auto_filter::{Mode as AutoFilterMode, Parameters as AutoFilterParameters};
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::chorus::Parameters as ChorusParameters;
 use crate::dsp::compressor::Parameters as CompressorParameters;
@@ -96,7 +97,7 @@ pub struct NylonRecordingReport {
 pub struct NylonTrackDevice {
     pub kind: i32,
     pub enabled: i32,
-    pub parameters: [f32; 7],
+    pub parameters: [f32; 16],
 }
 
 /// Fixed-size CLAP parameter description for native clients.
@@ -740,6 +741,31 @@ fn track_device_kind(record: NylonTrackDevice) -> Option<TrackDeviceKind> {
                 mix: parameters[6],
             },
         }),
+        9 => Some(TrackDeviceKind::AutoFilter {
+            parameters: AutoFilterParameters {
+                mode: match parameters[0] {
+                    0.0 => AutoFilterMode::LowPass,
+                    1.0 => AutoFilterMode::HighPass,
+                    2.0 => AutoFilterMode::BandPass,
+                    3.0 => AutoFilterMode::Notch,
+                    _ => return None,
+                },
+                cutoff_hz: parameters[1],
+                resonance: parameters[2],
+                drive_db: parameters[3],
+                envelope_amount_octaves: parameters[4],
+                envelope_attack_seconds: parameters[5],
+                envelope_release_seconds: parameters[6],
+                lfo_rate_hz: parameters[7],
+                lfo_amount_octaves: parameters[8],
+                mix: parameters[9],
+            },
+            external_sidechain: match parameters[10] {
+                0.0 => false,
+                1.0 => true,
+                _ => return None,
+            },
+        }),
         _ => None,
     }
 }
@@ -786,7 +812,7 @@ fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice
             external_sidechain,
         } => {
             record.kind = 2;
-            record.parameters.copy_from_slice(&[
+            record.parameters[..7].copy_from_slice(&[
                 parameters.threshold_db,
                 parameters.ratio,
                 parameters.knee_db,
@@ -856,7 +882,7 @@ fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice
         }
         TrackDeviceKind::Reverb { parameters } => {
             record.kind = 8;
-            record.parameters.copy_from_slice(&[
+            record.parameters[..7].copy_from_slice(&[
                 parameters.size,
                 parameters.decay_seconds,
                 parameters.damping,
@@ -864,6 +890,30 @@ fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice
                 parameters.pre_delay_seconds,
                 parameters.width,
                 parameters.mix,
+            ]);
+        }
+        TrackDeviceKind::AutoFilter {
+            parameters,
+            external_sidechain,
+        } => {
+            record.kind = 9;
+            record.parameters[..11].copy_from_slice(&[
+                match parameters.mode {
+                    AutoFilterMode::LowPass => 0.0,
+                    AutoFilterMode::HighPass => 1.0,
+                    AutoFilterMode::BandPass => 2.0,
+                    AutoFilterMode::Notch => 3.0,
+                },
+                parameters.cutoff_hz,
+                parameters.resonance,
+                parameters.drive_db,
+                parameters.envelope_amount_octaves,
+                parameters.envelope_attack_seconds,
+                parameters.envelope_release_seconds,
+                parameters.lfo_rate_hz,
+                parameters.lfo_amount_octaves,
+                parameters.mix,
+                f32::from(u8::from(external_sidechain)),
             ]);
         }
     }

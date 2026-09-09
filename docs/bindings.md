@@ -52,9 +52,9 @@ Header: `bindings/cpp/nylon.hpp`, library `nyloncpp` (built by
 `nylon::Project` is a move-only owner of a project handle with one method
 per project C function, `std::string` for names, and `nylon::MidiNote` /
 `nylon::BeatRange` value types. `nylon::TrackDevice` carries a typed device,
-its enabled state, and seven fixed parameter slots across the ABI.
+its enabled state, and sixteen fixed parameter slots across the ABI.
 Device kinds include utility, equalizer, compressor, delay, limiter, saturator,
-gate, chorus, and reverb.
+gate, chorus, reverb, and auto filter.
 `nylon::InstrumentPatch` configures both oscillators, sub and noise levels,
 unison, amplitude envelope, filter, and output level.
 `Project::bounceWave` writes a selected beat
@@ -98,6 +98,7 @@ nylon-control --project Session.nylon set-instrument 0 saw square 0.6 -7 0.35 0.
 nylon-control --project Session.nylon instrument 0
 nylon-control --project Session.nylon add-device 0 chorus 0.8 0.012 0.003 0.1 0.5 0.25
 nylon-control --project Session.nylon add-device 0 reverb 0.6 2.8 0.35 0.7 0.02 1 0.3
+nylon-control --project Session.nylon add-device 0 auto-filter band-pass 1600 2.5 8 -1.5 0.004 0.2 0.75 1.25 0.6 on
 nylon-control --project Session.nylon create-midi-clip 0 0 4
 nylon-control --project Session.nylon add-note 0 0 60 100 0.25 0.5
 nylon-control --project Session.nylon quantize-notes 0 0 0.25 1

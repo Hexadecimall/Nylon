@@ -79,7 +79,8 @@ enum class DeviceKind : int {
     Saturator = 5,
     Gate = 6,
     Chorus = 7,
-    Reverb = 8
+    Reverb = 8,
+    AutoFilter = 9
 };
 
 enum class FilterKind : int {
@@ -96,7 +97,7 @@ enum class FilterKind : int {
 struct TrackDevice {
     DeviceKind kind{DeviceKind::Utility};
     bool enabled{true};
-    std::array<float, 7> parameters{};
+    std::array<float, 16> parameters{};
 };
 
 enum class AutomationParameter : int { Volume = 0, Pan = 1, Mute = 2, Solo = 3 };

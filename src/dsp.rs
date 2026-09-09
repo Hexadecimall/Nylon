@@ -9,6 +9,7 @@
 //! Sample values are `f32`; coefficients and accumulators that need the
 //! headroom use `f64` internally.
 
+pub mod auto_filter;
 pub mod biquad;
 pub mod chorus;
 pub mod compressor;

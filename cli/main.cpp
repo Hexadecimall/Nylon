@@ -221,6 +221,7 @@ QString deviceKindName(nylon::DeviceKind kind)
     case nylon::DeviceKind::Gate: return "gate";
     case nylon::DeviceKind::Chorus: return "chorus";
     case nylon::DeviceKind::Reverb: return "reverb";
+    case nylon::DeviceKind::AutoFilter: return "auto-filter";
     }
     return "utility";
 }
@@ -340,6 +341,21 @@ bool parseTrackDevice(
         }
         return true;
     }
+    if (kind == "auto-filter" && positional.size() == kindIndex + 12) {
+        device.kind = nylon::DeviceKind::AutoFilter;
+        static const QStringList modes{"low-pass", "high-pass", "band-pass", "notch"};
+        const qsizetype mode = modes.indexOf(positional[kindIndex + 1]);
+        if (mode < 0) return false;
+        device.parameters[0] = static_cast<float>(mode);
+        for (int index = 0; index < 9; ++index) {
+            if (!parameter(positional[kindIndex + 2 + index], device.parameters[1 + index]))
+                return false;
+        }
+        bool sidechain = false;
+        if (!flag(positional[kindIndex + 11], sidechain)) return false;
+        device.parameters[10] = sidechain ? 1.0F : 0.0F;
+        return true;
+    }
     return false;
 }
 
@@ -403,6 +419,19 @@ QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
             {"preDelaySeconds", device.parameters[4]}, {"width", device.parameters[5]},
             {"mix", device.parameters[6]}};
         break;
+    case nylon::DeviceKind::AutoFilter: {
+        static const QStringList modes{"low-pass", "high-pass", "band-pass", "notch"};
+        parameters = {{"mode", modes.value(static_cast<int>(device.parameters[0]))},
+            {"cutoffHz", device.parameters[1]}, {"resonance", device.parameters[2]},
+            {"driveDb", device.parameters[3]},
+            {"envelopeAmountOctaves", device.parameters[4]},
+            {"envelopeAttackSeconds", device.parameters[5]},
+            {"envelopeReleaseSeconds", device.parameters[6]},
+            {"lfoRateHz", device.parameters[7]},
+            {"lfoAmountOctaves", device.parameters[8]}, {"mix", device.parameters[9]},
+            {"externalSidechain", device.parameters[10] == 1.0F}};
+        break;
+    }
     }
     return {{"index", static_cast<double>(index)}, {"kind", deviceKindName(device.kind)},
         {"enabled", device.enabled}, {"parameters", parameters}};

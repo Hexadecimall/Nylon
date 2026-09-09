@@ -1,5 +1,6 @@
 //! Native audio device chains for routed tracks and buses.
 
+use crate::dsp::auto_filter::{AutoFilter, Parameters as AutoFilterParameters};
 use crate::dsp::biquad::{Biquad, Coefficients, Kind as FilterKind};
 use crate::dsp::chorus::{Chorus, Parameters as ChorusParameters};
 use crate::dsp::compressor::{Compressor, Parameters as CompressorParameters};
@@ -75,6 +76,10 @@ pub enum DeviceKind {
     Reverb {
         parameters: ReverbParameters,
     },
+    AutoFilter {
+        parameters: AutoFilterParameters,
+        external_sidechain: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +132,10 @@ enum Processor {
     Reverb {
         processor: Box<Reverb>,
         storage: Vec<f32>,
+    },
+    AutoFilter {
+        processor: AutoFilter,
+        external_sidechain: bool,
     },
 }
 
@@ -250,6 +259,13 @@ impl DeviceChain {
                         storage: zeroed(frames)?,
                     }
                 }
+                DeviceKind::AutoFilter {
+                    parameters,
+                    external_sidechain,
+                } => Processor::AutoFilter {
+                    processor: AutoFilter::new(sample_rate, parameters),
+                    external_sidechain,
+                },
             };
             devices.push(Device {
                 enabled: config.enabled,
@@ -399,6 +415,19 @@ fn validate_kind(kind: DeviceKind, sample_rate: f32) -> Result<usize, DeviceErro
         {
             Ok(Reverb::new(sample_rate, parameters).required_storage_frames())
         }
+        DeviceKind::AutoFilter { parameters, .. }
+            if finite_range(parameters.cutoff_hz, 10.0, sample_rate * 0.45)
+                && finite_range(parameters.resonance, 0.1, 20.0)
+                && finite_range(parameters.drive_db, 0.0, 36.0)
+                && finite_range(parameters.envelope_amount_octaves, -8.0, 8.0)
+                && finite_range(parameters.envelope_attack_seconds, 0.0, 10.0)
+                && finite_range(parameters.envelope_release_seconds, 0.0, 10.0)
+                && finite_range(parameters.lfo_rate_hz, 0.0, 40.0)
+                && finite_range(parameters.lfo_amount_octaves, 0.0, 8.0)
+                && finite_range(parameters.mix, 0.0, 1.0) =>
+        {
+            Ok(0)
+        }
         _ => Err(DeviceError::InvalidParameter),
     }
 }
@@ -477,6 +506,13 @@ impl Processor {
                 right_storage,
             } => processor.process_block(left_storage, right_storage, audio),
             Self::Reverb { processor, storage } => processor.process_block(storage, audio),
+            Self::AutoFilter {
+                processor,
+                external_sidechain,
+            } => {
+                let detector = (*external_sidechain).then_some(sidechain);
+                processor.process_block(audio, detector);
+            }
         }
     }
 
@@ -509,6 +545,7 @@ impl Processor {
                 right_storage,
             } => processor.reset(left_storage, right_storage),
             Self::Reverb { processor, storage } => processor.reset(storage),
+            Self::AutoFilter { processor, .. } => processor.reset(),
             Self::Utility { .. } => {}
         }
     }
@@ -775,6 +812,44 @@ mod tests {
         let mut second = vec![[0.0; 2]; input.len()];
         chain.process(&input, &[], &mut second).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn auto_filter_uses_the_chain_sidechain_and_resets() {
+        let config = DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::AutoFilter {
+                parameters: AutoFilterParameters {
+                    cutoff_hz: 200.0,
+                    envelope_amount_octaves: 6.0,
+                    envelope_attack_seconds: 0.0,
+                    mix: 1.0,
+                    ..AutoFilterParameters::default()
+                },
+                external_sidechain: true,
+            },
+        };
+        let input = (0..512)
+            .map(|index| {
+                let sample = ((index as f32) * 0.4).sin();
+                [sample, -sample]
+            })
+            .collect::<Vec<_>>();
+        let mut quiet_chain = DeviceChain::new(&[config], RATE).unwrap();
+        let mut quiet = vec![[0.0; 2]; input.len()];
+        quiet_chain.process(&input, &[], &mut quiet).unwrap();
+        let mut loud_chain = DeviceChain::new(&[config], RATE).unwrap();
+        let mut loud = vec![[0.0; 2]; input.len()];
+        loud_chain
+            .process(&input, &vec![[1.0; 2]; input.len()], &mut loud)
+            .unwrap();
+        assert_ne!(quiet, loud);
+        loud_chain.reset();
+        let mut repeated = vec![[0.0; 2]; input.len()];
+        loud_chain
+            .process(&input, &vec![[1.0; 2]; input.len()], &mut repeated)
+            .unwrap();
+        assert_eq!(loud, repeated);
     }
 
     #[test]

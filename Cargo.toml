@@ -54,6 +54,10 @@ harness = false
 name = "reverb"
 harness = false
 
+[[bench]]
+name = "auto_filter"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

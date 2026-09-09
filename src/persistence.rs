@@ -1,5 +1,6 @@
 //! Versioned binary project documents and directory bundles.
 
+use crate::dsp::auto_filter::{Mode as AutoFilterMode, Parameters as AutoFilterParameters};
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::chorus::Parameters as ChorusParameters;
 use crate::dsp::compressor::Parameters as CompressorParameters;
@@ -30,7 +31,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 12;
+const VERSION: u32 = 13;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -197,6 +198,34 @@ impl Encoder {
                             parameters.diffusion,
                             parameters.pre_delay_seconds,
                             parameters.width,
+                            parameters.mix,
+                        ] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::AutoFilter {
+                        parameters,
+                        external_sidechain,
+                    } => {
+                        self.bytes(&[
+                            9,
+                            match parameters.mode {
+                                AutoFilterMode::LowPass => 0,
+                                AutoFilterMode::HighPass => 1,
+                                AutoFilterMode::BandPass => 2,
+                                AutoFilterMode::Notch => 3,
+                            },
+                            u8::from(external_sidechain),
+                        ])?;
+                        for value in [
+                            parameters.cutoff_hz,
+                            parameters.resonance,
+                            parameters.drive_db,
+                            parameters.envelope_amount_octaves,
+                            parameters.envelope_attack_seconds,
+                            parameters.envelope_release_seconds,
+                            parameters.lfo_rate_hz,
+                            parameters.lfo_amount_octaves,
                             parameters.mix,
                         ] {
                             self.bytes(&value.to_le_bytes())?;
@@ -494,6 +523,35 @@ impl<'a> Decoder<'a> {
                                 mix: f32::from_le_bytes(self.array()?),
                             },
                         },
+                        9 if version >= 13 => {
+                            let mode = match self.array::<1>()?[0] {
+                                0 => AutoFilterMode::LowPass,
+                                1 => AutoFilterMode::HighPass,
+                                2 => AutoFilterMode::BandPass,
+                                3 => AutoFilterMode::Notch,
+                                _ => return Err(PersistenceError::InvalidFormat),
+                            };
+                            let external_sidechain = match self.array::<1>()?[0] {
+                                0 => false,
+                                1 => true,
+                                _ => return Err(PersistenceError::InvalidFormat),
+                            };
+                            DeviceKind::AutoFilter {
+                                parameters: AutoFilterParameters {
+                                    mode,
+                                    cutoff_hz: f32::from_le_bytes(self.array()?),
+                                    resonance: f32::from_le_bytes(self.array()?),
+                                    drive_db: f32::from_le_bytes(self.array()?),
+                                    envelope_amount_octaves: f32::from_le_bytes(self.array()?),
+                                    envelope_attack_seconds: f32::from_le_bytes(self.array()?),
+                                    envelope_release_seconds: f32::from_le_bytes(self.array()?),
+                                    lfo_rate_hz: f32::from_le_bytes(self.array()?),
+                                    lfo_amount_octaves: f32::from_le_bytes(self.array()?),
+                                    mix: f32::from_le_bytes(self.array()?),
+                                },
+                                external_sidechain,
+                            }
+                        }
                         _ => return Err(PersistenceError::InvalidFormat),
                     };
                     let config = DeviceConfig { enabled, kind };
