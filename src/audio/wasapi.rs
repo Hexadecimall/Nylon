@@ -166,6 +166,7 @@ unsafe extern "system" {
         name: *const u16,
     ) -> *mut c_void;
     fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
+    fn SetEvent(handle: *mut c_void) -> c_int;
     fn CloseHandle(handle: *mut c_void) -> c_int;
 }
 
@@ -730,7 +731,7 @@ impl Backend for WasapiBackend {
         if event.is_null() {
             return Err(AudioError::Host("the wake-up event could not be made"));
         }
-        let event = EventHandle(event);
+        let event = Arc::new(EventHandle(event));
         // SAFETY: The client is initialized for event callbacks and the
         // event outlives it.
         if unsafe { (client.table().set_event_handle)(client.pointer, event.0) } != S_OK {
@@ -769,6 +770,7 @@ impl Backend for WasapiBackend {
             dropouts: AtomicU64::new(0),
             realtime: AtomicBool::new(false),
             lost: AtomicBool::new(false),
+            wake: Arc::clone(&event),
         });
         let worker = Worker {
             client,
@@ -777,7 +779,7 @@ impl Backend for WasapiBackend {
             buffer_frames,
             shared: Arc::clone(&shared),
             renderer: Box::new(renderer),
-            block,
+            block: vec![[0.0; 2]; block],
         };
         let thread = std::thread::Builder::new()
             .name("nylon-wasapi".to_string())
@@ -886,7 +888,7 @@ impl InputBackend for WasapiBackend {
         if event.is_null() {
             return Err(AudioError::Host("the wake-up event could not be made"));
         }
-        let event = EventHandle(event);
+        let event = Arc::new(EventHandle(event));
         // SAFETY: The client is initialized for event callbacks and the
         // event outlives it.
         if unsafe { (client.table().set_event_handle)(client.pointer, event.0) } != S_OK {
@@ -923,6 +925,7 @@ impl InputBackend for WasapiBackend {
             dropouts: AtomicU64::new(0),
             realtime: AtomicBool::new(false),
             lost: AtomicBool::new(false),
+            wake: Arc::clone(&event),
         });
         let mut prepared = capturer;
         prepared.prepare(running);
@@ -932,7 +935,7 @@ impl InputBackend for WasapiBackend {
             event,
             shared: Arc::clone(&shared),
             capturer: Box::new(prepared),
-            block,
+            block: vec![[0.0; 2]; MAX_FRAMES],
         };
         let thread = std::thread::Builder::new()
             .name("nylon-wasapi-in".to_string())
@@ -952,10 +955,10 @@ impl InputBackend for WasapiBackend {
 struct CaptureWorker {
     client: Interface<AudioClientVtable>,
     capture: Interface<CaptureClientVtable>,
-    event: EventHandle,
+    event: Arc<EventHandle>,
     shared: Arc<Shared>,
     capturer: Box<dyn Capturer>,
-    block: usize,
+    block: Vec<[f32; 2]>,
 }
 
 impl CaptureWorker {
@@ -969,7 +972,6 @@ impl CaptureWorker {
         self.shared
             .realtime
             .store(class.joined(), Ordering::Relaxed);
-        let mut block = vec![[0.0_f32; 2]; self.block];
         let mut position = 0_u64;
         let mut started = false;
 
@@ -1002,6 +1004,11 @@ impl CaptureWorker {
             let waited = unsafe { WaitForSingleObject(self.event.0, EVENT_TIMEOUT_MS) };
             if waited != WAIT_OBJECT_0 {
                 self.shared.dropouts.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            if self.shared.finished.load(Ordering::Acquire)
+                || !self.shared.running.load(Ordering::Acquire)
+            {
                 continue;
             }
 
@@ -1048,38 +1055,42 @@ impl CaptureWorker {
                     break;
                 }
 
-                let count = (frames as usize).min(self.block);
                 if flags & AUDCLNT_BUFFERFLAGS_SILENT != 0 || buffer.is_null() {
                     // The device says the packet is silence and may not
                     // have filled the memory at all.
-                    block[..count].fill([0.0, 0.0]);
+                    let mut remaining = frames as usize;
+                    while remaining != 0 {
+                        let count = remaining.min(self.block.len());
+                        self.block[..count].fill([0.0, 0.0]);
+                        let timing = BlockTiming {
+                            frame: position,
+                            dropouts: self.shared.dropouts.load(Ordering::Relaxed),
+                        };
+                        self.capturer.capture(&self.block[..count], timing);
+                        position += count as u64;
+                        self.shared
+                            .frames
+                            .fetch_add(count as u64, Ordering::Relaxed);
+                        remaining -= count;
+                    }
                 } else {
                     // SAFETY: The device reports how many frames it wrote,
                     // in the stereo float format it was opened with.
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            buffer,
-                            block.as_mut_ptr().cast::<u8>(),
-                            count * core::mem::size_of::<[f32; 2]>(),
-                        );
+                    let input = unsafe {
+                        core::slice::from_raw_parts(buffer.cast::<[f32; 2]>(), frames as usize)
+                    };
+                    for chunk in input.chunks(MAX_FRAMES) {
+                        let timing = BlockTiming {
+                            frame: position,
+                            dropouts: self.shared.dropouts.load(Ordering::Relaxed),
+                        };
+                        self.capturer.capture(chunk, timing);
+                        position += chunk.len() as u64;
+                        self.shared
+                            .frames
+                            .fetch_add(chunk.len() as u64, Ordering::Relaxed);
                     }
                 }
-                if frames as usize > self.block {
-                    // More than the engine takes at once; the remainder is
-                    // dropped rather than silently truncating a take
-                    // without saying so.
-                    self.shared.dropouts.fetch_add(1, Ordering::Relaxed);
-                }
-
-                let timing = BlockTiming {
-                    frame: position,
-                    dropouts: self.shared.dropouts.load(Ordering::Relaxed),
-                };
-                self.capturer.capture(&block[..count], timing);
-                position += count as u64;
-                self.shared
-                    .frames
-                    .fetch_add(count as u64, Ordering::Relaxed);
 
                 // SAFETY: The whole packet is released, which is what the
                 // interface requires whatever was taken from it.
@@ -1119,6 +1130,7 @@ impl Stream for WasapiCapture {
             return Err(AudioError::WrongState);
         }
         self.shared.running.store(true, Ordering::Release);
+        self.shared.wake();
         Ok(())
     }
 
@@ -1127,6 +1139,7 @@ impl Stream for WasapiCapture {
             return Err(AudioError::WrongState);
         }
         self.shared.running.store(false, Ordering::Release);
+        self.shared.wake();
         Ok(())
     }
 
@@ -1151,6 +1164,7 @@ impl Drop for WasapiCapture {
     fn drop(&mut self) {
         self.shared.running.store(false, Ordering::Release);
         self.shared.finished.store(true, Ordering::Release);
+        self.shared.wake();
         if let Some(thread) = self.thread.take() {
             // The capturer and the interfaces live on that thread, so it
             // has to finish before this returns.
@@ -1210,6 +1224,8 @@ struct EventHandle(*mut c_void);
 
 // SAFETY: A handle is a value the platform accepts from any thread.
 unsafe impl Send for EventHandle {}
+// SAFETY: Waiting and setting a Windows event are safe from different threads.
+unsafe impl Sync for EventHandle {}
 
 impl Drop for EventHandle {
     fn drop(&mut self) {
@@ -1232,17 +1248,27 @@ struct Shared {
     realtime: AtomicBool,
     /// Set when the device is taken away.
     lost: AtomicBool,
+    /// Wakes the worker after a control-state change.
+    wake: Arc<EventHandle>,
+}
+
+impl Shared {
+    /// Makes a waiting worker observe control changes immediately.
+    fn wake(&self) {
+        // SAFETY: The handle remains live through the shared reference.
+        unsafe { SetEvent(self.wake.0) };
+    }
 }
 
 /// The playback thread's own state.
 struct Worker {
     client: Interface<AudioClientVtable>,
     render: Interface<RenderClientVtable>,
-    event: EventHandle,
+    event: Arc<EventHandle>,
     buffer_frames: u32,
     shared: Arc<Shared>,
     renderer: Box<dyn Renderer>,
-    block: usize,
+    block: Vec<[f32; 2]>,
 }
 
 impl Worker {
@@ -1258,7 +1284,6 @@ impl Worker {
         self.shared
             .realtime
             .store(class.joined(), Ordering::Relaxed);
-        let mut block = vec![[0.0_f32; 2]; self.block];
         let mut position = 0_u64;
         let mut started = false;
 
@@ -1295,6 +1320,11 @@ impl Worker {
                 self.shared.dropouts.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
+            if self.shared.finished.load(Ordering::Acquire)
+                || !self.shared.running.load(Ordering::Acquire)
+            {
+                continue;
+            }
 
             let mut padding: u32 = 0;
             // SAFETY: The client is running.
@@ -1312,7 +1342,7 @@ impl Worker {
             if available == 0 {
                 continue;
             }
-            let frames = (available as usize).min(self.block);
+            let frames = (available as usize).min(self.block.len());
 
             let mut buffer: *mut u8 = core::ptr::null_mut();
             // SAFETY: The count is what the client said it has room for.
@@ -1337,14 +1367,14 @@ impl Worker {
                 frame: position,
                 dropouts: self.shared.dropouts.load(Ordering::Relaxed),
             };
-            self.renderer.render(&mut block[..frames], timing);
+            self.renderer.render(&mut self.block[..frames], timing);
             position += frames as u64;
 
             // SAFETY: The buffer holds `frames` stereo pairs of floats,
             // which is what the format asked for.
             unsafe {
                 core::ptr::copy_nonoverlapping(
-                    block.as_ptr().cast::<u8>(),
+                    self.block.as_ptr().cast::<u8>(),
                     buffer,
                     frames * core::mem::size_of::<[f32; 2]>(),
                 );
@@ -1389,6 +1419,7 @@ impl Stream for WasapiStream {
             return Err(AudioError::WrongState);
         }
         self.shared.running.store(true, Ordering::Release);
+        self.shared.wake();
         Ok(())
     }
 
@@ -1397,6 +1428,7 @@ impl Stream for WasapiStream {
             return Err(AudioError::WrongState);
         }
         self.shared.running.store(false, Ordering::Release);
+        self.shared.wake();
         Ok(())
     }
 
@@ -1421,6 +1453,7 @@ impl Drop for WasapiStream {
     fn drop(&mut self) {
         self.shared.running.store(false, Ordering::Release);
         self.shared.finished.store(true, Ordering::Release);
+        self.shared.wake();
         if let Some(thread) = self.thread.take() {
             // The renderer and the interfaces live on that thread, so it
             // has to finish before this returns.
