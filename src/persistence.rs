@@ -24,6 +24,7 @@ use crate::project::{
     TrackKind,
 };
 use crate::routing::EdgeKind;
+use crate::transport::{MAX_TEMPO_CHANGES, TempoChange};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -34,7 +35,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 16;
+const VERSION: u32 = 17;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -74,6 +75,11 @@ impl Encoder {
         self.bytes(&snapshot.numerator.to_le_bytes())?;
         self.bytes(&snapshot.denominator.to_le_bytes())?;
         self.bytes(&snapshot.sample_rate.to_le_bytes())?;
+        self.count(snapshot.tempo_changes.len())?;
+        for change in &snapshot.tempo_changes {
+            self.bytes(&change.beat.to_le_bytes())?;
+            self.bytes(&change.tempo.to_le_bytes())?;
+        }
         self.count(snapshot.tracks.len())?;
         for track in &snapshot.tracks {
             self.bytes(&track.id.0.to_le_bytes())?;
@@ -394,6 +400,33 @@ impl<'a> Decoder<'a> {
             || project::validate_rate(sample_rate).is_err()
         {
             return Err(PersistenceError::InvalidFormat);
+        }
+        let mut tempo_changes = Vec::new();
+        if version >= 17 {
+            let tempo_change_count = self.count()?;
+            if tempo_change_count > MAX_TEMPO_CHANGES
+                || tempo_change_count > self.remaining.len() / 16
+            {
+                return Err(PersistenceError::InvalidFormat);
+            }
+            tempo_changes.reserve(tempo_change_count);
+            let mut previous = 0.0;
+            for _ in 0..tempo_change_count {
+                let beat = f64::from_le_bytes(self.array()?);
+                let change_tempo = f64::from_le_bytes(self.array()?);
+                if !beat.is_finite()
+                    || beat <= previous
+                    || !change_tempo.is_finite()
+                    || !(20.0..=999.0).contains(&change_tempo)
+                {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                tempo_changes.push(TempoChange {
+                    beat,
+                    tempo: change_tempo,
+                });
+                previous = beat;
+            }
         }
         let count = self.count()?;
         if count > self.remaining.len() / 32 {
@@ -742,6 +775,7 @@ impl<'a> Decoder<'a> {
         if version == 1 {
             return Ok(Arc::new(Snapshot {
                 tempo,
+                tempo_changes,
                 numerator,
                 denominator,
                 sample_rate,
@@ -1013,6 +1047,7 @@ impl<'a> Decoder<'a> {
         }
         let snapshot = Arc::new(Snapshot {
             tempo,
+            tempo_changes,
             numerator,
             denominator,
             sample_rate,

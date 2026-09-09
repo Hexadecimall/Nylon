@@ -13,6 +13,113 @@
 pub const MIN_TEMPO: f64 = 20.0;
 /// Largest tempo accepted, in beats per minute.
 pub const MAX_TEMPO: f64 = 999.0;
+/// Largest number of arrangement tempo changes accepted by one project.
+pub const MAX_TEMPO_CHANGES: usize = 1_024;
+
+/// A tempo change at an arrangement beat.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TempoChange {
+    /// Quarter-note beat where the new tempo starts.
+    pub beat: f64,
+    /// Tempo in beats per minute from this point forward.
+    pub tempo: f64,
+}
+
+/// Borrowed piecewise-constant tempo map.
+#[derive(Clone, Copy, Debug)]
+pub struct TempoMap<'a> {
+    initial: f64,
+    changes: &'a [TempoChange],
+}
+
+impl<'a> TempoMap<'a> {
+    /// Builds a view over sorted, validated changes after beat zero.
+    #[must_use]
+    pub const fn new(initial: f64, changes: &'a [TempoChange]) -> Self {
+        Self { initial, changes }
+    }
+
+    /// Tempo active at `beat`.
+    #[must_use]
+    pub fn tempo_at(&self, beat: f64) -> f64 {
+        let index = self.changes.partition_point(|change| change.beat <= beat);
+        index
+            .checked_sub(1)
+            .map_or(self.initial, |index| self.changes[index].tempo)
+    }
+
+    /// First change strictly after `beat`.
+    #[must_use]
+    pub fn next_after(&self, beat: f64) -> Option<TempoChange> {
+        self.changes
+            .get(self.changes.partition_point(|change| change.beat <= beat))
+            .copied()
+    }
+
+    /// Number of frames between two beat positions.
+    #[must_use]
+    pub fn frames_between(&self, start: f64, end: f64, sample_rate: f64) -> f64 {
+        if !start.is_finite()
+            || !end.is_finite()
+            || end <= start
+            || !sample_rate.is_finite()
+            || sample_rate <= 0.0
+        {
+            return 0.0;
+        }
+        let mut beat = start;
+        let mut frames = 0.0;
+        while beat < end {
+            let tempo = self.tempo_at(beat);
+            let boundary = self
+                .next_after(beat)
+                .map_or(end, |change| change.beat.min(end));
+            if boundary <= beat {
+                break;
+            }
+            frames += (boundary - beat) * sample_rate * 60.0 / tempo;
+            beat = boundary;
+        }
+        frames
+    }
+
+    /// Timeline frame corresponding to a beat position.
+    #[must_use]
+    pub fn frame_at(&self, beat: f64, sample_rate: f64) -> f64 {
+        self.frames_between(0.0, beat.max(0.0), sample_rate)
+    }
+
+    /// Beat reached after advancing a number of frames.
+    #[must_use]
+    pub fn beat_after_frames(&self, start: f64, frames: f64, sample_rate: f64) -> f64 {
+        if !start.is_finite()
+            || !frames.is_finite()
+            || frames <= 0.0
+            || !sample_rate.is_finite()
+            || sample_rate <= 0.0
+        {
+            return start.max(0.0);
+        }
+        let mut beat = start.max(0.0);
+        let mut remaining = frames;
+        loop {
+            let tempo = self.tempo_at(beat);
+            let frames_per_beat = sample_rate * 60.0 / tempo;
+            let Some(change) = self.next_after(beat) else {
+                return beat + remaining / frames_per_beat;
+            };
+            let to_change = (change.beat - beat) * frames_per_beat;
+            if remaining < to_change {
+                return beat + remaining / frames_per_beat;
+            }
+            remaining -= to_change;
+            beat = change.beat;
+            if remaining <= 0.0 {
+                return beat;
+            }
+        }
+    }
+}
 
 /// A musical position expressed the way a display shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,6 +346,14 @@ impl Transport {
     pub fn locate_frames(&mut self, frames: u64) {
         self.position_frames = frames;
         self.position_beats = frames as f64 / self.frames_per_beat();
+    }
+
+    /// Moves the playhead using positions calculated by an external tempo map.
+    pub fn locate_mapped(&mut self, beats: f64, frames: u64) {
+        if beats.is_finite() && beats >= 0.0 {
+            self.position_beats = beats;
+            self.position_frames = frames;
+        }
     }
 
     /// Loop currently set.
@@ -652,5 +767,36 @@ mod tests {
             assert!(position.bar >= 1, "{beats}: {position:?}");
             assert!((1..=4).contains(&position.beat), "{beats}: {position:?}");
         }
+    }
+
+    #[test]
+    fn tempo_maps_convert_both_directions_across_changes() {
+        let changes = [
+            TempoChange {
+                beat: 4.0,
+                tempo: 60.0,
+            },
+            TempoChange {
+                beat: 8.0,
+                tempo: 240.0,
+            },
+        ];
+        let map = TempoMap::new(120.0, &changes);
+        assert_eq!(map.tempo_at(0.0), 120.0);
+        assert_eq!(map.tempo_at(4.0), 60.0);
+        assert_eq!(map.tempo_at(9.0), 240.0);
+        assert_eq!(map.next_after(4.0), Some(changes[1]));
+        let frame = map.frame_at(10.0, RATE);
+        assert!(close(frame, 312_000.0));
+        assert!(close(map.beat_after_frames(0.0, frame, RATE), 10.0));
+        assert!(close(map.beat_after_frames(3.0, 72_000.0, RATE), 5.0));
+    }
+
+    #[test]
+    fn tempo_map_rejects_unusable_conversion_inputs() {
+        let map = TempoMap::new(120.0, &[]);
+        assert_eq!(map.frames_between(2.0, 1.0, RATE), 0.0);
+        assert_eq!(map.frames_between(0.0, 1.0, 0.0), 0.0);
+        assert_eq!(map.beat_after_frames(3.0, -1.0, RATE), 3.0);
     }
 }

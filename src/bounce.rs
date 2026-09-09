@@ -13,7 +13,9 @@ use crate::media::{MediaError, timeline_from_project};
 use crate::project::Project;
 use crate::runtime::{
     automation_from_snapshot, playback_devices, playback_routing, state_from_snapshot,
+    tempo_from_snapshot,
 };
+use crate::transport::TempoMap;
 use crate::wave::{Format, WaveError, WaveWriter};
 use std::io::{Seek, Write};
 
@@ -148,9 +150,12 @@ pub fn render_wave<W: Write + Seek>(
 ) -> Result<(W, Report), BounceError> {
     options.validate()?;
     let snapshot = project.snapshot();
-    let tempo = snapshot.tempo();
-    let duration_beats = options.end_beats - options.start_beats;
-    let exact_frames = duration_beats * 60.0 / tempo * f64::from(options.format.sample_rate);
+    let tempo_map = TempoMap::new(snapshot.tempo(), snapshot.tempo_changes());
+    let exact_frames = tempo_map.frames_between(
+        options.start_beats,
+        options.end_beats,
+        f64::from(options.format.sample_rate),
+    );
     if !exact_frames.is_finite() || exact_frames <= 0.0 || exact_frames > u64::MAX as f64 {
         return Err(BounceError::InvalidRange);
     }
@@ -169,6 +174,14 @@ pub fn render_wave<W: Write + Seek>(
     if !publisher.publish(&settings) || !publisher.publish_score(&score) {
         return Err(BounceError::Audio(AudioError::Host(
             "initial state could not be published",
+        )));
+    }
+    if !publisher.publish_tempo(
+        tempo_from_snapshot(&snapshot)
+            .ok_or(BounceError::Audio(AudioError::Host("invalid tempo map")))?,
+    ) {
+        return Err(BounceError::Audio(AudioError::Host(
+            "initial tempo map could not be published",
         )));
     }
     if !publisher.publish_audio(timeline_from_project(project)?) {

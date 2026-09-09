@@ -103,6 +103,15 @@ QString trackKindName(nylon::TrackKind kind)
     return "audio";
 }
 
+QJsonArray tempoMap(const nylon::Project& project)
+{
+    QJsonArray points;
+    points.append(QJsonObject{{"beat", 0.0}, {"tempo", project.tempo()}});
+    for (const auto& change : project.tempoChanges())
+        points.append(QJsonObject{{"beat", change.beat}, {"tempo", change.tempo}});
+    return points;
+}
+
 QString pluginFormatName(nylon::PluginFormat format)
 {
     switch (format) {
@@ -732,6 +741,8 @@ int directCommand(
             {"scenes", static_cast<double>(project.sceneCount())}, {"canUndo", project.canUndo()},
             {"canRedo", project.canRedo()}});
     }
+    if (command == "tempo-map" && positional.size() == 1)
+        return writeJson({{"ok", true}, {"points", tempoMap(project)}});
     if (command == "tracks" && positional.size() == 1) {
         QJsonArray tracks;
         for (std::uint64_t index = 0; index < project.trackCount(); ++index) {
@@ -877,6 +888,14 @@ int directCommand(
     if (command == "set-tempo" && positional.size() == 2) {
         double tempo = 0.0;
         changed = number(positional[1], tempo) && project.setTempo(tempo);
+    } else if (command == "set-tempo-at" && positional.size() == 3) {
+        double beat = 0.0;
+        double tempo = 0.0;
+        changed = number(positional[1], beat) && number(positional[2], tempo)
+            && project.setTempoAt(beat, tempo);
+    } else if (command == "delete-tempo-change" && positional.size() == 2) {
+        double beat = 0.0;
+        changed = number(positional[1], beat) && project.removeTempoChange(beat);
     } else if (command == "add-track" && positional.size() >= 1 && positional.size() <= 3) {
         nylon::TrackKind kind = nylon::TrackKind::Audio;
         changed = (positional.size() == 1 || trackKind(positional[1], kind)) && project.addTrack(kind);

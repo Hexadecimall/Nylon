@@ -86,6 +86,15 @@ bool stringArguments(const QJsonArray& values, QStringList& result)
     return true;
 }
 
+QJsonArray tempoMap(const nylon::Project& project)
+{
+    QJsonArray points;
+    points.append(QJsonObject{{"beat", 0.0}, {"tempo", project.tempo()}});
+    for (const auto& change : project.tempoChanges())
+        points.append(QJsonObject{{"beat", change.beat}, {"tempo", change.tempo}});
+    return points;
+}
+
 bool oscillatorShapeValue(const QJsonValue& value, nylon::OscillatorShape& shape)
 {
     if (!value.isString()) return false;
@@ -150,6 +159,8 @@ public:
         const QJsonArray args = request.value("args").toArray();
         if (command.isEmpty()) return error("The command is missing");
         if (command == "status" && args.isEmpty()) return status();
+        if (command == "tempo-map" && args.isEmpty())
+            return {{"ok", true}, {"points", tempoMap(m_project)}};
         if (command == "notes" && args.size() == 2) return notes(args);
         if (command == "instrument" && args.size() == 1) return instrument(args);
         if (command == "track-devices" && args.size() == 1) return trackDevices(args);
@@ -237,6 +248,20 @@ public:
             double tempo = 0.0;
             if (!numberValue(args[0], tempo) || !m_project.setTempo(tempo))
                 return error("Invalid tempo");
+            return commitEdit();
+        }
+        if (command == "set-tempo-at" && args.size() == 2) {
+            double beat = 0.0;
+            double tempo = 0.0;
+            if (!numberValue(args[0], beat) || !numberValue(args[1], tempo)
+                || !m_project.setTempoAt(beat, tempo))
+                return error("Invalid tempo change");
+            return commitEdit();
+        }
+        if (command == "delete-tempo-change" && args.size() == 1) {
+            double beat = 0.0;
+            if (!numberValue(args[0], beat) || !m_project.removeTempoChange(beat))
+                return error("Tempo change not found");
             return commitEdit();
         }
         if (command == "set-instrument" && args.size() == 16) {

@@ -1,8 +1,9 @@
 use nylon::audio::{BlockTiming, Renderer};
 use nylon::engine::automation::{Lane, Point, Timeline};
-use nylon::engine::playback::{MixSettings, PlaybackEngine};
+use nylon::engine::playback::{MixSettings, PlaybackEngine, TempoTimeline};
 use nylon::engine::{Engine, GainEvent, MAX_FRAMES};
 use nylon::mixer::{AutomationCurve, Parameter};
+use nylon::transport::TempoChange;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -105,6 +106,18 @@ fn automated_project_render_performs_no_allocator_operations() {
         ],
     }));
     assert!(publisher.publish_automation(timeline));
+    assert!(
+        publisher.publish_tempo(
+            TempoTimeline::from_parts(
+                120.0,
+                &[TempoChange {
+                    beat: 0.05,
+                    tempo: 75.0,
+                }],
+            )
+            .unwrap(),
+        )
+    );
     let mut output = [[0.0_f32; 2]; MAX_FRAMES];
     engine.render(&mut output, BlockTiming::default());
 

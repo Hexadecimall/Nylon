@@ -76,20 +76,22 @@ side.
 
 ## Musical time
 
-`src/transport` converts between frames and beats. It advances by whole
-blocks, so the same starting position and block length always cover the
-same span of musical time. A loop wraps at its end carrying the overshoot.
-A tempo or sample rate change keeps the musical position rather than the
-frame count, so switching devices does not move the playhead in musical
-terms.
+`src/transport` converts between frames and beats. A sorted piecewise tempo
+map provides beat-to-frame and frame-to-beat conversion. Playback splits
+source scheduling at tempo and loop boundaries, then processes routing and
+device racks once for the complete host block. Notes, audio regions, and
+automation therefore follow arrangement tempo changes without changing a
+plugin's block contract. A locate or sample-rate change keeps the musical
+position stable.
 
 ## Playback
 
 `src/engine/playback` owns the mixer and the transport and implements the
 renderer interface, so one object drives both a device stream and an
 offline bounce. It does not read the project model: the control thread
-publishes a fixed-size settings snapshot that the engine takes up at a
-block boundary, never mid-block.
+publishes settings and immutable timeline data that the engine takes up at
+a block boundary, never mid-block. Replaced tempo maps return to the control
+thread for destruction.
 
 State travelling the other way uses `src/latest`, a triple buffer. A queue
 is the wrong shape for meters and a playhead, because a reader that falls

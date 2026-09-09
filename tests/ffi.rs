@@ -42,6 +42,19 @@ fn native_edit_cycle_uses_the_command_history() {
         assert_eq!(nylon_project_set_tempo(handle, 133.5), 1);
         assert_eq!(nylon_project_tempo(handle), 133.5);
         assert_eq!(nylon_project_set_tempo(handle, f64::NAN), 0);
+        assert_eq!(nylon_project_set_tempo_at(handle, 8.0, 96.0), 1);
+        assert_eq!(nylon_project_tempo_change_count(handle), 1);
+        let mut change = NylonTempoChange::default();
+        assert_eq!(nylon_project_tempo_change(handle, 0, &mut change), 1);
+        assert_eq!(
+            change,
+            NylonTempoChange {
+                beat: 8.0,
+                tempo: 96.0
+            }
+        );
+        assert_eq!(nylon_project_remove_tempo_change(handle, 8.0), 1);
+        assert_eq!(nylon_project_tempo_change_count(handle), 0);
         assert_eq!(nylon_project_add_track(handle), 1);
         assert_eq!(nylon_project_track_count(handle), 1);
         assert_eq!(nylon_project_undo(handle), 1);
@@ -138,6 +151,19 @@ fn null_handles_are_rejected() {
         assert_eq!(nylon_project_redo(std::ptr::null_mut()), 0);
         assert_eq!(nylon_project_track_count(std::ptr::null()), 0);
         assert_eq!(nylon_project_tempo(std::ptr::null()), 0.0);
+        assert_eq!(nylon_project_tempo_change_count(std::ptr::null()), 0);
+        assert_eq!(
+            nylon_project_tempo_change(std::ptr::null(), 0, std::ptr::null_mut()),
+            0
+        );
+        assert_eq!(
+            nylon_project_set_tempo_at(std::ptr::null_mut(), 4.0, 90.0),
+            0
+        );
+        assert_eq!(
+            nylon_project_remove_tempo_change(std::ptr::null_mut(), 4.0),
+            0
+        );
         assert_eq!(
             nylon_track_instrument_get(std::ptr::null(), 0, std::ptr::null_mut()),
             0

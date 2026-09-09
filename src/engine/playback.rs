@@ -32,7 +32,7 @@ use crate::mixer::{MAX_FRAMES, TrackInput};
 use crate::plugin::clap::NoteEvent as PluginNoteEvent;
 use crate::routing::CompiledRouting;
 use crate::spsc::{Consumer, Producer, SpscQueue};
-use crate::transport::{LoopRange, Transport};
+use crate::transport::{LoopRange, MAX_TEMPO_CHANGES, TempoChange, TempoMap, Transport};
 
 /// Tracks that can carry an instrument. A project may hold more tracks
 /// than this; the rest mix audio from elsewhere.
@@ -41,6 +41,66 @@ pub const MAX_INSTRUMENTS: usize = 8;
 pub const MAX_NOTES_PER_TRACK: usize = 512;
 /// Live note commands accepted before the control queue fills.
 pub const MAX_LIVE_NOTE_EVENTS: usize = 256;
+
+/// Tempo changes transferred to the render thread as one immutable value.
+// off the audio thread
+#[derive(Clone, Debug, PartialEq)]
+pub struct TempoTimeline {
+    initial: f64,
+    changes: Vec<TempoChange>,
+}
+
+impl TempoTimeline {
+    /// Creates a constant 120 BPM timeline.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            initial: 120.0,
+            changes: Vec::new(),
+        }
+    }
+
+    /// Creates a validated timeline from project state.
+    #[must_use]
+    pub fn from_parts(initial: f64, changes: &[TempoChange]) -> Option<Self> {
+        if !initial.is_finite()
+            || !(crate::transport::MIN_TEMPO..=crate::transport::MAX_TEMPO).contains(&initial)
+            || changes.len() > MAX_TEMPO_CHANGES
+        {
+            return None;
+        }
+        let mut previous = 0.0;
+        for change in changes {
+            if !change.beat.is_finite()
+                || change.beat <= previous
+                || !change.tempo.is_finite()
+                || !(crate::transport::MIN_TEMPO..=crate::transport::MAX_TEMPO)
+                    .contains(&change.tempo)
+            {
+                return None;
+            }
+            previous = change.beat;
+        }
+        Some(Self {
+            initial,
+            changes: changes.to_vec(),
+        })
+    }
+
+}
+
+impl Default for TempoTimeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+// back on the audio thread
+
+impl TempoTimeline {
+    fn map(&self) -> TempoMap<'_> {
+        TempoMap::new(self.initial, &self.changes)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LiveNoteAction {
@@ -505,6 +565,7 @@ pub struct Publisher {
     score: ControlSlot<Box<Score>>,
     audio: ControlSlot<Box<AudioTimeline>>,
     automation: ControlSlot<Box<AutomationTimeline>>,
+    tempo: ControlSlot<Box<TempoTimeline>>,
     routing: ControlSlot<Option<Box<PublishedRouting>>>,
     state: Reader<PlaybackState>,
     live_notes: Producer<LiveNoteEvent>,
@@ -556,6 +617,13 @@ impl Publisher {
     pub fn publish_automation(&mut self, timeline: AutomationTimeline) -> bool {
         while self.automation.reclaim().is_some() {}
         self.automation.publish(Box::new(timeline)).is_ok()
+    }
+
+    /// Transfers a prepared tempo timeline to the engine.
+    #[must_use]
+    pub fn publish_tempo(&mut self, timeline: TempoTimeline) -> bool {
+        while self.tempo.reclaim().is_some() {}
+        self.tempo.publish(Box::new(timeline)).is_ok()
     }
 
     /// Builds and transfers a routing revision to the engine.
@@ -756,6 +824,75 @@ fn plugin_event_blocks() -> Box<[TrackPluginEvents]> {
     vec![TrackPluginEvents::new(); MAX_TRACKS].into_boxed_slice()
 }
 
+fn frame_position(frames: f64) -> u64 {
+    if !frames.is_finite() || frames <= 0.0 {
+        0
+    } else if frames >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        frames.round() as u64
+    }
+}
+
+fn next_render_span(
+    map: TempoMap<'_>,
+    loop_range: LoopRange,
+    playing: bool,
+    start_beats: f64,
+    frames: usize,
+    sample_rate: f64,
+) -> (Span, f64) {
+    if !playing || frames == 0 {
+        return (
+            Span {
+                start_beats,
+                length_beats: 0.0,
+                frames,
+            },
+            start_beats,
+        );
+    }
+    let tempo = map.tempo_at(start_beats);
+    let frames_per_beat = sample_rate * 60.0 / tempo;
+    let mut boundary = map.next_after(start_beats).map(|change| change.beat);
+    let mut wraps = false;
+    if loop_range.is_active() && start_beats < loop_range.end_beats() {
+        let loop_end = loop_range.end_beats();
+        if boundary.is_none_or(|beat| loop_end <= beat) {
+            boundary = Some(loop_end);
+            wraps = true;
+        }
+    }
+    if let Some(boundary) = boundary {
+        let until_boundary = (boundary - start_beats) * frames_per_beat;
+        if until_boundary <= frames as f64 {
+            let segment_frames = (until_boundary.ceil() as usize).clamp(1, frames);
+            let next = if wraps {
+                loop_range.start_beats
+            } else {
+                boundary
+            };
+            return (
+                Span {
+                    start_beats,
+                    length_beats: boundary - start_beats,
+                    frames: segment_frames,
+                },
+                next,
+            );
+        }
+    }
+    let length_beats = frames as f64 / frames_per_beat;
+    (
+        Span {
+            start_beats,
+            length_beats,
+            frames,
+        },
+        start_beats + length_beats,
+    )
+}
+
 /// The renderer that mixes a project.
 pub struct PlaybackEngine {
     mixer: Mixer,
@@ -765,6 +902,7 @@ pub struct PlaybackEngine {
     score: AudioSlot<Box<Score>>,
     audio: AudioSlot<Box<AudioTimeline>>,
     automation: AudioSlot<Box<AutomationTimeline>>,
+    tempo: AudioSlot<Box<TempoTimeline>>,
     routing: AudioSlot<Option<Box<PublishedRouting>>>,
     state: Writer<PlaybackState>,
     // Settings currently in force, kept so they can be read back.
@@ -800,6 +938,7 @@ impl PlaybackEngine {
         let (score_control, score_audio) = exchange(Score::boxed());
         let (audio_control, audio_audio) = exchange(Box::new(AudioTimeline::new()));
         let (automation_control, automation_audio) = exchange(Box::new(AutomationTimeline::new()));
+        let (tempo_control, tempo_audio) = exchange(Box::new(TempoTimeline::new()));
         let (routing_control, routing_audio) = exchange(None);
         let (state_writer, state_reader) = latest(PlaybackState::default());
         let (live_note_writer, live_note_reader) = SpscQueue::with_capacity(MAX_LIVE_NOTE_EVENTS);
@@ -811,6 +950,7 @@ impl PlaybackEngine {
             score: score_audio,
             audio: audio_audio,
             automation: automation_audio,
+            tempo: tempo_audio,
             routing: routing_audio,
             state: state_writer,
             applied: MixSettings::new(),
@@ -826,6 +966,7 @@ impl PlaybackEngine {
             score: score_control,
             audio: audio_control,
             automation: automation_control,
+            tempo: tempo_control,
             routing: routing_control,
             state: state_reader,
             live_notes: live_note_writer,
@@ -892,6 +1033,10 @@ impl PlaybackEngine {
         }
     }
 
+    fn take_tempo(&mut self) {
+        self.tempo.apply_pending();
+    }
+
     /// Takes a prepared routing revision without releasing its predecessor
     /// on this thread.
     fn take_routing(&mut self) {
@@ -906,6 +1051,7 @@ impl PlaybackEngine {
             return;
         };
         self.applied = settings;
+        self.tempo.current_mut().initial = settings.tempo();
         self.mixer.set_track_count(settings.track_count());
         for index in 0..settings.track_count() {
             let track = settings.track(index);
@@ -919,12 +1065,16 @@ impl PlaybackEngine {
         self.mixer.set_volume_db(MASTER, master.volume_db);
         self.mixer.set_pan(MASTER, master.pan);
         self.mixer.set_muted(MASTER, master.muted);
-        self.transport.set_tempo(settings.tempo());
         let (numerator, denominator) = settings.time_signature();
         let _ = self.transport.set_time_signature(numerator, denominator);
         self.transport.set_loop(settings.loop_range());
         if let Some(beats) = settings.locate_beats() {
-            self.transport.locate_beats(beats);
+            let map = self.tempo.current().map();
+            self.transport.set_tempo(map.tempo_at(beats));
+            self.transport.locate_mapped(
+                beats,
+                frame_position(map.frame_at(beats, self.transport.sample_rate())),
+            );
             self.mixer.clear_automation();
             // Moving the playhead abandons whatever was sounding, so no
             // note hangs on from where playback used to be.
@@ -932,6 +1082,12 @@ impl PlaybackEngine {
                 bank.reset();
             }
         }
+        self.transport.set_tempo(
+            self.tempo
+                .current()
+                .map()
+                .tempo_at(self.transport.position_beats()),
+        );
         if settings.is_playing() != self.transport.is_playing() {
             if settings.is_playing() {
                 self.transport.play();
@@ -993,11 +1149,11 @@ impl PlaybackEngine {
     fn store_plugin_notes(
         &mut self,
         index: usize,
+        base_offset: usize,
         live_events: &[LiveNoteEvent],
         note_events: &[NoteEvent],
     ) {
         let destination = &mut self.plugin_notes[index];
-        destination.count = 0;
         for source in live_events
             .iter()
             .filter(|event| usize::from(event.track) == index)
@@ -1033,7 +1189,7 @@ impl PlaybackEngine {
                 break;
             }
             destination.events[destination.count] = PluginNoteEvent {
-                sample_offset: source.offset as u32,
+                sample_offset: (base_offset + source.offset) as u32,
                 kind: match source.action {
                     NoteAction::On => 0,
                     NoteAction::Off => 1,
@@ -1053,6 +1209,7 @@ impl PlaybackEngine {
     fn render_instrument(
         &mut self,
         index: usize,
+        base_offset: usize,
         frames: usize,
         live_events: &[LiveNoteEvent],
         note_events: &[NoteEvent],
@@ -1061,8 +1218,7 @@ impl PlaybackEngine {
             .applied_score
             .track(index)
             .is_some_and(TrackScore::is_enabled);
-        let buffer = &mut self.track_audio[index][..frames];
-        buffer.fill([0.0, 0.0]);
+        let buffer = &mut self.track_audio[index][base_offset..base_offset + frames];
         let bank = &mut self.instruments[index];
         if !enabled {
             if !bank.is_silent() {
@@ -1108,31 +1264,15 @@ impl PlaybackEngine {
     /// the direct mixer remains the fallback. `events` land on the sample
     /// they name.
     pub fn render_block(&mut self, output: &mut [[f32; 2]], events: &[MixEvent]) {
+        self.take_tempo();
         self.take_settings();
         self.take_score();
         self.take_audio();
         self.take_automation();
         self.take_routing();
         let frames = output.len().min(MAX_FRAMES);
-
-        // The span this block covers, taken before the transport moves so
-        // the notes land inside it.
-        let (start_beats, length_beats) = self.transport.peek(frames);
-        let span = Span {
-            start_beats,
-            length_beats,
-            frames,
-        };
         let mut automation_events = [EMPTY_AUTOMATION_EVENT; MAX_AUTOMATION_EVENTS];
-        let scheduled = self
-            .automation
-            .current()
-            .schedule(span, &mut automation_events);
-        self.automation_dropped = self
-            .automation_dropped
-            .saturating_add(scheduled.dropped as u64);
-        let automation_events = &automation_events[..scheduled.count];
-
+        let mut automation_count = 0;
         let track_count = self.mixer.track_count();
         let mut live_events = [EMPTY_LIVE_NOTE; MAX_LIVE_NOTE_EVENTS];
         let mut live_count = 0;
@@ -1147,24 +1287,72 @@ impl PlaybackEngine {
         for buffer in self.track_audio.iter_mut().take(track_count) {
             buffer[..frames].fill([0.0; 2]);
         }
-        for index in 0..track_count {
-            let mut note_events = [NoteEvent {
-                offset: 0,
-                pitch: 0,
-                velocity: 0,
-                action: NoteAction::On,
-            }; MAX_NOTE_EVENTS];
-            let count = self.schedule_track(index, span, &mut note_events);
-            self.store_plugin_notes(index, live_events, &note_events[..count]);
-            if index < MAX_INSTRUMENTS {
-                self.render_instrument(index, frames, live_events, &note_events[..count]);
-            }
+        for plugin in self.plugin_notes.iter_mut().take(track_count) {
+            plugin.count = 0;
         }
-        for (index, buffer) in self.track_audio.iter_mut().take(track_count).enumerate() {
-            self.audio
+
+        let mut offset = 0;
+        let mut beat = self.transport.position_beats();
+        while offset < frames {
+            let (span, next_beat) = {
+                let map = self.tempo.current().map();
+                next_render_span(
+                    map,
+                    self.transport.loop_range(),
+                    self.transport.is_playing(),
+                    beat,
+                    frames - offset,
+                    self.transport.sample_rate(),
+                )
+            };
+            let mut segment_automation = [EMPTY_AUTOMATION_EVENT; MAX_AUTOMATION_EVENTS];
+            let scheduled = self
+                .automation
                 .current()
-                .render_track(index, span, &mut buffer[..frames]);
+                .schedule(span, &mut segment_automation);
+            self.automation_dropped = self
+                .automation_dropped
+                .saturating_add(scheduled.dropped as u64);
+            for mut event in segment_automation[..scheduled.count].iter().copied() {
+                if automation_count == automation_events.len() {
+                    self.automation_dropped = self.automation_dropped.saturating_add(1);
+                    continue;
+                }
+                event.offset += offset;
+                automation_events[automation_count] = event;
+                automation_count += 1;
+            }
+
+            let segment_live = if offset == 0 { live_events } else { &[] };
+            for index in 0..track_count {
+                let mut note_events = [NoteEvent {
+                    offset: 0,
+                    pitch: 0,
+                    velocity: 0,
+                    action: NoteAction::On,
+                }; MAX_NOTE_EVENTS];
+                let count = self.schedule_track(index, span, &mut note_events);
+                self.store_plugin_notes(index, offset, segment_live, &note_events[..count]);
+                if index < MAX_INSTRUMENTS {
+                    self.render_instrument(
+                        index,
+                        offset,
+                        span.frames,
+                        segment_live,
+                        &note_events[..count],
+                    );
+                }
+                self.audio.current().render_track(
+                    index,
+                    span,
+                    &mut self.track_audio[index][offset..offset + span.frames],
+                );
+            }
+            offset += span.frames;
+            beat = next_beat;
         }
+
+        let automation_events = &automation_events[..automation_count];
 
         if self.routing.current().is_some() {
             self.render_routed(output, events, automation_events, frames, track_count);
@@ -1172,7 +1360,14 @@ impl PlaybackEngine {
             self.render_direct(output, events, automation_events, frames, track_count);
         }
         output[frames..].fill([0.0; 2]);
-        self.transport.advance(frames);
+        if self.transport.is_playing() {
+            let map = self.tempo.current().map();
+            self.transport.set_tempo(map.tempo_at(beat));
+            self.transport.locate_mapped(
+                beat,
+                frame_position(map.frame_at(beat, self.transport.sample_rate())),
+            );
+        }
         self.report();
     }
 
@@ -1433,6 +1628,57 @@ mod tests {
         assert!(engine.mixer().is_muted(1));
         assert!((engine.transport().tempo() - 90.0).abs() < 1e-9);
         assert_eq!(engine.transport().time_signature(), (3, 4));
+    }
+
+    #[test]
+    fn tempo_changes_split_scheduling_at_the_exact_sample() {
+        let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
+        let timeline = TempoTimeline::from_parts(
+            120.0,
+            &[TempoChange {
+                beat: 4.0,
+                tempo: 60.0,
+            }],
+        )
+        .unwrap();
+        assert!(publisher.publish_tempo(timeline));
+        let mut settings = playing_settings(1);
+        settings.set_locate_beats(Some(3.99));
+        assert!(publisher.publish(&settings));
+        let mut score = Score::new();
+        let track = score.track_mut(0).unwrap();
+        track.set_enabled(true);
+        assert_eq!(track.set_notes(&[note(4.0, 0.002, 60)]), 1);
+        assert!(publisher.publish_score(&score));
+
+        let mut output = [[0.0_f32; 2]; 480];
+        engine.render_block(&mut output, &[]);
+        assert!((engine.transport().position_beats() - 4.005).abs() < 1e-9);
+        assert_eq!(engine.transport().position_frames(), 96_240);
+        let events = engine.plugin_notes[0].as_slice();
+        assert_eq!(events[0].sample_offset, 240);
+        assert_eq!(events[1].sample_offset, 335);
+    }
+
+    #[test]
+    fn tempo_timelines_reject_unsorted_or_invalid_changes() {
+        assert!(TempoTimeline::from_parts(0.0, &[]).is_none());
+        assert!(
+            TempoTimeline::from_parts(
+                120.0,
+                &[
+                    TempoChange {
+                        beat: 4.0,
+                        tempo: 90.0,
+                    },
+                    TempoChange {
+                        beat: 2.0,
+                        tempo: 100.0,
+                    },
+                ],
+            )
+            .is_none()
+        );
     }
 
     #[test]

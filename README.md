@@ -49,6 +49,8 @@ nylon-control --project Session.nylon --endpoint nylon-live --plugin-worker nylo
 nylon-control --endpoint nylon-live status
 nylon-control --endpoint nylon-live play
 nylon-control --endpoint nylon-live locate 16
+nylon-control --endpoint nylon-live set-tempo-at 32 128
+nylon-control --endpoint nylon-live tempo-map
 nylon-control --endpoint nylon-live create-midi-clip 0 0 4
 nylon-control --endpoint nylon-live add-note 0 0 60 100 0 1
 nylon-control --endpoint nylon-live quantize-notes 0 0 0.25 1
@@ -69,7 +71,8 @@ nylon-control --plugin-probe nylon-plugin-probe probe-plugins PluginDirectory
 nylon-control --plugin-worker nylon-plugin-worker plugin-info Effect.clap app.nylon.effect
 ```
 
-The endpoint also accepts `launch-scene`, `set-tempo`, live MIDI note control, MIDI note listing and
+The endpoint also accepts `launch-scene`, `set-tempo`, `set-tempo-at`,
+`delete-tempo-change`, live MIDI note control, MIDI note listing and
 transforms, track volume, pan, mute, solo and arm edits, complete device-chain
 editing, `undo`, `redo`, `save`, `sync`, and `reload`.
 `--no-audio` starts the endpoint for project editing without a device.

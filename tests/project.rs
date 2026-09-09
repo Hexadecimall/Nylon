@@ -32,6 +32,50 @@ fn grouped_commands_undo_as_one_and_snapshots_stay_immutable() {
 }
 
 #[test]
+fn tempo_changes_are_sorted_replaced_removed_and_undoable() {
+    let mut project = Project::new();
+    project
+        .apply(&[
+            Command::SetTempoAt {
+                beat: 8.0,
+                tempo: 90.0,
+            },
+            Command::SetTempoAt {
+                beat: 4.0,
+                tempo: 140.0,
+            },
+            Command::SetTempoAt {
+                beat: 8.0,
+                tempo: 96.0,
+            },
+        ])
+        .unwrap();
+    let changed = project.snapshot();
+    assert_eq!(changed.tempo_changes().len(), 2);
+    assert_eq!(changed.tempo_changes()[0].beat, 4.0);
+    assert_eq!(changed.tempo_changes()[1].tempo, 96.0);
+
+    project
+        .apply(&[Command::RemoveTempoChange { beat: 4.0 }])
+        .unwrap();
+    assert_eq!(project.snapshot().tempo_changes()[0].beat, 8.0);
+    assert!(project.undo());
+    assert_eq!(*project.snapshot(), *changed);
+
+    assert_eq!(
+        project.apply(&[Command::SetTempoAt {
+            beat: f64::NAN,
+            tempo: 120.0,
+        }]),
+        Err(ProjectError::InvalidTempoPosition)
+    );
+    assert_eq!(
+        project.apply(&[Command::RemoveTempoChange { beat: 2.0 }]),
+        Err(ProjectError::MissingTempoChange)
+    );
+}
+
+#[test]
 fn automation_lanes_are_validated_replaced_and_undoable() {
     let mut project = Project::new();
     project

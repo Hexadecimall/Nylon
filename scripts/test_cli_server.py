@@ -56,6 +56,11 @@ def main():
             assert call("status")["tempo"] == 130
             call("set-tempo", "141")
             assert call("status")["tempo"] == 141
+            call("set-tempo-at", "8", "96")
+            assert call("tempo-map")["points"] == [
+                {"beat": 0, "tempo": 141}, {"beat": 8, "tempo": 96}
+            ]
+            call("delete-tempo-change", "8")
             call("set-track-volume", "0", "-9")
             call("set-track-mute", "0", "on")
             call("set-instrument", "0", "saw", "square", "0.6", "-7", "0.35", "0.04",

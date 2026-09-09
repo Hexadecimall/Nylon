@@ -31,7 +31,7 @@ Groups of functions:
 
 | Prefix | Covers |
 | --- | --- |
-| `nylon_project_*` | tempo, time signature, sample rate, undo/redo, bundle save/open, reset |
+| `nylon_project_*` | tempo map, time signature, sample rate, undo/redo, bundle save/open, reset |
 | `nylon_track_*` | name, kind, volume, pan, mute, solo, arm, color, devices, deletion |
 | `nylon_scene_*` | scene count, creation, deletion, names |
 | `nylon_clip_*` | slot state, MIDI creation, WAVE import, clip settings, notes |
@@ -138,6 +138,9 @@ nylon-control --project Session.nylon clear-automation 0 volume
 nylon-control --project Session.nylon move-device 0 1 0
 nylon-control --project Session.nylon delete-device 0 1
 nylon-control --project Session.nylon set-tempo 128
+nylon-control --project Session.nylon set-tempo-at 32 96
+nylon-control --project Session.nylon tempo-map
+nylon-control --project Session.nylon delete-tempo-change 32
 nylon-control --project Session.nylon bounce mix.wav 0 64 48000
 nylon-control --project Session.nylon record 1 0 8.0
 nylon-control --project Session.nylon record 1 0 8.0 DEVICE RATE BLOCK

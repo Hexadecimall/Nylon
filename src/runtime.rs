@@ -13,7 +13,7 @@ use crate::engine::automation::{
 };
 use crate::engine::device::DeviceConfig;
 use crate::engine::playback::{
-    MixSettings, PlaybackEngine, PlaybackState, Publisher, Score, TrackSettings,
+    MixSettings, PlaybackEngine, PlaybackState, Publisher, Score, TempoTimeline, TrackSettings,
 };
 use crate::engine::rack::DeviceRack;
 use crate::engine::schedule::ScheduledNote;
@@ -321,6 +321,8 @@ impl AudioRuntime {
             playback_routing_with_device_latencies(&snapshot, &device_latencies)
                 .map_err(|_| AudioError::Host("project routing could not be compiled"))?;
         let automation = automation_from_snapshot(&snapshot);
+        let tempo = tempo_from_snapshot(&snapshot)
+            .ok_or(AudioError::Host("project tempo map could not be prepared"))?;
         let (engine, mut publisher) = PlaybackEngine::new(f64::from(sample_rate));
         let playing = false;
         (self.settings, self.score) = state_from_snapshot(&snapshot, playing);
@@ -328,6 +330,7 @@ impl AudioRuntime {
             || !publisher.publish_score(&self.score)
             || !publisher.publish_audio(timeline)
             || !publisher.publish_automation(automation)
+            || !publisher.publish_tempo(tempo)
             || !publisher
                 .publish_prepared_routing(&routing, output_node, devices)
                 .map_err(|_| AudioError::Host("project routing could not be prepared"))?
@@ -482,6 +485,9 @@ impl AudioRuntime {
             return false;
         };
         let automation = automation_from_snapshot(&snapshot);
+        let Some(tempo) = tempo_from_snapshot(&snapshot) else {
+            return false;
+        };
         let playing = self.settings.is_playing();
         (self.settings, self.score) =
             state_from_snapshot_with_session(&snapshot, playing, &self.sessions);
@@ -496,12 +502,16 @@ impl AudioRuntime {
             .publisher
             .as_mut()
             .is_some_and(|publisher| publisher.publish_automation(automation));
+        let tempo_sent = self
+            .publisher
+            .as_mut()
+            .is_some_and(|publisher| publisher.publish_tempo(tempo));
         let routing_sent = self.publisher.as_mut().is_some_and(|publisher| {
             publisher
                 .publish_prepared_routing(&routing, output_node, devices)
                 .unwrap_or(false)
         });
-        state_sent && audio_sent && automation_sent && routing_sent
+        state_sent && audio_sent && automation_sent && tempo_sent && routing_sent
     }
 
     /// Starts the musical transport.
@@ -1106,6 +1116,10 @@ pub fn default_input() -> Result<DeviceId, AudioError> {
 
 pub(crate) fn state_from_snapshot(snapshot: &Snapshot, playing: bool) -> (MixSettings, Box<Score>) {
     state_from_snapshot_with_session(snapshot, playing, &[None; MAX_TRACKS])
+}
+
+pub(crate) fn tempo_from_snapshot(snapshot: &Snapshot) -> Option<TempoTimeline> {
+    TempoTimeline::from_parts(snapshot.tempo(), snapshot.tempo_changes())
 }
 
 fn state_from_snapshot_with_session(

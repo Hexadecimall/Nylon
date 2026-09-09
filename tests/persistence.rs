@@ -22,6 +22,10 @@ fn session() -> Project {
     let mut project = Project::new();
     project
         .apply(&[
+            Command::SetTempoAt {
+                beat: 16.0,
+                tempo: 132.0,
+            },
             Command::CreateTrack {
                 name: "Synth".into(),
                 kind: TrackKind::Midi,
@@ -333,7 +337,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 17;
+    future[4] = 18;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

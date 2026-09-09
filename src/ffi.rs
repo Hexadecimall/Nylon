@@ -83,6 +83,14 @@ pub struct NylonBounceReport {
     pub peak_right: f32,
 }
 
+/// One arrangement tempo change.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NylonTempoChange {
+    pub beat: f64,
+    pub tempo: f64,
+}
+
 /// Measurements from a completed input recording.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -213,6 +221,73 @@ pub unsafe extern "C" fn nylon_project_set_tempo(handle: *mut Project, tempo: f6
     // SAFETY: Validity and exclusive access are required by the interface.
     unsafe { handle.as_mut() }.map_or(0, |project| {
         i32::from(project.apply(&[Command::SetTempo(tempo)]).is_ok())
+    })
+}
+
+/// # Safety
+/// A non-null handle must refer to a live project with no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_tempo_change_count(handle: *const Project) -> u64 {
+    // SAFETY: Validity and access exclusion are required by the interface.
+    unsafe { handle.as_ref() }.map_or(0, |project| project.snapshot().tempo_changes().len() as u64)
+}
+
+/// # Safety
+/// The project and output pointers must be valid for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_tempo_change(
+    handle: *const Project,
+    index: u64,
+    output: *mut NylonTempoChange,
+) -> i32 {
+    // SAFETY: Pointer validity is required by the interface.
+    let (Some(project), Some(output)) = (unsafe { handle.as_ref() }, unsafe { output.as_mut() })
+    else {
+        return 0;
+    };
+    let snapshot = project.snapshot();
+    let Ok(index) = usize::try_from(index) else {
+        return 0;
+    };
+    let Some(change) = snapshot.tempo_changes().get(index) else {
+        return 0;
+    };
+    *output = NylonTempoChange {
+        beat: change.beat,
+        tempo: change.tempo,
+    };
+    1
+}
+
+/// # Safety
+/// A non-null handle must refer to a live project exclusively owned by this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_set_tempo_at(
+    handle: *mut Project,
+    beat: f64,
+    tempo: f64,
+) -> i32 {
+    // SAFETY: Validity and exclusive access are required by the interface.
+    unsafe { handle.as_mut() }.map_or(0, |project| {
+        i32::from(
+            project
+                .apply(&[Command::SetTempoAt { beat, tempo }])
+                .is_ok(),
+        )
+    })
+}
+
+/// # Safety
+/// A non-null handle must refer to a live project exclusively owned by this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_remove_tempo_change(handle: *mut Project, beat: f64) -> i32 {
+    // SAFETY: Validity and exclusive access are required by the interface.
+    unsafe { handle.as_mut() }.map_or(0, |project| {
+        i32::from(
+            project
+                .apply(&[Command::RemoveTempoChange { beat }])
+                .is_ok(),
+        )
     })
 }
 

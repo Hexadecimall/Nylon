@@ -53,6 +53,11 @@ struct BounceReport {
     float peakRight;
 };
 
+struct TempoChange {
+    double beat;
+    double tempo;
+};
+
 struct RecordingReport {
     std::uint64_t frames;
     std::uint32_t sampleRate;
@@ -399,6 +404,9 @@ public:
 
     double tempo() const;
     bool setTempo(double bpm);
+    std::vector<TempoChange> tempoChanges() const;
+    bool setTempoAt(double beat, double bpm);
+    bool removeTempoChange(double beat);
     int timeSignatureNumerator() const;
     int timeSignatureDenominator() const;
     bool setTimeSignature(int numerator, int denominator);

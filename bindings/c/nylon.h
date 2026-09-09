@@ -46,6 +46,11 @@ typedef struct NylonBounceReport {
     float peak_right;
 } NylonBounceReport;
 
+typedef struct NylonTempoChange {
+    double beat;
+    double tempo;
+} NylonTempoChange;
+
 typedef struct NylonRecordingReport {
     unsigned long long frames;
     unsigned int sample_rate;
@@ -145,6 +150,13 @@ double nylon_project_tempo(const void* project);
 /* Sets the tempo. Rejects non-finite values and values outside the
  * supported range without changing the project. */
 int nylon_project_set_tempo(void* project, double bpm);
+
+/* Arrangement tempo changes after beat zero, sorted by beat. */
+unsigned long long nylon_project_tempo_change_count(const void* project);
+int nylon_project_tempo_change(
+    const void* project, unsigned long long index, NylonTempoChange* output);
+int nylon_project_set_tempo_at(void* project, double beat, double bpm);
+int nylon_project_remove_tempo_change(void* project, double beat);
 
 /* Appends a new track. */
 int nylon_project_add_track(void* project);

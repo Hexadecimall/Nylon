@@ -179,9 +179,15 @@ def main():
         assert call("info")["tempo"] == 120
         call("redo")
         assert call("info")["tempo"] == 137
+        call("set-tempo-at", "0.5", "60")
+        assert call("tempo-map")["points"] == [
+            {"beat": 0, "tempo": 137}, {"beat": 0.5, "tempo": 60}
+        ]
         rendered = call("bounce", str(output), "0", "1", "48000")
-        assert rendered["frames"] > 0 and output.stat().st_size > 44, rendered
+        assert rendered["frames"] == 34511 and output.stat().st_size > 44, rendered
         assert rendered["peakLeft"] > 0 and rendered["peakRight"] > 0, rendered
+        call("delete-tempo-change", "0.5")
+        assert call("tempo-map")["points"] == [{"beat": 0, "tempo": 137}]
         call("set-tempo", "invalid", succeeds=False)
         call("record", "1", "1", "0", succeeds=False)
         call("unsupported", succeeds=False)

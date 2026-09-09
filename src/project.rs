@@ -6,6 +6,7 @@ use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
 use crate::engine::voice::Patch;
 use crate::plugin::{Format as PluginFormat, clap::MAX_STATE_BYTES};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
+use crate::transport::{MAX_TEMPO_CHANGES, TempoChange};
 
 /// Largest number of routes stored in one project snapshot.
 pub const MAX_PROJECT_ROUTES: usize = 1024;
@@ -496,6 +497,7 @@ impl Route {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     pub(crate) tempo: f64,
+    pub(crate) tempo_changes: Vec<TempoChange>,
     pub(crate) tracks: Vec<Track>,
     pub(crate) numerator: u16,
     pub(crate) denominator: u16,
@@ -509,6 +511,9 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn tempo(&self) -> f64 {
         self.tempo
+    }
+    pub fn tempo_changes(&self) -> &[TempoChange] {
+        &self.tempo_changes
     }
     pub fn tracks(&self) -> &[Track] {
         &self.tracks
@@ -589,6 +594,13 @@ impl Snapshot {
 #[derive(Clone, Debug)]
 pub enum Command {
     SetTempo(f64),
+    SetTempoAt {
+        beat: f64,
+        tempo: f64,
+    },
+    RemoveTempoChange {
+        beat: f64,
+    },
     CreateTrack {
         name: String,
         kind: TrackKind,
@@ -787,6 +799,9 @@ pub enum Command {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectError {
     InvalidTempo,
+    InvalidTempoPosition,
+    MissingTempoChange,
+    TempoCapacity,
     InvalidName,
     MissingTrack,
     IdentifierExhausted,
@@ -844,6 +859,7 @@ impl Project {
         Self {
             current: Arc::new(Snapshot {
                 tempo: 120.0,
+                tempo_changes: Vec::new(),
                 tracks: Vec::new(),
                 numerator: 4,
                 denominator: 4,
@@ -892,6 +908,43 @@ impl Project {
                         return Err(ProjectError::InvalidTempo);
                     }
                     snapshot.tempo = *tempo;
+                }
+                Command::SetTempoAt { beat, tempo } => {
+                    validate_tempo(*tempo)?;
+                    validate_tempo_position(*beat)?;
+                    if *beat == 0.0 {
+                        snapshot.tempo = *tempo;
+                        continue;
+                    }
+                    match snapshot
+                        .tempo_changes
+                        .binary_search_by(|change| change.beat.total_cmp(beat))
+                    {
+                        Ok(index) => snapshot.tempo_changes[index].tempo = *tempo,
+                        Err(index) => {
+                            if snapshot.tempo_changes.len() == MAX_TEMPO_CHANGES {
+                                return Err(ProjectError::TempoCapacity);
+                            }
+                            snapshot.tempo_changes.insert(
+                                index,
+                                TempoChange {
+                                    beat: *beat,
+                                    tempo: *tempo,
+                                },
+                            );
+                        }
+                    }
+                }
+                Command::RemoveTempoChange { beat } => {
+                    validate_tempo_position(*beat)?;
+                    if *beat == 0.0 {
+                        return Err(ProjectError::InvalidTempoPosition);
+                    }
+                    let index = snapshot
+                        .tempo_changes
+                        .binary_search_by(|change| change.beat.total_cmp(beat))
+                        .map_err(|_| ProjectError::MissingTempoChange)?;
+                    snapshot.tempo_changes.remove(index);
                 }
                 Command::CreateTrack { name, kind } => {
                     validate_name(name)?;
@@ -1521,6 +1574,14 @@ fn validate_tempo(tempo: f64) -> Result<(), ProjectError> {
         Ok(())
     } else {
         Err(ProjectError::InvalidTempo)
+    }
+}
+
+fn validate_tempo_position(beat: f64) -> Result<(), ProjectError> {
+    if beat.is_finite() && beat >= 0.0 {
+        Ok(())
+    } else {
+        Err(ProjectError::InvalidTempoPosition)
     }
 }
 

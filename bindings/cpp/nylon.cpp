@@ -524,6 +524,26 @@ bool Project::bounceWave(const std::string& path, double startBeats, double endB
 
 double Project::tempo() const { return nylon_project_tempo(m_handle); }
 bool Project::setTempo(double bpm) { return nylon_project_set_tempo(m_handle, bpm) != 0; }
+std::vector<TempoChange> Project::tempoChanges() const
+{
+    std::vector<TempoChange> result;
+    const auto count = nylon_project_tempo_change_count(m_handle);
+    result.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t index = 0; index < count; ++index) {
+        NylonTempoChange change{};
+        if (nylon_project_tempo_change(m_handle, index, &change) == 0) break;
+        result.push_back({change.beat, change.tempo});
+    }
+    return result;
+}
+bool Project::setTempoAt(double beat, double bpm)
+{
+    return nylon_project_set_tempo_at(m_handle, beat, bpm) != 0;
+}
+bool Project::removeTempoChange(double beat)
+{
+    return nylon_project_remove_tempo_change(m_handle, beat) != 0;
+}
 int Project::timeSignatureNumerator() const { return nylon_project_time_signature_numerator(m_handle); }
 int Project::timeSignatureDenominator() const { return nylon_project_time_signature_denominator(m_handle); }
 bool Project::setTimeSignature(int numerator, int denominator)
