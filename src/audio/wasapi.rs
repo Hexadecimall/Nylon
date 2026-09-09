@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crate::audio::{
-    AudioError, Backend, BlockTiming, DeviceId, DeviceInfo, Direction, Name, Rates, Renderer,
-    SUPPORTED_RATES, Stream, StreamConfig,
+    AudioError, Backend, BlockTiming, Capturer, DeviceId, DeviceInfo, Direction, InputBackend,
+    Name, Rates, Renderer, SUPPORTED_RATES, Stream, StreamConfig,
 };
 use crate::mixer::MAX_FRAMES;
 
@@ -59,6 +59,12 @@ static IID_IAUDIO_CLIENT: Guid = Guid {
     data3: 0x4C32,
     data4: [0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2],
 };
+static IID_IAUDIO_CAPTURE_CLIENT: Guid = Guid {
+    data1: 0xC8AD_BD64,
+    data2: 0xE71E,
+    data3: 0x48A0,
+    data4: [0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17],
+};
 static IID_IAUDIO_RENDER_CLIENT: Guid = Guid {
     data1: 0xF294_ACFC,
     data2: 0x3146,
@@ -88,6 +94,7 @@ struct PropertyKey {
 const CLSCTX_ALL: u32 = 23;
 const COINIT_MULTITHREADED: u32 = 0;
 const EDATAFLOW_RENDER: u32 = 0;
+const EDATAFLOW_CAPTURE: u32 = 1;
 const EROLE_CONSOLE: u32 = 0;
 const DEVICE_STATE_ACTIVE: u32 = 1;
 const STGM_READ: u32 = 0;
@@ -95,6 +102,7 @@ const AUDCLNT_SHAREMODE_SHARED: u32 = 0;
 const AUDCLNT_STREAMFLAGS_EVENTCALLBACK: u32 = 0x0004_0000;
 const AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM: u32 = 0x8000_0000;
 const AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY: u32 = 0x0800_0000;
+const AUDCLNT_BUFFERFLAGS_SILENT: u32 = 0x0000_0002;
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 0x0003;
 const VT_LPWSTR: u16 = 31;
 const WAIT_OBJECT_0: u32 = 0;
@@ -235,6 +243,21 @@ struct AudioClientVtable {
     reset: unsafe extern "system" fn(*mut c_void) -> Hresult,
     set_event_handle: unsafe extern "system" fn(*mut c_void, *mut c_void) -> Hresult,
     service: unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
+}
+
+#[repr(C)]
+struct CaptureClientVtable {
+    base: Unknown,
+    get_buffer: unsafe extern "system" fn(
+        *mut c_void,
+        *mut *mut u8,
+        *mut u32,
+        *mut u32,
+        *mut u64,
+        *mut u64,
+    ) -> Hresult,
+    release_buffer: unsafe extern "system" fn(*mut c_void, u32) -> Hresult,
+    next_packet_size: unsafe extern "system" fn(*mut c_void, *mut u32) -> Hresult,
 }
 
 #[repr(C)]
@@ -393,7 +416,21 @@ impl WasapiBackend {
     }
 
     /// Calls `visit` with the identifier and name of every active output.
-    fn for_each_device(mut visit: impl FnMut(&str, &str, bool)) -> Result<(), AudioError> {
+    fn for_each_device(visit: impl FnMut(&str, &str, bool)) -> Result<(), AudioError> {
+        Self::for_each_endpoint(EDATAFLOW_RENDER, visit)
+    }
+
+    /// Calls `visit` with the identifier and name of every active input.
+    fn for_each_input(visit: impl FnMut(&str, &str, bool)) -> Result<(), AudioError> {
+        Self::for_each_endpoint(EDATAFLOW_CAPTURE, visit)
+    }
+
+    /// Calls `visit` for every active endpoint carrying audio in one
+    /// direction.
+    fn for_each_endpoint(
+        flow: u32,
+        mut visit: impl FnMut(&str, &str, bool),
+    ) -> Result<(), AudioError> {
         let enumerator = Self::enumerator()?;
 
         // The default endpoint, so the list can mark it.
@@ -404,7 +441,7 @@ impl WasapiBackend {
         let status = unsafe {
             (enumerator.table().default_endpoint)(
                 enumerator.pointer,
-                EDATAFLOW_RENDER,
+                flow,
                 EROLE_CONSOLE,
                 &raw mut default_raw,
             )
@@ -421,7 +458,7 @@ impl WasapiBackend {
         let status = unsafe {
             (enumerator.table().enum_endpoints)(
                 enumerator.pointer,
-                EDATAFLOW_RENDER,
+                flow,
                 DEVICE_STATE_ACTIVE,
                 &raw mut collection_raw,
             )
@@ -462,6 +499,75 @@ impl WasapiBackend {
             visit(&id, &name, id == default_id);
         }
         Ok(())
+    }
+
+    /// Finds an active endpoint by identifier, in one direction.
+    fn find_device(flow: u32, wanted: DeviceId) -> Result<Interface<DeviceVtable>, AudioError> {
+        let enumerator = Self::enumerator()?;
+        let mut collection_raw: *mut c_void = core::ptr::null_mut();
+        // SAFETY: The enumerator is live and the pointer is written on
+        // success.
+        let status = unsafe {
+            (enumerator.table().enum_endpoints)(
+                enumerator.pointer,
+                flow,
+                DEVICE_STATE_ACTIVE,
+                &raw mut collection_raw,
+            )
+        };
+        if status != S_OK {
+            return Err(AudioError::DeviceMissing);
+        }
+        // SAFETY: The call gave this value a reference.
+        let collection = unsafe { Interface::<DeviceCollectionVtable>::from_raw(collection_raw) }
+            .ok_or(AudioError::DeviceMissing)?;
+        let mut count: u32 = 0;
+        // SAFETY: The collection is live.
+        if unsafe { (collection.table().count)(collection.pointer, &raw mut count) } != S_OK {
+            return Err(AudioError::DeviceMissing);
+        }
+        for index in 0..count {
+            let mut device_raw: *mut c_void = core::ptr::null_mut();
+            // SAFETY: The index is inside the collection.
+            let status = unsafe {
+                (collection.table().item)(collection.pointer, index, &raw mut device_raw)
+            };
+            if status != S_OK {
+                continue;
+            }
+            // SAFETY: The call gave this value a reference.
+            let Some(device) = (unsafe { Interface::<DeviceVtable>::from_raw(device_raw) }) else {
+                continue;
+            };
+            if identifier(&device_identifier(&device)) == wanted.0 {
+                return Ok(device);
+            }
+        }
+        Err(AudioError::DeviceMissing)
+    }
+
+    /// Activates a device's audio client.
+    fn activate_client(
+        device: &Interface<DeviceVtable>,
+    ) -> Result<Interface<AudioClientVtable>, AudioError> {
+        let mut client_raw: *mut c_void = core::ptr::null_mut();
+        // SAFETY: The device is live and the interface is the one asked
+        // for.
+        let status = unsafe {
+            (device.table().activate)(
+                device.pointer,
+                &raw const IID_IAUDIO_CLIENT,
+                CLSCTX_ALL,
+                core::ptr::null_mut(),
+                &raw mut client_raw,
+            )
+        };
+        if status != S_OK {
+            return Err(AudioError::Host("the device refused to open"));
+        }
+        // SAFETY: The call gave this value a reference.
+        unsafe { Interface::from_raw(client_raw) }
+            .ok_or(AudioError::Host("the device refused to open"))
     }
 }
 
@@ -578,69 +684,8 @@ impl Backend for WasapiBackend {
         }
 
         // The device is found by identifier, then activated for playback.
-        let enumerator = Self::enumerator()?;
-        let mut collection_raw: *mut c_void = core::ptr::null_mut();
-        // SAFETY: The enumerator is live and the pointer is written on
-        // success.
-        let status = unsafe {
-            (enumerator.table().enum_endpoints)(
-                enumerator.pointer,
-                EDATAFLOW_RENDER,
-                DEVICE_STATE_ACTIVE,
-                &raw mut collection_raw,
-            )
-        };
-        if status != S_OK {
-            return Err(AudioError::DeviceMissing);
-        }
-        // SAFETY: The call gave this value a reference.
-        let collection = unsafe { Interface::<DeviceCollectionVtable>::from_raw(collection_raw) }
-            .ok_or(AudioError::DeviceMissing)?;
-        let mut count: u32 = 0;
-        // SAFETY: The collection is live.
-        if unsafe { (collection.table().count)(collection.pointer, &raw mut count) } != S_OK {
-            return Err(AudioError::DeviceMissing);
-        }
-
-        let mut chosen: Option<Interface<DeviceVtable>> = None;
-        for index in 0..count {
-            let mut device_raw: *mut c_void = core::ptr::null_mut();
-            // SAFETY: The index is inside the collection.
-            let status = unsafe {
-                (collection.table().item)(collection.pointer, index, &raw mut device_raw)
-            };
-            if status != S_OK {
-                continue;
-            }
-            // SAFETY: The call gave this value a reference.
-            let Some(device) = (unsafe { Interface::<DeviceVtable>::from_raw(device_raw) }) else {
-                continue;
-            };
-            if identifier(&device_identifier(&device)) == config.device.0 {
-                chosen = Some(device);
-                break;
-            }
-        }
-        let device = chosen.ok_or(AudioError::DeviceMissing)?;
-
-        let mut client_raw: *mut c_void = core::ptr::null_mut();
-        // SAFETY: The device is live and the interface is the one asked
-        // for.
-        let status = unsafe {
-            (device.table().activate)(
-                device.pointer,
-                &raw const IID_IAUDIO_CLIENT,
-                CLSCTX_ALL,
-                core::ptr::null_mut(),
-                &raw mut client_raw,
-            )
-        };
-        if status != S_OK {
-            return Err(AudioError::Host("the device refused to open"));
-        }
-        // SAFETY: The call gave this value a reference.
-        let client = unsafe { Interface::<AudioClientVtable>::from_raw(client_raw) }
-            .ok_or(AudioError::Host("the device refused to open"))?;
+        let device = Self::find_device(EDATAFLOW_RENDER, config.device)?;
+        let client = Self::activate_client(&device)?;
 
         // Stereo floating point at the rate that was asked for. A shared
         // client converts to whatever the device is mixing at.
@@ -745,6 +790,372 @@ impl Backend for WasapiBackend {
             config: running,
             thread: Some(thread),
         })
+    }
+}
+
+impl InputBackend for WasapiBackend {
+    type Capture = WasapiCapture;
+
+    fn input_devices(&self, out: &mut [DeviceInfo]) -> Result<usize, AudioError> {
+        let mut written = 0;
+        Self::for_each_input(|id, name, is_default| {
+            if written >= out.len() {
+                return;
+            }
+            let mut rates = Rates::new();
+            for rate in SUPPORTED_RATES {
+                let _ = rates.push(rate);
+            }
+            out[written] = DeviceInfo {
+                id: DeviceId(identifier(id)),
+                name: Name::truncated(name),
+                direction: Direction::Input,
+                channels: 2,
+                rates,
+                is_default,
+            };
+            written += 1;
+        })?;
+        Ok(written)
+    }
+
+    fn default_input(&self) -> Result<DeviceId, AudioError> {
+        let mut found = None;
+        Self::for_each_input(|id, _, is_default| {
+            if is_default || found.is_none() {
+                if found.is_some() && !is_default {
+                    return;
+                }
+                found = Some(DeviceId(identifier(id)));
+            }
+        })?;
+        found.ok_or(AudioError::DeviceMissing)
+    }
+
+    fn open_input<C: Capturer + 'static>(
+        &self,
+        config: StreamConfig,
+        capturer: C,
+    ) -> Result<Self::Capture, AudioError> {
+        config.validate()?;
+        if config.channels != 2 {
+            return Err(AudioError::Unsupported("channel count"));
+        }
+
+        let device = Self::find_device(EDATAFLOW_CAPTURE, config.device)?;
+        let client = Self::activate_client(&device)?;
+
+        let format = WaveFormatEx {
+            format_tag: WAVE_FORMAT_IEEE_FLOAT,
+            channels: 2,
+            samples_per_second: config.sample_rate,
+            bytes_per_second: config.sample_rate * 8,
+            block_align: 8,
+            bits_per_sample: 32,
+            extra_size: 0,
+        };
+        let duration =
+            config.block_frames as i64 * 4 * TICKS_PER_SECOND / i64::from(config.sample_rate);
+        // SAFETY: The client is live and the format outlives the call.
+        let status = unsafe {
+            (client.table().initialize)(
+                client.pointer,
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                duration,
+                0,
+                &raw const format,
+                core::ptr::null(),
+            )
+        };
+        if status != S_OK {
+            return Err(AudioError::Unsupported("device configuration"));
+        }
+
+        let mut buffer_frames: u32 = 0;
+        // SAFETY: The client is initialized.
+        if unsafe { (client.table().buffer_size)(client.pointer, &raw mut buffer_frames) } != S_OK {
+            return Err(AudioError::Host("the device would not report its buffer"));
+        }
+
+        // SAFETY: The arguments are the defaults for an unnamed event that
+        // resets itself.
+        let event = unsafe { CreateEventW(core::ptr::null_mut(), 0, 0, core::ptr::null()) };
+        if event.is_null() {
+            return Err(AudioError::Host("the wake-up event could not be made"));
+        }
+        let event = EventHandle(event);
+        // SAFETY: The client is initialized for event callbacks and the
+        // event outlives it.
+        if unsafe { (client.table().set_event_handle)(client.pointer, event.0) } != S_OK {
+            return Err(AudioError::Host("the device refused the wake-up event"));
+        }
+
+        let mut capture_raw: *mut c_void = core::ptr::null_mut();
+        // SAFETY: The client is initialized and the service is the one
+        // asked for.
+        let status = unsafe {
+            (client.table().service)(
+                client.pointer,
+                &raw const IID_IAUDIO_CAPTURE_CLIENT,
+                &raw mut capture_raw,
+            )
+        };
+        if status != S_OK {
+            return Err(AudioError::Host("the device would not hand out a buffer"));
+        }
+        // SAFETY: The call gave this value a reference.
+        let capture = unsafe { Interface::<CaptureClientVtable>::from_raw(capture_raw) }
+            .ok_or(AudioError::Host("the device would not hand out a buffer"))?;
+
+        let block = (buffer_frames as usize).clamp(1, MAX_FRAMES);
+        let running = StreamConfig {
+            block_frames: block,
+            ..config
+        };
+
+        let shared = Arc::new(Shared {
+            running: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            frames: AtomicU64::new(0),
+            dropouts: AtomicU64::new(0),
+            realtime: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
+        });
+        let mut prepared = capturer;
+        prepared.prepare(running);
+        let worker = CaptureWorker {
+            client,
+            capture,
+            event,
+            shared: Arc::clone(&shared),
+            capturer: Box::new(prepared),
+            block,
+        };
+        let thread = std::thread::Builder::new()
+            .name("nylon-wasapi-in".to_string())
+            .stack_size(512 * 1024)
+            .spawn(move || worker.run())
+            .map_err(|_| AudioError::Host("the capture thread could not be started"))?;
+
+        Ok(WasapiCapture {
+            shared,
+            config: running,
+            thread: Some(thread),
+        })
+    }
+}
+
+/// The capture thread's own state.
+struct CaptureWorker {
+    client: Interface<AudioClientVtable>,
+    capture: Interface<CaptureClientVtable>,
+    event: EventHandle,
+    shared: Arc<Shared>,
+    capturer: Box<dyn Capturer>,
+    block: usize,
+}
+
+impl CaptureWorker {
+    /// Takes packets from the device for as long as the stream is open.
+    ///
+    /// Nothing here allocates: the block is filled before the loop starts
+    /// and reused for every packet.
+    fn run(mut self) {
+        let _apartment = Apartment::enter();
+        let class = AudioClass::join();
+        self.shared
+            .realtime
+            .store(class.joined(), Ordering::Relaxed);
+        let mut block = vec![[0.0_f32; 2]; self.block];
+        let mut position = 0_u64;
+        let mut started = false;
+
+        while !self.shared.finished.load(Ordering::Acquire) {
+            if !self.shared.running.load(Ordering::Acquire) {
+                if started {
+                    // SAFETY: The client is running.
+                    unsafe { (self.client.table().stop)(self.client.pointer) };
+                    started = false;
+                }
+                std::thread::sleep(core::time::Duration::from_millis(2));
+                continue;
+            }
+            if !started {
+                // SAFETY: The client is initialized and idle.
+                unsafe { (self.client.table().reset)(self.client.pointer) };
+                // SAFETY: As above.
+                let status = unsafe { (self.client.table().start)(self.client.pointer) };
+                if status != S_OK {
+                    if status == AUDCLNT_E_DEVICE_INVALIDATED {
+                        self.shared.lost.store(true, Ordering::Release);
+                    }
+                    self.shared.finished.store(true, Ordering::Release);
+                    break;
+                }
+                started = true;
+            }
+
+            // SAFETY: The handle is live for as long as this value is.
+            let waited = unsafe { WaitForSingleObject(self.event.0, EVENT_TIMEOUT_MS) };
+            if waited != WAIT_OBJECT_0 {
+                self.shared.dropouts.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+
+            // The device hands over whole packets, and there may be more
+            // than one waiting.
+            loop {
+                let mut waiting: u32 = 0;
+                // SAFETY: The client is running.
+                let status = unsafe {
+                    (self.capture.table().next_packet_size)(self.capture.pointer, &raw mut waiting)
+                };
+                if status != S_OK {
+                    if status == AUDCLNT_E_DEVICE_INVALIDATED {
+                        self.shared.lost.store(true, Ordering::Release);
+                        self.shared.finished.store(true, Ordering::Release);
+                    }
+                    break;
+                }
+                if waiting == 0 {
+                    break;
+                }
+
+                let mut buffer: *mut u8 = core::ptr::null_mut();
+                let mut frames: u32 = 0;
+                let mut flags: u32 = 0;
+                // SAFETY: Every output is written before it is read, and
+                // the positions are not wanted.
+                let status = unsafe {
+                    (self.capture.table().get_buffer)(
+                        self.capture.pointer,
+                        &raw mut buffer,
+                        &raw mut frames,
+                        &raw mut flags,
+                        core::ptr::null_mut(),
+                        core::ptr::null_mut(),
+                    )
+                };
+                if status != S_OK {
+                    if status == AUDCLNT_E_DEVICE_INVALIDATED {
+                        self.shared.lost.store(true, Ordering::Release);
+                        self.shared.finished.store(true, Ordering::Release);
+                    }
+                    self.shared.dropouts.fetch_add(1, Ordering::Relaxed);
+                    break;
+                }
+
+                let count = (frames as usize).min(self.block);
+                if flags & AUDCLNT_BUFFERFLAGS_SILENT != 0 || buffer.is_null() {
+                    // The device says the packet is silence and may not
+                    // have filled the memory at all.
+                    block[..count].fill([0.0, 0.0]);
+                } else {
+                    // SAFETY: The device reports how many frames it wrote,
+                    // in the stereo float format it was opened with.
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            buffer,
+                            block.as_mut_ptr().cast::<u8>(),
+                            count * core::mem::size_of::<[f32; 2]>(),
+                        );
+                    }
+                }
+                if frames as usize > self.block {
+                    // More than the engine takes at once; the remainder is
+                    // dropped rather than silently truncating a take
+                    // without saying so.
+                    self.shared.dropouts.fetch_add(1, Ordering::Relaxed);
+                }
+
+                let timing = BlockTiming {
+                    frame: position,
+                    dropouts: self.shared.dropouts.load(Ordering::Relaxed),
+                };
+                self.capturer.capture(&block[..count], timing);
+                position += count as u64;
+                self.shared
+                    .frames
+                    .fetch_add(count as u64, Ordering::Relaxed);
+
+                // SAFETY: The whole packet is released, which is what the
+                // interface requires whatever was taken from it.
+                unsafe { (self.capture.table().release_buffer)(self.capture.pointer, frames) };
+            }
+        }
+
+        if started {
+            // SAFETY: The client is running.
+            unsafe { (self.client.table().stop)(self.client.pointer) };
+        }
+    }
+}
+
+/// A running WASAPI input.
+pub struct WasapiCapture {
+    shared: Arc<Shared>,
+    config: StreamConfig,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl WasapiCapture {
+    /// Whether the capture thread runs in the scheduler's audio class.
+    #[must_use]
+    pub fn is_realtime(&self) -> bool {
+        self.shared.realtime.load(Ordering::Relaxed)
+    }
+}
+
+impl Stream for WasapiCapture {
+    fn config(&self) -> StreamConfig {
+        self.config
+    }
+
+    fn start(&mut self) -> Result<(), AudioError> {
+        if self.shared.running.load(Ordering::Acquire) {
+            return Err(AudioError::WrongState);
+        }
+        self.shared.running.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), AudioError> {
+        if !self.shared.running.load(Ordering::Acquire) {
+            return Err(AudioError::WrongState);
+        }
+        self.shared.running.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    fn is_running(&self) -> bool {
+        self.shared.running.load(Ordering::Acquire)
+    }
+
+    fn frames_rendered(&self) -> u64 {
+        self.shared.frames.load(Ordering::Relaxed)
+    }
+
+    fn dropouts(&self) -> u64 {
+        self.shared.dropouts.load(Ordering::Relaxed)
+    }
+
+    fn is_lost(&self) -> bool {
+        self.shared.lost.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for WasapiCapture {
+    fn drop(&mut self) {
+        self.shared.running.store(false, Ordering::Release);
+        self.shared.finished.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            // The capturer and the interfaces live on that thread, so it
+            // has to finish before this returns.
+            let _ = thread.join();
+        }
     }
 }
 
@@ -1077,6 +1488,90 @@ mod tests {
         let mut single = [blank(); 1];
         let written = backend.devices(&mut single).unwrap_or(0);
         assert_eq!(written, count.min(1));
+    }
+
+    #[test]
+    fn inputs_are_listed_apart_from_outputs() {
+        let backend = WasapiBackend::new();
+        let mut inputs = [blank(); MAX_DEVICES];
+        let count = backend.input_devices(&mut inputs).unwrap_or(0);
+        for device in &inputs[..count] {
+            assert_eq!(device.direction, Direction::Input);
+            assert_ne!(device.id.0, 0);
+            assert!(!device.name.is_empty());
+        }
+        // A machine that has a default input must list it.
+        if let Ok(default) = backend.default_input() {
+            assert!(
+                inputs[..count].iter().any(|device| device.id == default),
+                "the default input was not listed"
+            );
+        }
+    }
+
+    #[test]
+    fn opening_an_input_that_is_not_there_is_refused() {
+        let backend = WasapiBackend::new();
+        let config = StreamConfig {
+            device: DeviceId(0xdead_beef),
+            sample_rate: 48_000,
+            channels: 2,
+            block_frames: 512,
+        };
+        let frames = Arc::new(AtomicU64::new(0));
+        assert!(matches!(
+            backend.open_input(
+                config,
+                CountingCapture {
+                    frames: Arc::clone(&frames)
+                }
+            ),
+            Err(AudioError::DeviceMissing | AudioError::Host(_))
+        ));
+        assert_eq!(frames.load(Ordering::Relaxed), 0);
+    }
+
+    /// A capturer that counts what it was handed.
+    struct CountingCapture {
+        frames: Arc<AtomicU64>,
+    }
+
+    impl Capturer for CountingCapture {
+        fn capture(&mut self, input: &[[f32; 2]], _timing: BlockTiming) {
+            self.frames.fetch_add(input.len() as u64, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    #[ignore = "needs an input device"]
+    fn a_stream_records_from_the_default_input() {
+        let backend = WasapiBackend::new();
+        let device = backend.default_input().expect("no default input");
+        let config = StreamConfig {
+            device,
+            sample_rate: 48_000,
+            channels: 2,
+            block_frames: 512,
+        };
+        let frames = Arc::new(AtomicU64::new(0));
+        let mut stream = backend
+            .open_input(
+                config,
+                CountingCapture {
+                    frames: Arc::clone(&frames),
+                },
+            )
+            .expect("open failed");
+        assert!(stream.start().is_ok());
+        let deadline = std::time::Instant::now() + core::time::Duration::from_secs(3);
+        while frames.load(Ordering::Relaxed) == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(core::time::Duration::from_millis(10));
+        }
+        assert!(
+            frames.load(Ordering::Relaxed) > 0,
+            "the stream never reached the capturer"
+        );
+        assert!(stream.stop().is_ok());
     }
 
     #[test]
