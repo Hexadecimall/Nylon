@@ -42,6 +42,21 @@ bool unsignedNumber(const QString& text, std::uint32_t& value)
     return true;
 }
 
+bool indexNumber(const QString& text, std::uint64_t& value)
+{
+    bool parsed = false;
+    value = text.toULongLong(&parsed);
+    return parsed;
+}
+
+bool flag(const QString& text, bool& value)
+{
+    if (text == "on" || text == "true" || text == "1") value = true;
+    else if (text == "off" || text == "false" || text == "0") value = false;
+    else return false;
+    return true;
+}
+
 bool trackKind(const QString& text, nylon::TrackKind& kind)
 {
     if (text == "audio") kind = nylon::TrackKind::Audio;
@@ -143,6 +158,28 @@ int directCommand(const QString& bundle, const QStringList& positional)
         }
         return writeJson({{"ok", true}, {"tracks", tracks}});
     }
+    if (command == "clips" && (positional.size() == 1 || positional.size() == 2)) {
+        std::uint64_t selectedTrack = 0;
+        if (positional.size() == 2 && !indexNumber(positional[1], selectedTrack))
+            return fail("Invalid track index");
+        if (positional.size() == 2 && selectedTrack >= project.trackCount())
+            return fail("Invalid track index");
+        const std::uint64_t first = positional.size() == 2 ? selectedTrack : 0;
+        const std::uint64_t end = positional.size() == 2 ? selectedTrack + 1 : project.trackCount();
+        QJsonArray clips;
+        for (std::uint64_t track = first; track < end; ++track) {
+            for (std::uint64_t scene = 0; scene < project.sceneCount(); ++scene) {
+                if (!project.clipSlotOccupied(track, scene)) continue;
+                const std::string media = project.clipMediaPath(track, scene);
+                clips.append(QJsonObject{{"track", static_cast<double>(track)},
+                    {"scene", static_cast<double>(scene)},
+                    {"name", QString::fromStdString(project.clipName(track, scene))},
+                    {"kind", media.empty() ? "midi" : "audio"},
+                    {"mediaPath", QString::fromStdString(media)}});
+            }
+        }
+        return writeJson({{"ok", true}, {"clips", clips}});
+    }
 
     bool changed = false;
     if (command == "set-tempo" && positional.size() == 2) {
@@ -157,6 +194,49 @@ int directCommand(const QString& bundle, const QStringList& positional)
         changed = project.undo();
     } else if (command == "redo" && positional.size() == 1) {
         changed = project.redo();
+    } else if (command == "import-wave" && (positional.size() == 4 || positional.size() == 5)) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        double sourceTempo = project.tempo();
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || (positional.size() == 5 && !number(positional[4], sourceTempo)))
+            return fail("Invalid track, scene, or source tempo");
+        changed = project.importWave(
+            track, scene, positional[3].toStdString(), sourceTempo);
+    } else if (command == "place-clip" && positional.size() == 5) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        double start = 0.0;
+        double length = 0.0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !number(positional[3], start) || !number(positional[4], length))
+            return fail("Invalid clip placement");
+        changed = project.addArrangementClipFromSlot(track, scene, {start, length});
+    } else if (command == "set-audio-gain" && positional.size() == 4) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        double gain = 0.0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !number(positional[3], gain))
+            return fail("Invalid audio clip gain");
+        changed = project.setClipAudioGainDb(track, scene, gain);
+    } else if (command == "set-audio-reverse" && positional.size() == 4) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        bool enabled = false;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !flag(positional[3], enabled))
+            return fail("Invalid audio clip reverse setting");
+        changed = project.setClipAudioReversed(track, scene, enabled);
+    } else if (command == "set-audio-warp" && positional.size() == 5) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        bool enabled = false;
+        double sourceTempo = 0.0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !flag(positional[3], enabled) || !number(positional[4], sourceTempo))
+            return fail("Invalid audio clip warp setting");
+        changed = project.setClipAudioWarp(track, scene, enabled, sourceTempo);
     } else if (command == "bounce" && (positional.size() == 4 || positional.size() == 5)) {
         double start = 0.0;
         double end = 0.0;
@@ -190,6 +270,8 @@ int main(int argc, char** argv)
     parser.addOptions({endpoint, project});
     parser.addPositionalArgument("command", "Command to execute.");
     parser.addPositionalArgument("args", "Command arguments.", "[args...]");
+    parser.setOptionsAfterPositionalArgumentsMode(
+        QCommandLineParser::ParseAsPositionalArguments);
     parser.process(app);
     const QStringList positional = parser.positionalArguments();
     if (positional.isEmpty()) parser.showHelp(2);

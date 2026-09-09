@@ -84,7 +84,7 @@ int nylon_project_new_in_place(void* project);
 /* Writes the project as a bundle directory at the UTF-8 path, creating it
  * as needed. Reading replaces the project's contents and history with the
  * bundle's. Both return 0 on any I/O or format error. */
-int nylon_project_save(const void* project, const char* bundle_directory);
+int nylon_project_save(void* project, const char* bundle_directory);
 int nylon_project_open(void* project, const char* bundle_directory);
 
 /* Renders a beat range to a stereo 24-bit WAVE file at the selected sample
@@ -141,10 +141,14 @@ unsigned long long nylon_scene_name(const void* project, unsigned long long scen
 int nylon_scene_set_name(void* project, unsigned long long scene, const char* utf8);
 
 /* Session clip slots are addressed by zero-based track and scene indices.
- * State is 0 for empty or invalid and 1 for a MIDI clip. */
+ * State is 0 for empty or invalid, 1 for MIDI, and 2 for audio. */
 int nylon_clip_slot_state(const void* project, unsigned long long track, unsigned long long scene);
 int nylon_clip_create_midi(
     void* project, unsigned long long track, unsigned long long scene, double length_beats);
+/* Imports a WAVE file into the current project bundle and creates an audio
+ * clip. The project must have been saved or opened first. */
+int nylon_clip_import_wave(void* project, const char* source_path, unsigned long long track,
+    unsigned long long scene, double source_tempo);
 int nylon_clip_delete(void* project, unsigned long long track, unsigned long long scene);
 unsigned long long nylon_clip_name(const void* project, unsigned long long track,
     unsigned long long scene, char* buffer, unsigned long long capacity);
@@ -160,6 +164,25 @@ double nylon_clip_loop_length(
     const void* project, unsigned long long track, unsigned long long scene);
 int nylon_clip_set_loop(void* project, unsigned long long track, unsigned long long scene,
     double start_beats, double length_beats);
+
+/* Audio clip settings. Media paths are relative to the project bundle and
+ * use the same UTF-8 buffer convention as track names. */
+unsigned long long nylon_clip_media_path(const void* project, unsigned long long track,
+    unsigned long long scene, char* buffer, unsigned long long capacity);
+double nylon_clip_audio_gain_db(
+    const void* project, unsigned long long track, unsigned long long scene);
+int nylon_clip_set_audio_gain_db(
+    void* project, unsigned long long track, unsigned long long scene, double db);
+int nylon_clip_audio_reverse(
+    const void* project, unsigned long long track, unsigned long long scene);
+int nylon_clip_set_audio_reverse(
+    void* project, unsigned long long track, unsigned long long scene, int enabled);
+int nylon_clip_audio_warp(
+    const void* project, unsigned long long track, unsigned long long scene);
+double nylon_clip_audio_source_tempo(
+    const void* project, unsigned long long track, unsigned long long scene);
+int nylon_clip_set_audio_warp(void* project, unsigned long long track, unsigned long long scene,
+    int enabled, double source_tempo);
 
 /* MIDI notes use pitches 0..127, velocities 1..127, and finite beat values.
  * note_at writes all four outputs only when it succeeds. */

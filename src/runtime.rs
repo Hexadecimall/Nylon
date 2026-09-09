@@ -9,6 +9,7 @@ use crate::engine::playback::{
     MixSettings, PlaybackEngine, PlaybackState, Publisher, Score, TrackSettings,
 };
 use crate::engine::schedule::ScheduledNote;
+use crate::media::timeline_from_project;
 use crate::project::{Project, Snapshot, TrackKind};
 
 #[cfg(target_os = "macos")]
@@ -76,10 +77,15 @@ impl AudioRuntime {
             channels: 2,
         };
         config.validate()?;
+        let timeline = timeline_from_project(project)
+            .map_err(|_| AudioError::Host("project media could not be loaded"))?;
         let (engine, mut publisher) = PlaybackEngine::new(f64::from(sample_rate));
         let playing = false;
         (self.settings, self.score) = state_from_snapshot(&project.snapshot(), playing);
-        if !publisher.publish(&self.settings) || !publisher.publish_score(&self.score) {
+        if !publisher.publish(&self.settings)
+            || !publisher.publish_score(&self.score)
+            || !publisher.publish_audio(timeline)
+        {
             return Err(AudioError::Host("initial state could not be published"));
         }
 
@@ -164,12 +170,19 @@ impl AudioRuntime {
         if !self.is_open() {
             return false;
         }
+        let Ok(timeline) = timeline_from_project(project) else {
+            return false;
+        };
         let playing = self.settings.is_playing();
         (self.settings, self.score) = state_from_snapshot(&project.snapshot(), playing);
         self.dirty_settings = true;
         self.dirty_score = true;
-        let _ = self.flush();
-        true
+        let state_sent = self.flush();
+        let audio_sent = self
+            .publisher
+            .as_mut()
+            .is_some_and(|publisher| publisher.publish_audio(timeline));
+        state_sent && audio_sent
     }
 
     /// Starts the musical transport.

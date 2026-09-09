@@ -2,8 +2,10 @@
 import json
 import pathlib
 import subprocess
+import struct
 import sys
 import tempfile
+import wave
 
 
 def main():
@@ -12,6 +14,12 @@ def main():
         root = pathlib.Path(directory)
         project = root / "Session.nylon"
         output = root / "mix.wav"
+        source = root / "take.wav"
+        with wave.open(str(source), "wb") as audio:
+            audio.setnchannels(2)
+            audio.setsampwidth(2)
+            audio.setframerate(48000)
+            audio.writeframes(b"".join(struct.pack("<hh", 8192, -8192) for _ in range(480)))
 
         def call(command, *arguments, succeeds=True):
             result = subprocess.run(
@@ -30,8 +38,15 @@ def main():
         state = call("info")
         assert state["tempo"] == 120 and state["tracks"] == 0, state
         call("add-track", "midi", "Lead")
+        call("add-track", "audio", "Take")
         tracks = call("tracks")["tracks"]
         assert tracks[0]["name"] == "Lead" and tracks[0]["kind"] == "midi", tracks
+        assert tracks[1]["name"] == "Take" and tracks[1]["kind"] == "audio", tracks
+        call("import-wave", "1", "0", str(source), "120")
+        clips = call("clips", "1")["clips"]
+        assert clips[0]["kind"] == "audio" and clips[0]["mediaPath"].startswith("Media/"), clips
+        call("set-audio-gain", "1", "0", "-3")
+        call("place-clip", "1", "0", "0", "1")
         call("set-tempo", "137")
         assert call("info")["tempo"] == 137
         call("undo")
@@ -40,6 +55,7 @@ def main():
         assert call("info")["tempo"] == 137
         rendered = call("bounce", str(output), "0", "1", "48000")
         assert rendered["frames"] > 0 and output.stat().st_size > 44, rendered
+        assert rendered["peakLeft"] > 0 and rendered["peakRight"] > 0, rendered
         call("set-tempo", "invalid", succeeds=False)
         call("unsupported", succeeds=False)
 

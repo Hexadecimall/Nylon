@@ -504,21 +504,40 @@ impl Project {
             undo,
             redo,
             next_id,
+            bundle_directory: None,
         })
     }
 
     /// Write a complete temporary document, synchronize it, then replace the
     /// bundle document. A failed write leaves the previous document intact.
-    pub fn save_bundle(&self, directory: &Path) -> Result<(), PersistenceError> {
+    pub fn save_bundle(&mut self, directory: &Path) -> Result<(), PersistenceError> {
         let bytes = self.to_bytes()?;
         fs::create_dir_all(directory)?;
+        let media_paths: HashSet<&str> = std::iter::once(&self.current)
+            .chain(self.undo.iter())
+            .chain(self.redo.iter())
+            .flat_map(|snapshot| snapshot.audio_clips.iter())
+            .map(|clip| clip.media_path.as_str())
+            .collect();
+        if !media_paths.is_empty() && self.bundle_directory.as_deref() != Some(directory) {
+            let source = self
+                .bundle_directory
+                .as_deref()
+                .ok_or(PersistenceError::Io)?;
+            for media_path in media_paths {
+                let destination = directory.join(media_path);
+                let parent = destination.parent().ok_or(PersistenceError::Io)?;
+                fs::create_dir_all(parent)?;
+                fs::copy(source.join(media_path), destination)?;
+            }
+        }
         let sequence = SAVE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let temporary = directory.join(format!(".project-{}-{sequence}.tmp", std::process::id()));
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary)?;
-        let result = (|| {
+        let result: Result<(), PersistenceError> = (|| {
             file.write_all(&bytes)?;
             file.sync_all()?;
             drop(file);
@@ -528,7 +547,9 @@ impl Project {
         if result.is_err() {
             let _ = fs::remove_file(&temporary);
         }
-        result
+        result?;
+        self.bundle_directory = Some(directory.to_path_buf());
+        Ok(())
     }
 
     pub fn load_bundle(directory: &Path) -> Result<Self, PersistenceError> {
@@ -538,7 +559,9 @@ impl Project {
         }
         let mut bytes = Vec::new();
         file.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes)?;
-        Self::from_bytes(&bytes)
+        let mut project = Self::from_bytes(&bytes)?;
+        project.bundle_directory = Some(directory.to_path_buf());
+        Ok(project)
     }
 }
 

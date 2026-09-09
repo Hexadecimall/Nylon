@@ -34,7 +34,7 @@ Groups of functions:
 | `nylon_project_*` | tempo, time signature, sample rate, undo/redo, bundle save/open, reset |
 | `nylon_track_*` | name, kind, volume, pan, mute, solo, arm, color, deletion |
 | `nylon_scene_*` | scene count, creation, deletion, names |
-| `nylon_clip_*` | slot state, MIDI clip creation, name, color, loop, notes |
+| `nylon_clip_*` | slot state, MIDI creation, WAVE import, clip settings, notes |
 | `nylon_arrangement_*` | clips placed on the timeline |
 | `nylon_audio_*` | output devices, stream lifecycle, granted configuration, dropouts, project publication |
 | `nylon_transport_*` | play, stop, locate, position |
@@ -50,7 +50,9 @@ Header: `bindings/cpp/nylon.hpp`, library `nyloncpp` (built by
 `nylon::Project` is a move-only owner of a project handle with one method
 per project C function, `std::string` for names, and `nylon::MidiNote` /
 `nylon::BeatRange` value types. `Project::bounceWave` writes a selected beat
-range as stereo 24-bit WAVE and returns its frame count and peaks.
+range as stereo 24-bit WAVE and returns its frame count and peaks. Audio clip
+imports copy decoded WAVE sources into the bundle's `Media/` directory before
+the undoable clip edit is accepted.
 `nylon::AudioEngine` owns the platform
 stream and provides device enumeration, transport control, synchronization,
 configuration, dropout, and meter access. Consumers include the directory with
@@ -71,6 +73,10 @@ nylon-control --project Session.nylon new
 nylon-control --project Session.nylon info
 nylon-control --project Session.nylon add-track midi Lead
 nylon-control --project Session.nylon tracks
+nylon-control --project Session.nylon import-wave 1 0 take.wav 120
+nylon-control --project Session.nylon clips 1
+nylon-control --project Session.nylon place-clip 1 0 0 16
+nylon-control --project Session.nylon set-audio-gain 1 0 -3
 nylon-control --project Session.nylon set-tempo 128
 nylon-control --project Session.nylon bounce mix.wav 0 64 48000
 nylon-control devices

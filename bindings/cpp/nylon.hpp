@@ -71,7 +71,7 @@ public:
     // Replaces the contents with an empty project and clears history.
     bool reset();
     // Bundle directory persistence; paths are UTF-8.
-    bool save(const std::string& bundleDirectory) const;
+    bool save(const std::string& bundleDirectory);
     bool open(const std::string& bundleDirectory);
     bool bounceWave(const std::string& path, double startBeats, double endBeats,
         std::uint32_t sampleRate, BounceReport& report) const;
@@ -118,6 +118,8 @@ public:
 
     bool clipSlotOccupied(std::uint64_t track, std::uint64_t scene) const;
     bool createMidiClip(std::uint64_t track, std::uint64_t scene, double lengthBeats);
+    bool importWave(std::uint64_t track, std::uint64_t scene, const std::string& sourcePath,
+        double sourceTempo);
     bool deleteClip(std::uint64_t track, std::uint64_t scene);
     std::string clipName(std::uint64_t track, std::uint64_t scene) const;
     bool setClipName(std::uint64_t track, std::uint64_t scene, const std::string& name);
@@ -125,6 +127,15 @@ public:
     bool setClipColorIndex(std::uint64_t track, std::uint64_t scene, int color);
     BeatRange clipLoop(std::uint64_t track, std::uint64_t scene) const;
     bool setClipLoop(std::uint64_t track, std::uint64_t scene, BeatRange range);
+    std::string clipMediaPath(std::uint64_t track, std::uint64_t scene) const;
+    double clipAudioGainDb(std::uint64_t track, std::uint64_t scene) const;
+    bool setClipAudioGainDb(std::uint64_t track, std::uint64_t scene, double db);
+    bool clipAudioReversed(std::uint64_t track, std::uint64_t scene) const;
+    bool setClipAudioReversed(std::uint64_t track, std::uint64_t scene, bool enabled);
+    bool clipAudioWarped(std::uint64_t track, std::uint64_t scene) const;
+    double clipAudioSourceTempo(std::uint64_t track, std::uint64_t scene) const;
+    bool setClipAudioWarp(
+        std::uint64_t track, std::uint64_t scene, bool enabled, double sourceTempo);
     std::uint64_t clipNoteCount(std::uint64_t track, std::uint64_t scene) const;
     bool clipNote(std::uint64_t track, std::uint64_t scene, std::uint64_t index, MidiNote& note) const;
     bool addClipNote(std::uint64_t track, std::uint64_t scene, MidiNote note);

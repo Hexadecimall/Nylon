@@ -7,6 +7,7 @@ pub mod engine;
 pub mod exchange;
 pub mod ffi;
 pub mod latest;
+pub mod media;
 pub mod mixer;
 pub mod persistence;
 pub mod project;

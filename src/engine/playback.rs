@@ -384,7 +384,7 @@ impl Default for PlaybackState {
 /// Control-thread end of the link to a running engine.
 // off the audio thread
 pub struct Publisher {
-    settings: ControlSlot<MixSettings>,
+    settings: Writer<MixSettings>,
     score: ControlSlot<Box<Score>>,
     audio: ControlSlot<Box<AudioTimeline>>,
     state: Reader<PlaybackState>,
@@ -394,14 +394,12 @@ impl Publisher {
     /// Sends settings to the engine, which picks them up at the next block
     /// boundary.
     ///
-    /// Returns false when a previous publication has not been taken yet;
-    /// the caller keeps its copy and can try again after the next block.
+    /// Newer settings replace unread settings so transport commands cannot
+    /// be stranded behind an initial state publication.
     #[must_use]
     pub fn publish(&mut self, settings: &MixSettings) -> bool {
-        // Reclaiming first keeps the exchange from stalling on its own
-        // storage after a burst of changes.
-        while self.settings.reclaim().is_some() {}
-        self.settings.publish(*settings).is_ok()
+        self.settings.publish(*settings);
+        true
     }
 
     /// Sends notes and instrument settings to the engine, taken up at the
@@ -454,7 +452,7 @@ fn zeroed_track_audio() -> Box<[[[f32; 2]; MAX_FRAMES]; MAX_TRACKS]> {
 pub struct PlaybackEngine {
     mixer: Mixer,
     transport: Transport,
-    settings: AudioSlot<MixSettings>,
+    settings: Reader<MixSettings>,
     score: AudioSlot<Box<Score>>,
     audio: AudioSlot<Box<AudioTimeline>>,
     state: Writer<PlaybackState>,
@@ -484,7 +482,7 @@ impl PlaybackEngine {
         } else {
             48_000.0
         };
-        let (settings_control, settings_audio) = exchange(MixSettings::new());
+        let (settings_control, settings_audio) = latest(MixSettings::new());
         let (score_control, score_audio) = exchange(Score::boxed());
         let (audio_control, audio_audio) = exchange(Box::new(AudioTimeline::new()));
         let (state_writer, state_reader) = latest(PlaybackState::default());
@@ -560,10 +558,9 @@ impl PlaybackEngine {
     /// transport. Called at a block boundary, never mid-block, so a change
     /// cannot land halfway through a sum.
     fn take_settings(&mut self) {
-        if !self.settings.apply_pending() {
+        let Some(settings) = self.settings.read().copied() else {
             return;
-        }
-        let settings = *self.settings.current();
+        };
         self.applied = settings;
         self.mixer.set_track_count(settings.track_count());
         for index in 0..settings.track_count() {
@@ -952,13 +949,12 @@ mod tests {
         let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
         let mut output = [[0.0_f32; 2]; 64];
         for count in 1..=20 {
-            // Publishing repeatedly between blocks must keep working; the
-            // engine sees the most recent settings it managed to take.
-            let _ = publisher.publish(&settings_with(count.min(MAX_TRACKS)));
-            let _ = publisher.publish(&settings_with(count.min(MAX_TRACKS)));
+            // Publishing repeatedly between blocks keeps the latest value.
+            assert!(publisher.publish(&settings_with(count.min(MAX_TRACKS))));
+            assert!(publisher.publish(&settings_with(count.min(MAX_TRACKS))));
             engine.render_block(&mut output, &[]);
         }
-        assert!(engine.mixer().track_count() > 0);
+        assert_eq!(engine.mixer().track_count(), 20);
     }
 
     #[test]

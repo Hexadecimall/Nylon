@@ -207,7 +207,8 @@ fn bundle_save_replaces_the_document_without_leaving_temporary_files() {
         .unwrap()
         .as_nanos();
     let directory = std::path::PathBuf::from("target").join(format!("save-{tick}"));
-    let mut project = session();
+    let mut project = Project::new();
+    project.apply(&[Command::SetTempo(129.0)]).unwrap();
     project.save_bundle(&directory).unwrap();
     assert_eq!(
         *Project::load_bundle(&directory).unwrap().snapshot(),

@@ -31,7 +31,7 @@ Project& Project::operator=(Project&& other) noexcept
 }
 
 bool Project::reset() { return nylon_project_new_in_place(m_handle) != 0; }
-bool Project::save(const std::string& bundleDirectory) const
+bool Project::save(const std::string& bundleDirectory)
 {
     return nylon_project_save(m_handle, bundleDirectory.c_str()) != 0;
 }
@@ -137,6 +137,11 @@ bool Project::createMidiClip(std::uint64_t track, std::uint64_t scene, double le
 {
     return nylon_clip_create_midi(m_handle, track, scene, lengthBeats) != 0;
 }
+bool Project::importWave(std::uint64_t track, std::uint64_t scene,
+    const std::string& sourcePath, double sourceTempo)
+{
+    return nylon_clip_import_wave(m_handle, sourcePath.c_str(), track, scene, sourceTempo) != 0;
+}
 bool Project::deleteClip(std::uint64_t track, std::uint64_t scene)
 {
     return nylon_clip_delete(m_handle, track, scene) != 0;
@@ -169,6 +174,44 @@ BeatRange Project::clipLoop(std::uint64_t track, std::uint64_t scene) const
 bool Project::setClipLoop(std::uint64_t track, std::uint64_t scene, BeatRange range)
 {
     return nylon_clip_set_loop(m_handle, track, scene, range.startBeats, range.lengthBeats) != 0;
+}
+std::string Project::clipMediaPath(std::uint64_t track, std::uint64_t scene) const
+{
+    char small[128];
+    const auto needed = nylon_clip_media_path(m_handle, track, scene, small, sizeof(small));
+    if (needed < sizeof(small)) return std::string(small);
+    std::string large(static_cast<std::size_t>(needed), '\0');
+    nylon_clip_media_path(m_handle, track, scene, large.data(), needed + 1);
+    return large;
+}
+double Project::clipAudioGainDb(std::uint64_t track, std::uint64_t scene) const
+{
+    return nylon_clip_audio_gain_db(m_handle, track, scene);
+}
+bool Project::setClipAudioGainDb(std::uint64_t track, std::uint64_t scene, double db)
+{
+    return nylon_clip_set_audio_gain_db(m_handle, track, scene, db) != 0;
+}
+bool Project::clipAudioReversed(std::uint64_t track, std::uint64_t scene) const
+{
+    return nylon_clip_audio_reverse(m_handle, track, scene) != 0;
+}
+bool Project::setClipAudioReversed(std::uint64_t track, std::uint64_t scene, bool enabled)
+{
+    return nylon_clip_set_audio_reverse(m_handle, track, scene, enabled ? 1 : 0) != 0;
+}
+bool Project::clipAudioWarped(std::uint64_t track, std::uint64_t scene) const
+{
+    return nylon_clip_audio_warp(m_handle, track, scene) != 0;
+}
+double Project::clipAudioSourceTempo(std::uint64_t track, std::uint64_t scene) const
+{
+    return nylon_clip_audio_source_tempo(m_handle, track, scene);
+}
+bool Project::setClipAudioWarp(
+    std::uint64_t track, std::uint64_t scene, bool enabled, double sourceTempo)
+{
+    return nylon_clip_set_audio_warp(m_handle, track, scene, enabled ? 1 : 0, sourceTempo) != 0;
 }
 std::uint64_t Project::clipNoteCount(std::uint64_t track, std::uint64_t scene) const
 {

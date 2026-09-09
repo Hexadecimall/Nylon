@@ -285,3 +285,53 @@ fn native_session_notes_and_arrangement_are_editable() {
         nylon_project_free(handle);
     }
 }
+
+#[test]
+fn native_audio_clip_import_and_edits_are_exposed() {
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::path::PathBuf::from("target").join(format!("native-media-{tick}"));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("take.wav");
+    let file = std::fs::File::create(&source).unwrap();
+    let mut writer =
+        nylon::wave::WaveWriter::new(file, nylon::wave::Format::stereo(48_000)).unwrap();
+    writer.write_stereo(&vec![[0.25, -0.25]; 480]).unwrap();
+    writer.finish().unwrap();
+    let bundle = directory.join("Session.nylonproject");
+    let bundle_text = std::ffi::CString::new(bundle.to_str().unwrap()).unwrap();
+    let source_text = std::ffi::CString::new(source.to_str().unwrap()).unwrap();
+    let handle = nylon_project_new();
+    // SAFETY: This thread owns the project and every native string and buffer.
+    unsafe {
+        assert_eq!(nylon_project_save(handle, bundle_text.as_ptr()), 1);
+        assert_eq!(nylon_project_add_track_kind(handle, 0), 1);
+        assert_eq!(
+            nylon_clip_import_wave(handle, source_text.as_ptr(), 0, 0, 120.0),
+            1
+        );
+        assert_eq!(nylon_clip_slot_state(handle, 0, 0), 2);
+        assert_eq!(nylon_clip_audio_gain_db(handle, 0, 0), 0.0);
+        assert_eq!(nylon_clip_set_audio_gain_db(handle, 0, 0, -5.0), 1);
+        assert_eq!(nylon_clip_audio_gain_db(handle, 0, 0), -5.0);
+        assert_eq!(nylon_clip_set_audio_reverse(handle, 0, 0, 1), 1);
+        assert_eq!(nylon_clip_audio_reverse(handle, 0, 0), 1);
+        assert_eq!(nylon_clip_set_audio_warp(handle, 0, 0, 1, 128.0), 1);
+        assert_eq!(nylon_clip_audio_warp(handle, 0, 0), 1);
+        assert_eq!(nylon_clip_audio_source_tempo(handle, 0, 0), 128.0);
+        let mut path = [0 as std::ffi::c_char; 64];
+        let length = nylon_clip_media_path(handle, 0, 0, path.as_mut_ptr(), path.len() as u64);
+        assert!(length > 0);
+        assert!(
+            std::ffi::CStr::from_ptr(path.as_ptr())
+                .to_str()
+                .unwrap()
+                .starts_with("Media/")
+        );
+        assert_eq!(nylon_project_save(handle, bundle_text.as_ptr()), 1);
+        nylon_project_free(handle);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}

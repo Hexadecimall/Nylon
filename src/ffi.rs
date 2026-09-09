@@ -3,6 +3,7 @@
 
 use crate::audio::{DeviceId, DeviceInfo, Direction, Name, Rates};
 use crate::bounce::{Options as BounceOptions, render_wave};
+use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::project::{ClipId, Command, MidiNote, Project, SceneId, TrackId, TrackKind};
 use crate::runtime::{AudioRuntime, MAX_DEVICES, default_output, output_devices};
@@ -445,10 +446,7 @@ pub unsafe extern "C" fn nylon_project_set_sample_rate(handle: *mut Project, rat
 /// The project must be live with no concurrent mutation. A non-null directory
 /// must be a readable NUL-terminated UTF-8 string. This performs control-thread I/O.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nylon_project_save(
-    handle: *const Project,
-    directory: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn nylon_project_save(handle: *mut Project, directory: *const c_char) -> i32 {
     if directory.is_null() {
         return 0;
     }
@@ -459,8 +457,8 @@ pub unsafe extern "C" fn nylon_project_save(
     if directory.is_empty() {
         return 0;
     }
-    // SAFETY: The handle remains live and cannot be concurrently mutated.
-    unsafe { handle.as_ref() }.map_or(0, |p| {
+    // SAFETY: The handle remains live and cannot be concurrently accessed.
+    unsafe { handle.as_mut() }.map_or(0, |p| {
         i32::from(p.save_bundle(std::path::Path::new(directory)).is_ok())
     })
 }
@@ -681,7 +679,21 @@ pub unsafe extern "C" fn nylon_clip_slot_state(
     scene: u64,
 ) -> i32 {
     // SAFETY: Handle validity is required by the native interface.
-    unsafe { handle.as_ref() }.map_or(0, |p| i32::from(slot_ids(p, track, scene).is_some()))
+    unsafe { handle.as_ref() }.map_or(0, |project| {
+        let Some((_, _, clip)) = slot_ids(project, track, scene) else {
+            return 0;
+        };
+        if project
+            .current
+            .audio_clips
+            .iter()
+            .any(|item| item.id == clip)
+        {
+            2
+        } else {
+            1
+        }
+    })
 }
 
 /// # Safety
@@ -721,6 +733,187 @@ pub unsafe extern "C" fn nylon_clip_create_midi(
             }])
             .is_ok(),
     )
+}
+
+/// # Safety
+/// The handle must be live and exclusive. `source_path` must be readable,
+/// terminated UTF-8. Import performs control-thread file I/O.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_import_wave(
+    handle: *mut Project,
+    source_path: *const c_char,
+    track: u64,
+    scene: u64,
+    source_tempo: f64,
+) -> i32 {
+    // SAFETY: The native interface requires a live exclusive project handle.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    // SAFETY: The caller supplies a readable terminated path string.
+    let Some(source_path) = (unsafe { input_text(source_path) }) else {
+        return 0;
+    };
+    let (Ok(track), Ok(scene)) = (usize::try_from(track), usize::try_from(scene)) else {
+        return 0;
+    };
+    i32::from(
+        import_wave(
+            project,
+            std::path::Path::new(&source_path),
+            track,
+            scene,
+            source_tempo,
+        )
+        .is_ok(),
+    )
+}
+
+fn audio_slot(project: &Project, track: u64, scene: u64) -> Option<&crate::project::AudioClip> {
+    let (_, _, clip) = slot_ids(project, track, scene)?;
+    project
+        .current
+        .audio_clips
+        .iter()
+        .find(|item| item.id == clip)
+}
+
+/// # Safety
+/// The handle and output buffer must obey the native interface contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_media_path(
+    handle: *const Project,
+    track: u64,
+    scene: u64,
+    buffer: *mut c_char,
+    capacity: u64,
+) -> u64 {
+    // SAFETY: Handle validity is required by the native interface.
+    let path = unsafe { handle.as_ref() }
+        .and_then(|project| audio_slot(project, track, scene))
+        .map_or("", |clip| clip.media_path());
+    copy_text(path, buffer, capacity)
+}
+
+/// # Safety
+/// The handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_audio_gain_db(
+    handle: *const Project,
+    track: u64,
+    scene: u64,
+) -> f64 {
+    // SAFETY: Handle validity is required by the native interface.
+    unsafe { handle.as_ref() }
+        .and_then(|project| audio_slot(project, track, scene))
+        .map_or(f64::NEG_INFINITY, |clip| clip.gain_db())
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_set_audio_gain_db(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    db: f64,
+) -> i32 {
+    // SAFETY: The caller supplies a live exclusive project handle.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::SetAudioClipGain { id, db })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_audio_reverse(
+    handle: *const Project,
+    track: u64,
+    scene: u64,
+) -> i32 {
+    // SAFETY: Handle validity is required by the native interface.
+    unsafe { handle.as_ref() }
+        .and_then(|project| audio_slot(project, track, scene))
+        .map_or(0, |clip| i32::from(clip.reversed()))
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_set_audio_reverse(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    enabled: i32,
+) -> i32 {
+    if !matches!(enabled, 0 | 1) {
+        return 0;
+    }
+    // SAFETY: The caller supplies a live exclusive project handle.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::SetAudioClipReverse {
+                id,
+                enabled: enabled != 0,
+            })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_audio_warp(
+    handle: *const Project,
+    track: u64,
+    scene: u64,
+) -> i32 {
+    // SAFETY: Handle validity is required by the native interface.
+    unsafe { handle.as_ref() }
+        .and_then(|project| audio_slot(project, track, scene))
+        .map_or(0, |clip| i32::from(clip.warped()))
+}
+
+/// # Safety
+/// The handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_audio_source_tempo(
+    handle: *const Project,
+    track: u64,
+    scene: u64,
+) -> f64 {
+    // SAFETY: Handle validity is required by the native interface.
+    unsafe { handle.as_ref() }
+        .and_then(|project| audio_slot(project, track, scene))
+        .map_or(0.0, |clip| clip.source_tempo())
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_set_audio_warp(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    enabled: i32,
+    source_tempo: f64,
+) -> i32 {
+    if !matches!(enabled, 0 | 1) {
+        return 0;
+    }
+    // SAFETY: The caller supplies a live exclusive project handle.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::SetAudioClipWarp {
+                id,
+                enabled: enabled != 0,
+                source_tempo,
+            })
+        })
+    }
 }
 
 /// # Safety

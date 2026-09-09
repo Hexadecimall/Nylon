@@ -408,6 +408,7 @@ pub struct Project {
     pub(crate) undo: Vec<Arc<Snapshot>>,
     pub(crate) redo: Vec<Arc<Snapshot>>,
     pub(crate) next_id: u64,
+    pub(crate) bundle_directory: Option<std::path::PathBuf>,
 }
 
 impl Default for Project {
@@ -438,11 +439,15 @@ impl Project {
             undo: Vec::new(),
             redo: Vec::new(),
             next_id: 9,
+            bundle_directory: None,
         }
     }
 
     pub fn snapshot(&self) -> Arc<Snapshot> {
         Arc::clone(&self.current)
+    }
+    pub fn bundle_directory(&self) -> Option<&std::path::Path> {
+        self.bundle_directory.as_deref()
     }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()

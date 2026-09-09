@@ -8,6 +8,7 @@ use crate::audio::offline::{DEVICE, OfflineBackend};
 use crate::audio::{AudioError, Backend, Stream, StreamConfig};
 use crate::engine::playback::{MAX_INSTRUMENTS, PlaybackEngine, Score};
 use crate::engine::schedule::ScheduledNote;
+use crate::media::{MediaError, timeline_from_project};
 use crate::project::Project;
 use crate::runtime::state_from_snapshot;
 use crate::wave::{Format, WaveError, WaveWriter};
@@ -86,6 +87,8 @@ pub enum BounceError {
     Audio(AudioError),
     /// The destination or file encoding failed.
     Wave(WaveError),
+    /// Referenced project media could not be decoded.
+    Media(MediaError),
 }
 
 impl core::fmt::Display for BounceError {
@@ -94,6 +97,7 @@ impl core::fmt::Display for BounceError {
             Self::InvalidRange => formatter.write_str("invalid bounce range"),
             Self::Audio(error) => write!(formatter, "audio: {error}"),
             Self::Wave(error) => write!(formatter, "wave: {error}"),
+            Self::Media(error) => write!(formatter, "media: {error}"),
         }
     }
 }
@@ -104,6 +108,7 @@ impl std::error::Error for BounceError {
             Self::InvalidRange => None,
             Self::Audio(error) => Some(error),
             Self::Wave(error) => Some(error),
+            Self::Media(error) => Some(error),
         }
     }
 }
@@ -117,6 +122,12 @@ impl From<AudioError> for BounceError {
 impl From<WaveError> for BounceError {
     fn from(error: WaveError) -> Self {
         Self::Wave(error)
+    }
+}
+
+impl From<MediaError> for BounceError {
+    fn from(error: MediaError) -> Self {
+        Self::Media(error)
     }
 }
 
@@ -155,6 +166,11 @@ pub fn render_wave<W: Write + Seek>(
     if !publisher.publish(&settings) || !publisher.publish_score(&score) {
         return Err(BounceError::Audio(AudioError::Host(
             "initial state could not be published",
+        )));
+    }
+    if !publisher.publish_audio(timeline_from_project(project)?) {
+        return Err(BounceError::Audio(AudioError::Host(
+            "initial media could not be published",
         )));
     }
     let backend = OfflineBackend::new();
