@@ -2,6 +2,7 @@
 
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::compressor::Parameters as CompressorParameters;
+use crate::dsp::limiter::Parameters as LimiterParameters;
 use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
 use crate::project::{
     self, ArrangementPlacement, AudioClip, ClipId, Device, DeviceId, MidiClip, MidiNote, Project,
@@ -18,7 +19,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -118,6 +119,16 @@ impl Encoder {
                     } => {
                         self.bytes(&[3])?;
                         for value in [delay_seconds, feedback, mix] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::Limiter { parameters } => {
+                        self.bytes(&[4])?;
+                        for value in [
+                            parameters.ceiling_db,
+                            parameters.release_seconds,
+                            parameters.lookahead_seconds,
+                        ] {
                             self.bytes(&value.to_le_bytes())?;
                         }
                     }
@@ -305,6 +316,13 @@ impl<'a> Decoder<'a> {
                             delay_seconds: f32::from_le_bytes(self.array()?),
                             feedback: f32::from_le_bytes(self.array()?),
                             mix: f32::from_le_bytes(self.array()?),
+                        },
+                        4 => DeviceKind::Limiter {
+                            parameters: LimiterParameters {
+                                ceiling_db: f32::from_le_bytes(self.array()?),
+                                release_seconds: f32::from_le_bytes(self.array()?),
+                                lookahead_seconds: f32::from_le_bytes(self.array()?),
+                            },
                         },
                         _ => return Err(PersistenceError::InvalidFormat),
                     };

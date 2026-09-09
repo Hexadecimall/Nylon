@@ -4,6 +4,7 @@ use crate::dsp::biquad::{Biquad, Coefficients, Kind as FilterKind};
 use crate::dsp::compressor::{Compressor, Parameters as CompressorParameters};
 use crate::dsp::db;
 use crate::dsp::delay::DelayLine;
+use crate::dsp::limiter::{Limiter, Parameters as LimiterParameters};
 
 pub const MAX_DEVICES: usize = 16;
 pub const MAX_DELAY_STORAGE_FRAMES: usize = 3_840_004;
@@ -19,6 +20,17 @@ impl DeviceConfig {
     pub fn validate(self, sample_rate: f32) -> Result<(), DeviceError> {
         validate_sample_rate(sample_rate)?;
         validate_kind(self.kind, sample_rate).map(|_| ())
+    }
+
+    /// Processing delay introduced by this device at the selected rate.
+    pub fn latency_frames(self, sample_rate: f32) -> Result<u32, DeviceError> {
+        self.validate(sample_rate)?;
+        match self.kind {
+            DeviceKind::Limiter { parameters } => {
+                Ok((parameters.lookahead_seconds * sample_rate).round() as u32)
+            }
+            _ => Ok(0),
+        }
     }
 }
 
@@ -43,6 +55,9 @@ pub enum DeviceKind {
         delay_seconds: f32,
         feedback: f32,
         mix: f32,
+    },
+    Limiter {
+        parameters: LimiterParameters,
     },
 }
 
@@ -77,6 +92,10 @@ enum Processor {
         delay_frames: f32,
         feedback: f32,
         mix: f32,
+    },
+    Limiter {
+        processor: Limiter,
+        storage: Vec<[f32; 2]>,
     },
 }
 
@@ -154,6 +173,19 @@ impl DeviceChain {
                         delay_frames: delay_seconds * sample_rate,
                         feedback,
                         mix,
+                    }
+                }
+                DeviceKind::Limiter { parameters } => {
+                    let processor = Limiter::new(sample_rate, parameters)
+                        .map_err(|_| DeviceError::InvalidParameter)?;
+                    let frames = processor.required_storage_frames();
+                    delay_storage = delay_storage
+                        .checked_add(frames.saturating_mul(2))
+                        .filter(|value| *value <= MAX_DELAY_STORAGE_FRAMES)
+                        .ok_or(DeviceError::StorageCapacity)?;
+                    Processor::Limiter {
+                        processor,
+                        storage: zeroed_stereo(frames)?,
                     }
                 }
             };
@@ -260,6 +292,9 @@ fn validate_kind(kind: DeviceKind, sample_rate: f32) -> Result<usize, DeviceErro
         {
             Ok((delay_seconds * sample_rate).ceil() as usize + 2)
         }
+        DeviceKind::Limiter { parameters } => Limiter::new(sample_rate, parameters)
+            .map(|limiter| limiter.required_storage_frames())
+            .map_err(|_| DeviceError::InvalidParameter),
         _ => Err(DeviceError::InvalidParameter),
     }
 }
@@ -323,6 +358,9 @@ impl Processor {
                     frame[1] += (wet_right - frame[1]) * *mix;
                 }
             }
+            Self::Limiter { processor, storage } => {
+                let _ = processor.process_in_place(storage, audio);
+            }
         }
     }
 
@@ -342,6 +380,10 @@ impl Processor {
             } => {
                 left.reset(left_storage);
                 right.reset(right_storage);
+            }
+            Self::Limiter { processor, storage } => {
+                storage.fill([0.0; 2]);
+                processor.reset();
             }
             Self::Utility { .. } => {}
         }
@@ -371,6 +413,15 @@ fn zeroed(frames: usize) -> Result<Vec<f32>, DeviceError> {
         .try_reserve_exact(frames)
         .map_err(|_| DeviceError::StorageCapacity)?;
     storage.resize(frames, 0.0);
+    Ok(storage)
+}
+
+fn zeroed_stereo(frames: usize) -> Result<Vec<[f32; 2]>, DeviceError> {
+    let mut storage = Vec::new();
+    storage
+        .try_reserve_exact(frames)
+        .map_err(|_| DeviceError::StorageCapacity)?;
+    storage.resize(frames, [0.0; 2]);
     Ok(storage)
 }
 
@@ -481,6 +532,32 @@ mod tests {
         let silence = [[0.0; 2]; 16];
         chain.process(&silence, &[], &mut output).unwrap();
         assert_eq!(output, silence);
+    }
+
+    #[test]
+    fn limiter_delays_and_caps_a_linked_peak() {
+        let config = DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Limiter {
+                parameters: LimiterParameters {
+                    ceiling_db: -6.020_6,
+                    release_seconds: 0.1,
+                    lookahead_seconds: 8.0 / RATE,
+                },
+            },
+        };
+        assert_eq!(config.latency_frames(RATE), Ok(8));
+        let mut chain = DeviceChain::new(&[config], RATE).unwrap();
+        let mut input = [[0.0; 2]; 16];
+        input[0] = [2.0, -1.0];
+        let mut output = [[0.0; 2]; 16];
+        chain.process(&input, &[], &mut output).unwrap();
+        assert_eq!(output[0], [0.0; 2]);
+        assert!((output[8][0] - 0.5).abs() < 1e-5);
+        assert!((output[8][1] + 0.25).abs() < 1e-5);
+        chain.reset();
+        chain.process(&[[0.0; 2]; 16], &[], &mut output).unwrap();
+        assert_eq!(output, [[0.0; 2]; 16]);
     }
 
     #[test]

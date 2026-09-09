@@ -5,6 +5,7 @@ use crate::audio::{DeviceId, DeviceInfo, Direction, Name, Rates};
 use crate::bounce::{Options as BounceOptions, render_wave};
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::compressor::Parameters as CompressorParameters;
+use crate::dsp::limiter::Parameters as LimiterParameters;
 use crate::engine::device::DeviceKind as TrackDeviceKind;
 use crate::media::import_wave;
 use crate::mixer::Levels;
@@ -322,6 +323,13 @@ fn track_device_kind(record: NylonTrackDevice) -> Option<TrackDeviceKind> {
             feedback: parameters[1],
             mix: parameters[2],
         }),
+        4 => Some(TrackDeviceKind::Limiter {
+            parameters: LimiterParameters {
+                ceiling_db: parameters[0],
+                release_seconds: parameters[1],
+                lookahead_seconds: parameters[2],
+            },
+        }),
         _ => None,
     }
 }
@@ -385,6 +393,14 @@ fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice
         } => {
             record.kind = 3;
             record.parameters[..3].copy_from_slice(&[delay_seconds, feedback, mix]);
+        }
+        TrackDeviceKind::Limiter { parameters } => {
+            record.kind = 4;
+            record.parameters[..3].copy_from_slice(&[
+                parameters.ceiling_db,
+                parameters.release_seconds,
+                parameters.lookahead_seconds,
+            ]);
         }
     }
     record

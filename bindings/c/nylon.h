@@ -46,12 +46,14 @@ typedef struct NylonBounceReport {
     float peak_right;
 } NylonBounceReport;
 
-/* Track device kinds: 0 utility, 1 equalizer, 2 compressor, 3 stereo delay.
+/* Track device kinds: 0 utility, 1 equalizer, 2 compressor, 3 stereo delay,
+ * 4 limiter.
  * Parameter layouts:
  * utility: gain dB, width, balance
  * equalizer: filter kind 0..7, frequency, Q, gain dB
  * compressor: threshold, ratio, knee, attack, release, makeup, sidechain flag
- * stereo delay: delay seconds, feedback, mix */
+ * stereo delay: delay seconds, feedback, mix
+ * limiter: ceiling dB, release seconds, lookahead seconds */
 typedef struct NylonTrackDevice {
     int kind;
     int enabled;

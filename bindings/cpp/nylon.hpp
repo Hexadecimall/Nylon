@@ -62,7 +62,13 @@ struct ProjectRoute {
     float gain;
 };
 
-enum class DeviceKind : int { Utility = 0, Equalizer = 1, Compressor = 2, StereoDelay = 3 };
+enum class DeviceKind : int {
+    Utility = 0,
+    Equalizer = 1,
+    Compressor = 2,
+    StereoDelay = 3,
+    Limiter = 4
+};
 
 enum class FilterKind : int {
     LowPass = 0,

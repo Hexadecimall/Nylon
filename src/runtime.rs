@@ -110,7 +110,7 @@ impl AudioRuntime {
         let snapshot = project.snapshot();
         let timeline = timeline_from_project(project)
             .map_err(|_| AudioError::Host("project media could not be loaded"))?;
-        let (routing, output_node) = playback_routing(&snapshot)
+        let (routing, output_node) = playback_routing(&snapshot, sample_rate as f32)
             .map_err(|_| AudioError::Host("project routing could not be compiled"))?;
         let devices = playback_devices(&snapshot);
         let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
@@ -225,7 +225,10 @@ impl AudioRuntime {
             return false;
         };
         let snapshot = project.snapshot();
-        let Ok((routing, output_node)) = playback_routing(&snapshot) else {
+        let sample_rate = self
+            .config()
+            .map_or(snapshot.sample_rate(), |config| config.sample_rate);
+        let Ok((routing, output_node)) = playback_routing(&snapshot, sample_rate as f32) else {
             return false;
         };
         let devices = playback_devices(&snapshot);
@@ -328,12 +331,27 @@ impl AudioRuntime {
 
 pub(crate) fn playback_routing(
     snapshot: &Snapshot,
+    sample_rate: f32,
 ) -> Result<(CompiledRouting, u16), RoutingError> {
     let track_count = snapshot.tracks().len();
     let output_node = u16::try_from(track_count).map_err(|_| RoutingError::NodeCapacity)?;
     let mut graph = RoutingGraph::new(track_count + 1)?;
     for (index, track) in snapshot.tracks().iter().enumerate() {
-        graph.set_node_latency(index as u16, track.latency_frames())?;
+        let latency =
+            track
+                .devices()
+                .iter()
+                .try_fold(track.latency_frames(), |total, device| {
+                    total
+                        .checked_add(
+                            device
+                                .config()
+                                .latency_frames(sample_rate)
+                                .map_err(|_| RoutingError::LatencyOverflow)?,
+                        )
+                        .ok_or(RoutingError::LatencyOverflow)
+                })?;
+        graph.set_node_latency(index as u16, latency)?;
     }
     for route in snapshot.routes() {
         let source = snapshot
@@ -517,6 +535,8 @@ fn append_placement_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dsp::limiter::Parameters as LimiterParameters;
+    use crate::engine::device::{DeviceConfig, DeviceKind};
     use crate::project::{Command, MidiNote};
 
     fn midi_project() -> Project {
@@ -578,7 +598,7 @@ mod tests {
             ])
             .unwrap();
 
-        let (compiled, output) = playback_routing(&project.snapshot()).unwrap();
+        let (compiled, output) = playback_routing(&project.snapshot(), 48_000.0).unwrap();
         assert_eq!(output, 2);
         assert!(compiled.edges().iter().any(|edge| {
             edge.source == 0
@@ -596,6 +616,41 @@ mod tests {
                 .any(|edge| edge.source == 0 && edge.destination == output)
         );
         assert_eq!(compiled.output_latency(output), Some(192));
+    }
+
+    #[test]
+    fn device_lookahead_participates_in_route_compensation() {
+        let mut project = midi_project();
+        let snapshot = project.snapshot();
+        let audio = snapshot.tracks()[0].id();
+        let keys = snapshot.tracks()[1].id();
+        project
+            .apply(&[Command::AddDevice {
+                track: audio,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Limiter {
+                        parameters: LimiterParameters {
+                            ceiling_db: -0.3,
+                            release_seconds: 0.1,
+                            lookahead_seconds: 0.005,
+                        },
+                    },
+                },
+            }])
+            .unwrap();
+
+        let (compiled, output) = playback_routing(&project.snapshot(), 48_000.0).unwrap();
+        assert_eq!(compiled.output_latency(output), Some(240));
+        assert!(compiled.edges().iter().enumerate().any(|(index, edge)| {
+            edge.source == 0 && edge.destination == output && compiled.edge_delay(index) == Some(0)
+        }));
+        assert!(compiled.edges().iter().enumerate().any(|(index, edge)| {
+            edge.source == 1
+                && edge.destination == output
+                && compiled.edge_delay(index) == Some(240)
+        }));
+        assert_ne!(audio, keys);
     }
 
     #[test]

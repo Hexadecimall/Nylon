@@ -221,15 +221,23 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
             enabled: 1,
             parameters: [0.25, 0.4, 0.3, 0.0, 0.0, 0.0, 0.0],
         };
+        let limiter = NylonTrackDevice {
+            kind: 4,
+            enabled: 1,
+            parameters: [-0.3, 0.1, 0.005, 0.0, 0.0, 0.0, 0.0],
+        };
         assert_eq!(nylon_track_device_add(handle, 0, &utility), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &delay), 1);
-        assert_eq!(nylon_track_device_count(handle, 0), 2);
+        assert_eq!(nylon_track_device_add(handle, 0, &limiter), 1);
+        assert_eq!(nylon_track_device_count(handle, 0), 3);
         let mut read = NylonTrackDevice::default();
         assert_eq!(nylon_track_device_get(handle, 0, 0, &mut read), 1);
         assert_eq!(read, utility);
         assert_eq!(nylon_track_device_move(handle, 0, 1, 0), 1);
         assert_eq!(nylon_track_device_get(handle, 0, 0, &mut read), 1);
         assert_eq!(read, delay);
+        assert_eq!(nylon_track_device_get(handle, 0, 2, &mut read), 1);
+        assert_eq!(read, limiter);
 
         let changed = NylonTrackDevice {
             kind: 0,
@@ -250,8 +258,8 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
         };
         assert_eq!(nylon_track_device_set(handle, 0, 0, &invalid), 0);
         assert_eq!(nylon_track_device_delete(handle, 0, 0), 1);
-        assert_eq!(nylon_track_device_count(handle, 0), 1);
-        assert_eq!(nylon_track_device_get(handle, 0, 1, &mut read), 0);
+        assert_eq!(nylon_track_device_count(handle, 0), 2);
+        assert_eq!(nylon_track_device_get(handle, 0, 2, &mut read), 0);
         assert_eq!(
             nylon_track_device_get(handle, 0, 0, std::ptr::null_mut()),
             0

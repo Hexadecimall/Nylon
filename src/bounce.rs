@@ -174,9 +174,10 @@ pub fn render_wave<W: Write + Seek>(
             "initial media could not be published",
         )));
     }
-    let (routing, output_node) = playback_routing(&snapshot).map_err(|_| {
-        BounceError::Audio(AudioError::Host("project routing could not be compiled"))
-    })?;
+    let (routing, output_node) = playback_routing(&snapshot, options.format.sample_rate as f32)
+        .map_err(|_| {
+            BounceError::Audio(AudioError::Host("project routing could not be compiled"))
+        })?;
     let devices = playback_devices(&snapshot);
     let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
     if !publisher

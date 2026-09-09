@@ -62,7 +62,12 @@ def main():
         assert chain[1]["kind"] == "utility" and not chain[1]["enabled"], chain
         call("delete-device", "0", "1")
         assert len(call("track-devices", "0")["devices"]) == 1
+        call("add-device", "0", "limiter", "-0.3", "0.1", "0.005")
+        limiter = call("track-devices", "0")["devices"][1]
+        assert limiter["kind"] == "limiter", limiter
+        assert abs(limiter["parameters"]["lookaheadSeconds"] - 0.005) < 1e-7, limiter
         call("add-device", "0", "delay", "0.2", "1", "0.5", succeeds=False)
+        call("add-device", "0", "limiter", "-0.3", "0.1", "0.1", succeeds=False)
         call("import-wave", "1", "0", str(source), "120")
         clips = call("clips", "1")["clips"]
         assert clips[0]["kind"] == "audio" and clips[0]["mediaPath"].startswith("Media/"), clips

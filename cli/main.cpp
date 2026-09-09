@@ -110,6 +110,7 @@ QString deviceKindName(nylon::DeviceKind kind)
     case nylon::DeviceKind::Equalizer: return "equalizer";
     case nylon::DeviceKind::Compressor: return "compressor";
     case nylon::DeviceKind::StereoDelay: return "delay";
+    case nylon::DeviceKind::Limiter: return "limiter";
     }
     return "utility";
 }
@@ -176,6 +177,12 @@ bool parseTrackDevice(
             && parameter(positional[kindIndex + 2], device.parameters[1])
             && parameter(positional[kindIndex + 3], device.parameters[2]);
     }
+    if (kind == "limiter" && positional.size() == kindIndex + 4) {
+        device.kind = nylon::DeviceKind::Limiter;
+        return parameter(positional[kindIndex + 1], device.parameters[0])
+            && parameter(positional[kindIndex + 2], device.parameters[1])
+            && parameter(positional[kindIndex + 3], device.parameters[2]);
+    }
     return false;
 }
 
@@ -201,6 +208,11 @@ QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
     case nylon::DeviceKind::StereoDelay:
         parameters = {{"delaySeconds", device.parameters[0]},
             {"feedback", device.parameters[1]}, {"mix", device.parameters[2]}};
+        break;
+    case nylon::DeviceKind::Limiter:
+        parameters = {{"ceilingDb", device.parameters[0]},
+            {"releaseSeconds", device.parameters[1]},
+            {"lookaheadSeconds", device.parameters[2]}};
         break;
     }
     return {{"index", static_cast<double>(index)}, {"kind", deviceKindName(device.kind)},

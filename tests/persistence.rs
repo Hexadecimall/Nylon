@@ -1,3 +1,4 @@
+use nylon::dsp::limiter::Parameters as LimiterParameters;
 use nylon::engine::device::{DeviceConfig, DeviceKind};
 use nylon::persistence::PersistenceError;
 use nylon::project::{Command, MidiNote, Project, TrackKind};
@@ -31,6 +32,19 @@ fn session() -> Project {
                         delay_seconds: 0.375,
                         feedback: 0.45,
                         mix: 0.2,
+                    },
+                },
+            },
+            Command::AddDevice {
+                track: id,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Limiter {
+                        parameters: LimiterParameters {
+                            ceiling_db: -0.5,
+                            release_seconds: 0.125,
+                            lookahead_seconds: 0.004,
+                        },
                     },
                 },
             },
@@ -156,7 +170,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 6;
+    future[4] = 7;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

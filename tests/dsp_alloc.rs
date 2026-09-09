@@ -8,6 +8,7 @@ use nylon::dsp::biquad::{Biquad, Coefficients, Kind};
 use nylon::dsp::compressor::{Compressor, Parameters as CompressorParameters};
 use nylon::dsp::delay::DelayLine;
 use nylon::dsp::env::{Envelope, Settings};
+use nylon::dsp::limiter::{Limiter, Parameters as LimiterParameters};
 use nylon::dsp::meter::Meter;
 use nylon::dsp::osc::{Oscillator, Shape};
 use nylon::dsp::smooth::{OnePole, Ramp};
@@ -60,6 +61,21 @@ fn measure(body: impl FnOnce()) -> usize {
 
 const RATE: f32 = 48_000.0;
 const BLOCK: usize = 512;
+
+#[test]
+fn limiting_a_block_performs_no_allocator_operations() {
+    let mut limiter = Limiter::new(RATE, LimiterParameters::default()).unwrap();
+    let mut storage = vec![[0.0_f32; 2]; limiter.required_storage_frames()];
+    let input = vec![[1.5_f32, -0.75_f32]; BLOCK];
+    let mut output = vec![[0.0_f32; 2]; BLOCK];
+    let operations = measure(|| {
+        limiter
+            .process_block(&mut storage, &input, &mut output)
+            .unwrap();
+    });
+    assert_eq!(operations, 0, "{operations} allocator operations");
+    assert!(output.iter().flatten().all(|sample| sample.is_finite()));
+}
 
 #[test]
 fn processing_a_block_performs_no_allocator_operations() {

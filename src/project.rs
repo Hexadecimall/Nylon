@@ -314,7 +314,21 @@ impl Snapshot {
     pub fn compiled_routing(&self) -> Result<CompiledRouting, RoutingError> {
         let mut graph = RoutingGraph::new(self.tracks.len())?;
         for (index, track) in self.tracks.iter().enumerate() {
-            graph.set_node_latency(index as u16, track.latency_frames)?;
+            let latency =
+                track
+                    .devices
+                    .iter()
+                    .try_fold(track.latency_frames, |total, device| {
+                        total
+                            .checked_add(
+                                device
+                                    .config
+                                    .latency_frames(self.sample_rate as f32)
+                                    .map_err(|_| RoutingError::LatencyOverflow)?,
+                            )
+                            .ok_or(RoutingError::LatencyOverflow)
+                    })?;
+            graph.set_node_latency(index as u16, latency)?;
         }
         for route in &self.routes {
             let source = self
