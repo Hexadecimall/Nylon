@@ -418,6 +418,17 @@ pub trait Stream {
     fn is_lost(&self) -> bool {
         false
     }
+
+    /// Frames between the engine and the outside world: what the host and
+    /// the device add on top of the block itself.
+    ///
+    /// A take is recorded this much after the sound reached the
+    /// microphone, and is heard this much after the engine rendered it, so
+    /// lining one up against the other needs both numbers. A host that
+    /// cannot say reports zero, which leaves a take where it was written.
+    fn latency_frames(&self) -> u32 {
+        0
+    }
 }
 
 #[cfg(test)]

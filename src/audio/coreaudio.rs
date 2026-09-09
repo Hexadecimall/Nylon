@@ -169,6 +169,8 @@ const SELECTOR_DEVICE_NAME: u32 = four_cc(b"lnam");
 const SELECTOR_STREAM_CONFIGURATION: u32 = four_cc(b"slay");
 const SELECTOR_NOMINAL_SAMPLE_RATE: u32 = four_cc(b"nsrt");
 const SELECTOR_BUFFER_FRAME_SIZE: u32 = four_cc(b"fsiz");
+const SELECTOR_LATENCY: u32 = four_cc(b"ltnc");
+const SELECTOR_SAFETY_OFFSET: u32 = four_cc(b"saft");
 const SCOPE_OBJECT_GLOBAL: u32 = four_cc(b"glob");
 const SCOPE_OBJECT_OUTPUT: u32 = four_cc(b"outp");
 const SCOPE_OBJECT_INPUT: u32 = four_cc(b"inpt");
@@ -453,6 +455,38 @@ impl CoreAudioBackend {
     ///
     /// A device is free to refuse or round the request, so the caller uses
     /// the returned figure rather than the one it asked for.
+    /// Frames the device adds on one side, from what it reports plus the
+    /// offset the host keeps in hand. A device that reports neither adds
+    /// nothing as far as anyone can tell.
+    fn device_latency(device: AudioObjectID, scope: u32) -> u32 {
+        Self::frame_property(device, SELECTOR_LATENCY, scope)
+            + Self::frame_property(device, SELECTOR_SAFETY_OFFSET, scope)
+    }
+
+    /// Reads a property that counts frames, or zero when the device has
+    /// none.
+    fn frame_property(device: AudioObjectID, selector: u32, scope: u32) -> u32 {
+        let address = PropertyAddress {
+            selector,
+            scope,
+            element: ELEMENT_MAIN,
+        };
+        let mut value: u32 = 0;
+        let mut size = size_of::<u32>() as u32;
+        // SAFETY: The destination matches the property's type and size.
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                device,
+                &address,
+                0,
+                ptr::null(),
+                &mut size,
+                (&raw mut value).cast(),
+            )
+        };
+        if status == NO_ERROR { value } else { 0 }
+    }
+
     fn negotiate_buffer_size(device: AudioObjectID, wanted: u32) -> u32 {
         let address = PropertyAddress {
             selector: SELECTOR_BUFFER_FRAME_SIZE,
@@ -694,6 +728,7 @@ impl Backend for CoreAudioBackend {
             initialized: false,
             running: false,
             config,
+            latency: Self::device_latency(device, SCOPE_OBJECT_OUTPUT),
             shared: Box::new(Shared {
                 renderer: ptr::null_mut::<PlaceholderRenderer>(),
                 frames: AtomicU64::new(0),
@@ -976,6 +1011,8 @@ pub struct CoreAudioStream {
     initialized: bool,
     running: bool,
     config: StreamConfig,
+    // What the device adds on top of the block, read when it was opened.
+    latency: u32,
     // Boxed so its address is stable: the unit holds a pointer to it.
     shared: Box<Shared>,
     // Kept alive for as long as the callback can run.
@@ -995,6 +1032,12 @@ impl CoreAudioStream {
 impl Stream for CoreAudioStream {
     fn config(&self) -> StreamConfig {
         self.config
+    }
+
+    fn latency_frames(&self) -> u32 {
+        // The block itself is part of the delay: the engine renders it
+        // before the device begins playing it.
+        self.latency + self.config.block_frames as u32
     }
 
     fn start(&mut self) -> Result<(), AudioError> {
@@ -1154,6 +1197,7 @@ impl InputBackend for CoreAudioBackend {
                 channels: taken as u16,
                 ..config
             },
+            latency: Self::device_latency(device, SCOPE_OBJECT_INPUT),
             shared: Box::new(CaptureShared {
                 unit,
                 capturer: ptr::null_mut::<PlaceholderCapturer>(),
@@ -1322,6 +1366,8 @@ pub struct CoreAudioCapture {
     initialized: bool,
     running: bool,
     config: StreamConfig,
+    // What the device adds on top of the block, read when it was opened.
+    latency: u32,
     // Boxed so its address is stable: the unit holds a pointer to it.
     shared: Box<CaptureShared>,
     // Kept alive for as long as the callback can run.
@@ -1343,6 +1389,12 @@ impl CoreAudioCapture {
 impl Stream for CoreAudioCapture {
     fn config(&self) -> StreamConfig {
         self.config
+    }
+
+    fn latency_frames(&self) -> u32 {
+        // The block itself is part of the delay: the device fills it
+        // before the engine is handed anything.
+        self.latency + self.config.block_frames as u32
     }
 
     fn start(&mut self) -> Result<(), AudioError> {
@@ -1547,6 +1599,39 @@ mod tests {
             0,
             "the device asked for oversized blocks"
         );
+    }
+
+    #[test]
+    fn a_stream_reports_at_least_the_block_it_renders() {
+        // Whatever the device says, a block is rendered before it is
+        // heard, so the delay is never less than one.
+        let backend = CoreAudioBackend::new();
+        let Ok(device) = backend.default_output() else {
+            return;
+        };
+        let config = StreamConfig {
+            device,
+            sample_rate: 48_000,
+            channels: 2,
+            block_frames: 512,
+        };
+        let Ok(stream) = backend.open_output(config, SilentRenderer) else {
+            return;
+        };
+        assert!(
+            stream.latency_frames() >= stream.config().block_frames as u32,
+            "a stream claimed less delay than the block it renders"
+        );
+    }
+
+    /// A renderer that writes silence, for the paths that only open a
+    /// stream.
+    struct SilentRenderer;
+
+    impl Renderer for SilentRenderer {
+        fn render(&mut self, output: &mut [[f32; 2]], _timing: BlockTiming) {
+            output.fill([0.0, 0.0]);
+        }
     }
 
     #[test]

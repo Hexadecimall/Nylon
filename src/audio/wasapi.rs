@@ -762,6 +762,7 @@ impl Backend for WasapiBackend {
             block_frames: block,
             ..config
         };
+        let latency = client_latency(&client, running);
 
         let shared = Arc::new(Shared {
             running: AtomicBool::new(false),
@@ -790,6 +791,7 @@ impl Backend for WasapiBackend {
         Ok(WasapiStream {
             shared,
             config: running,
+            latency,
             thread: Some(thread),
         })
     }
@@ -917,6 +919,7 @@ impl InputBackend for WasapiBackend {
             block_frames: block,
             ..config
         };
+        let latency = client_latency(&client, running);
 
         let shared = Arc::new(Shared {
             running: AtomicBool::new(false),
@@ -946,6 +949,7 @@ impl InputBackend for WasapiBackend {
         Ok(WasapiCapture {
             shared,
             config: running,
+            latency,
             thread: Some(thread),
         })
     }
@@ -1109,6 +1113,8 @@ impl CaptureWorker {
 pub struct WasapiCapture {
     shared: Arc<Shared>,
     config: StreamConfig,
+    // Frames the client and the device hold, read when it was opened.
+    latency: u32,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -1123,6 +1129,10 @@ impl WasapiCapture {
 impl Stream for WasapiCapture {
     fn config(&self) -> StreamConfig {
         self.config
+    }
+
+    fn latency_frames(&self) -> u32 {
+        self.latency
     }
 
     fn start(&mut self) -> Result<(), AudioError> {
@@ -1171,6 +1181,23 @@ impl Drop for WasapiCapture {
             let _ = thread.join();
         }
     }
+}
+
+/// Frames the client holds between the engine and the device.
+///
+/// The client reports its delay in hundred-nanosecond ticks; the buffer
+/// it hands out is on top of that. A client that will not say leaves the
+/// buffer, which is never wrong by more than the device's own delay.
+fn client_latency(client: &Interface<AudioClientVtable>, config: StreamConfig) -> u32 {
+    let mut ticks: i64 = 0;
+    // SAFETY: The client is initialized and the destination is written.
+    let status = unsafe { (client.table().latency)(client.pointer, &raw mut ticks) };
+    let block = config.block_frames as u32;
+    if status != S_OK || ticks <= 0 {
+        return block;
+    }
+    let frames = ticks.saturating_mul(i64::from(config.sample_rate)) / TICKS_PER_SECOND;
+    block.saturating_add(u32::try_from(frames).unwrap_or(0))
 }
 
 /// Membership of the scheduler's audio class, given up when dropped.
@@ -1397,6 +1424,8 @@ impl Worker {
 pub struct WasapiStream {
     shared: Arc<Shared>,
     config: StreamConfig,
+    // Frames the client and the device hold, read when it was opened.
+    latency: u32,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -1412,6 +1441,10 @@ impl WasapiStream {
 impl Stream for WasapiStream {
     fn config(&self) -> StreamConfig {
         self.config
+    }
+
+    fn latency_frames(&self) -> u32 {
+        self.latency
     }
 
     fn start(&mut self) -> Result<(), AudioError> {

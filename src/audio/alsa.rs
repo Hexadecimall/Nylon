@@ -260,13 +260,14 @@ impl AlsaBackend {
 
     /// Opens a device in one direction and settles its format.
     ///
-    /// Returns the open handle and the configuration the device granted,
-    /// which is not always the one that was asked for.
+    /// Returns the open handle, the configuration the device granted,
+    /// which is not always the one that was asked for, and the frames it
+    /// holds between the engine and the outside world.
     fn open_device(
         &self,
         config: StreamConfig,
         direction: c_int,
-    ) -> Result<(Handle, StreamConfig), AudioError> {
+    ) -> Result<(Handle, StreamConfig, u32), AudioError> {
         config.validate()?;
         if config.channels != 2 {
             return Err(AudioError::Unsupported("channel count"));
@@ -342,6 +343,9 @@ impl AlsaBackend {
                 block_frames: block,
                 ..config
             },
+            // The device holds a whole buffer, not just the period it
+            // asks for, so that is the delay it adds.
+            buffer_frames.min(u64::from(u32::MAX)) as u32,
         ))
     }
 }
@@ -425,7 +429,7 @@ impl Backend for AlsaBackend {
         config: StreamConfig,
         renderer: R,
     ) -> Result<Self::Stream, AudioError> {
-        let (device, running) = self.open_device(config, SND_PCM_STREAM_PLAYBACK)?;
+        let (device, running, latency) = self.open_device(config, SND_PCM_STREAM_PLAYBACK)?;
         let device = Arc::new(device);
 
         let shared = Arc::new(Shared {
@@ -452,6 +456,7 @@ impl Backend for AlsaBackend {
         Ok(AlsaStream {
             shared,
             config: running,
+            latency,
             thread: Some(thread),
         })
     }
@@ -504,7 +509,7 @@ impl InputBackend for AlsaBackend {
         config: StreamConfig,
         capturer: C,
     ) -> Result<Self::Capture, AudioError> {
-        let (device, running) = self.open_device(config, SND_PCM_STREAM_CAPTURE)?;
+        let (device, running, latency) = self.open_device(config, SND_PCM_STREAM_CAPTURE)?;
         let device = Arc::new(device);
 
         let shared = Arc::new(Shared {
@@ -533,6 +538,7 @@ impl InputBackend for AlsaBackend {
         Ok(AlsaCapture {
             shared,
             config: running,
+            latency,
             thread: Some(thread),
         })
     }
@@ -630,6 +636,8 @@ impl CaptureWorker {
 pub struct AlsaCapture {
     shared: Arc<Shared>,
     config: StreamConfig,
+    // Frames the device holds, from what it settled on when it opened.
+    latency: u32,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -644,6 +652,10 @@ impl AlsaCapture {
 impl Stream for AlsaCapture {
     fn config(&self) -> StreamConfig {
         self.config
+    }
+
+    fn latency_frames(&self) -> u32 {
+        self.latency.max(self.config.block_frames as u32)
     }
 
     fn start(&mut self) -> Result<(), AudioError> {
@@ -836,6 +848,8 @@ impl Worker {
 pub struct AlsaStream {
     shared: Arc<Shared>,
     config: StreamConfig,
+    // Frames the device holds, from what it settled on when it opened.
+    latency: u32,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -851,6 +865,10 @@ impl AlsaStream {
 impl Stream for AlsaStream {
     fn config(&self) -> StreamConfig {
         self.config
+    }
+
+    fn latency_frames(&self) -> u32 {
+        self.latency.max(self.config.block_frames as u32)
     }
 
     fn start(&mut self) -> Result<(), AudioError> {
