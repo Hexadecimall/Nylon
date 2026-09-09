@@ -106,6 +106,26 @@ struct AutomationPoint {
     AutomationCurve curve;
 };
 
+enum class OscillatorShape : int { Sine = 0, Saw = 1, Square = 2, Triangle = 3 };
+
+struct InstrumentPatch {
+    OscillatorShape shapeA{OscillatorShape::Saw};
+    OscillatorShape shapeB{OscillatorShape::Square};
+    float oscillatorMix{};
+    float oscillatorBDetuneCents{7.0F};
+    float subLevel{};
+    float noiseLevel{};
+    std::uint32_t unisonVoices{1};
+    float unisonDetuneCents{12.0F};
+    float attackSeconds{0.004F};
+    float decaySeconds{0.12F};
+    float sustain{0.65F};
+    float releaseSeconds{0.18F};
+    float cutoffHz{4'000.0F};
+    float resonance{0.9F};
+    float levelDb{-12.0F};
+};
+
 class CompiledRouting {
 public:
     CompiledRouting();
@@ -209,6 +229,8 @@ public:
     bool setTrackColorIndex(std::uint64_t index, int color);
     std::uint32_t trackLatencyFrames(std::uint64_t index) const;
     bool setTrackLatencyFrames(std::uint64_t index, std::uint32_t frames);
+    bool trackInstrument(std::uint64_t track, InstrumentPatch& patch) const;
+    bool setTrackInstrument(std::uint64_t track, const InstrumentPatch& patch);
 
     std::vector<TrackDevice> trackDevices(std::uint64_t track) const;
     bool addTrackDevice(std::uint64_t track, const TrackDevice& device);

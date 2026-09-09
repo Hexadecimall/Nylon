@@ -16,6 +16,8 @@ use crate::dsp::pan;
 
 /// Voices one bank can sound at once.
 pub const MAX_VOICES: usize = 32;
+/// Detuned oscillator copies one voice can render.
+pub const MAX_UNISON: usize = 4;
 /// Lowest note number.
 pub const MIN_PITCH: u8 = 0;
 /// Highest note number.
@@ -24,8 +26,22 @@ pub const MAX_PITCH: u8 = 127;
 /// How an instrument sounds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Patch {
-    /// Waveform each voice produces.
+    /// Primary oscillator waveform.
     pub shape: Shape,
+    /// Secondary oscillator waveform.
+    pub shape_b: Shape,
+    /// Secondary oscillator share, from zero to one.
+    pub oscillator_mix: f32,
+    /// Secondary oscillator tuning relative to the primary oscillator.
+    pub oscillator_b_detune_cents: f32,
+    /// Sub oscillator level, from zero to one.
+    pub sub_level: f32,
+    /// White noise level, from zero to one.
+    pub noise_level: f32,
+    /// Detuned copies per oscillator.
+    pub unison_voices: u8,
+    /// Spacing between unison copies in cents.
+    pub unison_detune_cents: f32,
     /// Amplitude envelope.
     pub envelope: Settings,
     /// Filter cutoff in hertz.
@@ -40,6 +56,13 @@ impl Default for Patch {
     fn default() -> Self {
         Self {
             shape: Shape::Saw,
+            shape_b: Shape::Square,
+            oscillator_mix: 0.0,
+            oscillator_b_detune_cents: 7.0,
+            sub_level: 0.0,
+            noise_level: 0.0,
+            unison_voices: 1,
+            unison_detune_cents: 12.0,
             envelope: Settings {
                 attack: 0.004,
                 decay: 0.12,
@@ -53,6 +76,33 @@ impl Default for Patch {
     }
 }
 
+impl Patch {
+    /// Whether every parameter is inside the persisted patch range.
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        let envelope = self.envelope;
+        (0.0..=1.0).contains(&self.oscillator_mix)
+            && self.oscillator_b_detune_cents.is_finite()
+            && (-2_400.0..=2_400.0).contains(&self.oscillator_b_detune_cents)
+            && (0.0..=1.0).contains(&self.sub_level)
+            && (0.0..=1.0).contains(&self.noise_level)
+            && (1..=MAX_UNISON as u8).contains(&self.unison_voices)
+            && self.unison_detune_cents.is_finite()
+            && (0.0..=100.0).contains(&self.unison_detune_cents)
+            && [envelope.attack, envelope.decay, envelope.release]
+                .iter()
+                .all(|value| value.is_finite() && (0.0..=60.0).contains(value))
+            && envelope.sustain.is_finite()
+            && (0.0..=1.0).contains(&envelope.sustain)
+            && self.cutoff.is_finite()
+            && (20.0..=20_000.0).contains(&self.cutoff)
+            && self.resonance.is_finite()
+            && (0.001..=100.0).contains(&self.resonance)
+            && (self.level_db == f32::NEG_INFINITY
+                || (self.level_db.is_finite() && (-120.0..=6.0).contains(&self.level_db)))
+    }
+}
+
 /// Frequency of a note number, with 69 at 440 hertz.
 #[must_use]
 pub fn pitch_to_hertz(pitch: u8) -> f32 {
@@ -61,7 +111,9 @@ pub fn pitch_to_hertz(pitch: u8) -> f32 {
 
 #[derive(Clone, Copy)]
 struct Voice {
-    oscillator: Oscillator,
+    oscillator_a: [Oscillator; MAX_UNISON],
+    oscillator_b: [Oscillator; MAX_UNISON],
+    sub: Oscillator,
     envelope: Envelope,
     filter: Biquad,
     pitch: u8,
@@ -69,12 +121,15 @@ struct Voice {
     /// Order the voice was started in, so the oldest can be identified.
     age: u64,
     active: bool,
+    noise_state: u64,
 }
 
 impl Voice {
     fn new(sample_rate: f32, patch: &Patch) -> Self {
         Self {
-            oscillator: Oscillator::new(patch.shape, 440.0, sample_rate),
+            oscillator_a: [Oscillator::new(patch.shape, 440.0, sample_rate); MAX_UNISON],
+            oscillator_b: [Oscillator::new(patch.shape_b, 440.0, sample_rate); MAX_UNISON],
+            sub: Oscillator::new(Shape::Sine, 220.0, sample_rate),
             envelope: Envelope::new(patch.envelope, sample_rate),
             filter: Biquad::new(Coefficients::design(
                 Kind::LowPass,
@@ -87,11 +142,12 @@ impl Voice {
             velocity: 0.0,
             age: 0,
             active: false,
+            noise_state: 1,
         }
     }
 
     #[inline]
-    fn process(&mut self) -> f32 {
+    fn process(&mut self, patch: &Patch) -> f32 {
         if !self.active {
             return 0.0;
         }
@@ -100,8 +156,67 @@ impl Voice {
             self.active = false;
             return 0.0;
         }
-        let raw = self.oscillator.process();
+        let count = usize::from(patch.unison_voices);
+        let mut oscillator_a = 0.0;
+        let render_b = patch.oscillator_mix > 0.0;
+        let mut oscillator_b = 0.0;
+        for oscillator in &mut self.oscillator_a[..count] {
+            oscillator_a += oscillator.process();
+        }
+        if render_b {
+            for oscillator in &mut self.oscillator_b[..count] {
+                oscillator_b += oscillator.process();
+            }
+        }
+        let count = f32::from(patch.unison_voices);
+        oscillator_a /= count;
+        if render_b {
+            oscillator_b /= count;
+        }
+        let pitched = oscillator_a + (oscillator_b - oscillator_a) * patch.oscillator_mix;
+        let mut raw = pitched;
+        if patch.sub_level > 0.0 {
+            raw += self.sub.process() * patch.sub_level;
+        }
+        if patch.noise_level > 0.0 {
+            raw += self.noise() * patch.noise_level;
+        }
+        let raw = raw / (1.0 + patch.sub_level + patch.noise_level);
         self.filter.process(raw * level * self.velocity)
+    }
+
+    #[inline]
+    fn noise(&mut self) -> f32 {
+        let mut value = self.noise_state;
+        value ^= value << 13;
+        value ^= value >> 7;
+        value ^= value << 17;
+        self.noise_state = value;
+        ((value >> 40) as f32 * (1.0 / 8_388_607.5)) - 1.0
+    }
+
+    fn set_frequencies(&mut self, patch: &Patch) {
+        let frequency = pitch_to_hertz(self.pitch);
+        let count = usize::from(patch.unison_voices);
+        let center = (count as f32 - 1.0) * 0.5;
+        for index in 0..count {
+            let cents = (index as f32 - center) * patch.unison_detune_cents;
+            let ratio = 2.0_f32.powf(cents / 1_200.0);
+            self.oscillator_a[index].set_frequency(frequency * ratio);
+            let secondary = 2.0_f32.powf((cents + patch.oscillator_b_detune_cents) / 1_200.0);
+            self.oscillator_b[index].set_frequency(frequency * secondary);
+        }
+        self.sub.set_frequency(frequency * 0.5);
+    }
+
+    fn reset_sources(&mut self) {
+        for oscillator in &mut self.oscillator_a {
+            oscillator.reset();
+        }
+        for oscillator in &mut self.oscillator_b {
+            oscillator.reset();
+        }
+        self.sub.reset();
     }
 }
 
@@ -147,6 +262,7 @@ impl VoiceBank {
     /// Replaces the patch. Voices already sounding keep their envelope
     /// position and pick up the new filter and waveform.
     pub fn set_patch(&mut self, patch: Patch) {
+        let patch = sanitize_patch(patch, self.sample_rate);
         self.patch = patch;
         self.gain = crate::dsp::db::to_linear(patch.level_db);
         let coefficients = Coefficients::design(
@@ -157,9 +273,15 @@ impl VoiceBank {
             self.sample_rate,
         );
         for voice in &mut self.voices {
-            voice.oscillator.set_shape(patch.shape);
+            for oscillator in &mut voice.oscillator_a {
+                oscillator.set_shape(patch.shape);
+            }
+            for oscillator in &mut voice.oscillator_b {
+                oscillator.set_shape(patch.shape_b);
+            }
             voice.envelope.set_settings(patch.envelope);
             voice.filter.set_coefficients(coefficients);
+            voice.set_frequencies(&patch);
         }
     }
 
@@ -212,10 +334,14 @@ impl VoiceBank {
         voice.velocity = f32::from(velocity) / 127.0;
         voice.age = counter;
         voice.active = true;
-        voice.oscillator.set_frequency(pitch_to_hertz(pitch));
+        voice.set_frequencies(&self.patch);
         // A voice taken from another note starts its waveform afresh so
         // the new note does not inherit a click from the old one.
-        voice.oscillator.reset();
+        voice.reset_sources();
+        voice.noise_state = (u64::from(pitch) + 1)
+            .wrapping_mul(0x9e3779b97f4a7c15)
+            .wrapping_add(counter)
+            .max(1);
         voice.filter.reset();
         voice.envelope.note_on();
     }
@@ -240,10 +366,12 @@ impl VoiceBank {
 
     /// Silences every voice at once, without a release.
     pub fn reset(&mut self) {
+        self.counter = 0;
         for voice in &mut self.voices {
             voice.active = false;
             voice.envelope.reset();
-            voice.oscillator.reset();
+            voice.reset_sources();
+            voice.noise_state = 1;
             voice.filter.reset();
         }
     }
@@ -288,7 +416,7 @@ impl VoiceBank {
         for frame in output.iter_mut() {
             let mut sum = 0.0;
             for voice in &mut self.voices[..self.polyphony] {
-                sum += voice.process();
+                sum += voice.process(&self.patch);
             }
             frame[0] += sum * left;
             frame[1] += sum * right;
@@ -299,6 +427,35 @@ impl VoiceBank {
     pub fn render(&mut self, output: &mut [[f32; 2]], position: f32) {
         output.fill([0.0, 0.0]);
         self.render_additive(output, position);
+    }
+}
+
+fn sanitize_patch(patch: Patch, sample_rate: f32) -> Patch {
+    let finite = |value: f32, fallback: f32| {
+        if value.is_finite() { value } else { fallback }
+    };
+    Patch {
+        oscillator_mix: crate::dsp::clamp(patch.oscillator_mix, 0.0, 1.0),
+        oscillator_b_detune_cents: finite(patch.oscillator_b_detune_cents, 0.0)
+            .clamp(-2_400.0, 2_400.0),
+        sub_level: crate::dsp::clamp(patch.sub_level, 0.0, 1.0),
+        noise_level: crate::dsp::clamp(patch.noise_level, 0.0, 1.0),
+        unison_voices: patch.unison_voices.clamp(1, MAX_UNISON as u8),
+        unison_detune_cents: finite(patch.unison_detune_cents, 0.0).clamp(0.0, 100.0),
+        envelope: Settings {
+            attack: finite(patch.envelope.attack, 0.0).clamp(0.0, 60.0),
+            decay: finite(patch.envelope.decay, 0.0).clamp(0.0, 60.0),
+            sustain: crate::dsp::clamp(patch.envelope.sustain, 0.0, 1.0),
+            release: finite(patch.envelope.release, 0.0).clamp(0.0, 60.0),
+        },
+        cutoff: finite(patch.cutoff, 20.0).clamp(20.0, 20_000.0_f32.min(sample_rate * 0.4975)),
+        resonance: finite(patch.resonance, 0.707).clamp(0.001, 100.0),
+        level_db: if patch.level_db == f32::NEG_INFINITY {
+            patch.level_db
+        } else {
+            finite(patch.level_db, -120.0).clamp(-120.0, 6.0)
+        },
+        ..patch
     }
 }
 
@@ -569,6 +726,87 @@ mod tests {
             bank.render(&mut output, 0.0);
             assert!(peak(&output) > 0.0005, "{shape:?}: {}", peak(&output));
         }
+    }
+
+    #[test]
+    fn dual_oscillator_sub_noise_and_unison_change_the_sound() {
+        let render = |patch: Patch| {
+            let mut bank = VoiceBank::new(patch, RATE);
+            bank.note_on(60, 110);
+            let mut output = [[0.0_f32; 2]; 2_048];
+            bank.render(&mut output, 0.0);
+            output
+        };
+        let plain = render(Patch {
+            oscillator_mix: 0.0,
+            sub_level: 0.0,
+            noise_level: 0.0,
+            unison_voices: 1,
+            ..Patch::default()
+        });
+        let layered = render(Patch {
+            oscillator_mix: 0.55,
+            sub_level: 0.4,
+            noise_level: 0.08,
+            unison_voices: 4,
+            unison_detune_cents: 18.0,
+            ..Patch::default()
+        });
+        assert_ne!(plain, layered);
+        assert!(peak(&layered) > 0.001);
+        assert!(layered.iter().flatten().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn noise_and_unison_render_deterministically() {
+        let patch = Patch {
+            noise_level: 0.25,
+            unison_voices: 4,
+            unison_detune_cents: 20.0,
+            ..Patch::default()
+        };
+        let mut bank = VoiceBank::new(patch, RATE);
+        let mut first = [[0.0_f32; 2]; 1_024];
+        bank.note_on(64, 100);
+        bank.render(&mut first, 0.0);
+        bank.reset();
+        let mut second = [[0.0_f32; 2]; 1_024];
+        bank.note_on(64, 100);
+        bank.render(&mut second, 0.0);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn patch_values_are_bounded_before_rendering() {
+        let mut bank = VoiceBank::new(
+            Patch {
+                oscillator_mix: f32::NAN,
+                oscillator_b_detune_cents: f32::INFINITY,
+                sub_level: -1.0,
+                noise_level: 2.0,
+                unison_voices: 255,
+                unison_detune_cents: f32::NAN,
+                cutoff: f32::INFINITY,
+                resonance: -1.0,
+                level_db: f32::NAN,
+                ..Patch::default()
+            },
+            RATE,
+        );
+        let clean = bank.patch();
+        assert_eq!(clean.oscillator_mix, 0.0);
+        assert_eq!(clean.oscillator_b_detune_cents, 0.0);
+        assert_eq!(clean.sub_level, 0.0);
+        assert_eq!(clean.noise_level, 1.0);
+        assert_eq!(clean.unison_voices, MAX_UNISON as u8);
+        assert_eq!(clean.unison_detune_cents, 0.0);
+        assert_eq!(clean.cutoff, 20.0);
+        assert_eq!(clean.resonance, 0.001);
+        assert_eq!(clean.level_db, -120.0);
+        bank.note_on(60, 127);
+        let mut output = [[0.0_f32; 2]; 2_048];
+        bank.render(&mut output, 0.0);
+        assert!(output.iter().flatten().all(|sample| sample.is_finite()));
     }
 
     #[test]

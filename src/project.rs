@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
+use crate::engine::voice::Patch;
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
 
 /// Largest number of routes stored in one project snapshot.
@@ -288,6 +289,7 @@ pub struct Track {
     pub(crate) latency_frames: u32,
     pub(crate) devices: Vec<Device>,
     pub(crate) automation: Vec<AutomationLane>,
+    pub(crate) instrument_patch: Patch,
     pub(crate) session_slots: Vec<Option<ClipId>>,
     pub(crate) arrangement: Vec<ArrangementPlacement>,
 }
@@ -328,6 +330,9 @@ impl Track {
     }
     pub fn automation(&self) -> &[AutomationLane] {
         &self.automation
+    }
+    pub fn instrument_patch(&self) -> Patch {
+        self.instrument_patch
     }
     pub fn arrangement(&self) -> &[ArrangementPlacement] {
         &self.arrangement
@@ -521,6 +526,10 @@ pub enum Command {
         track: TrackId,
         parameter: AutomationParameter,
     },
+    SetInstrumentPatch {
+        id: TrackId,
+        patch: Patch,
+    },
     CreateRoute {
         source: TrackId,
         destination: TrackId,
@@ -663,6 +672,7 @@ pub enum ProjectError {
     InvalidAutomation,
     AutomationCapacity,
     MissingAutomation,
+    InvalidInstrument,
 }
 
 /// Control-thread state. Snapshots and history must never be destroyed in a
@@ -765,6 +775,7 @@ impl Project {
                         latency_frames: 0,
                         devices: Vec::new(),
                         automation: Vec::new(),
+                        instrument_patch: Patch::default(),
                         session_slots: vec![None; snapshot.scenes.len()],
                         arrangement: Vec::new(),
                     });
@@ -908,6 +919,16 @@ impl Project {
                         .position(|lane| lane.parameter == *parameter)
                         .ok_or(ProjectError::MissingAutomation)?;
                     lanes.remove(index);
+                }
+                Command::SetInstrumentPatch { id, patch } => {
+                    if !patch.is_valid() {
+                        return Err(ProjectError::InvalidInstrument);
+                    }
+                    let track = snapshot.track_mut(*id)?;
+                    if track.kind != TrackKind::Midi {
+                        return Err(ProjectError::InvalidInstrument);
+                    }
+                    track.instrument_patch = *patch;
                 }
                 Command::CreateRoute {
                     source,

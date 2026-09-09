@@ -30,6 +30,10 @@ fn null_handles_are_rejected() {
         assert_eq!(nylon_project_redo(std::ptr::null_mut()), 0);
         assert_eq!(nylon_project_track_count(std::ptr::null()), 0);
         assert_eq!(nylon_project_tempo(std::ptr::null()), 0.0);
+        assert_eq!(
+            nylon_track_instrument_get(std::ptr::null(), 0, std::ptr::null_mut()),
+            0
+        );
         nylon_project_free(std::ptr::null_mut());
         assert_eq!(nylon_audio_close(std::ptr::null_mut()), 0);
         assert_eq!(nylon_audio_is_open(std::ptr::null()), 0);
@@ -83,6 +87,47 @@ fn null_handles_are_rejected() {
             0
         );
         nylon_audio_free(std::ptr::null_mut());
+    }
+}
+
+#[test]
+fn native_instrument_patch_is_typed_and_undoable() {
+    let handle = nylon_project_new();
+    // SAFETY: This thread owns the handle and the patch record until release.
+    unsafe {
+        assert_eq!(nylon_project_add_track_kind(handle, 1), 1);
+        assert_eq!(nylon_project_add_track_kind(handle, 0), 1);
+        let mut patch = NylonInstrumentPatch::default();
+        assert_eq!(nylon_track_instrument_get(handle, 0, &mut patch), 1);
+        assert_eq!(patch.shape_a, 1);
+        assert_eq!(patch.shape_b, 2);
+        patch.oscillator_mix = 0.7;
+        patch.sub_level = 0.4;
+        patch.noise_level = 0.05;
+        patch.unison_voices = 4;
+        patch.unison_detune_cents = 18.0;
+        patch.cutoff_hz = 2_400.0;
+        assert_eq!(nylon_track_instrument_set(handle, 0, &patch), 1);
+        let mut read = NylonInstrumentPatch::default();
+        assert_eq!(nylon_track_instrument_get(handle, 0, &mut read), 1);
+        assert_eq!(read, patch);
+        assert_eq!(nylon_project_undo(handle), 1);
+        assert_eq!(nylon_track_instrument_get(handle, 0, &mut read), 1);
+        assert_ne!(read, patch);
+        assert_eq!(nylon_project_redo(handle), 1);
+        assert_eq!(nylon_track_instrument_get(handle, 0, &mut read), 1);
+        assert_eq!(read, patch);
+
+        patch.unison_voices = 0;
+        assert_eq!(nylon_track_instrument_set(handle, 0, &patch), 0);
+        assert_eq!(nylon_track_instrument_set(handle, 1, &read), 0);
+        assert_eq!(nylon_track_instrument_get(handle, 1, &mut read), 0);
+        assert_eq!(
+            nylon_track_instrument_get(handle, 0, std::ptr::null_mut()),
+            0
+        );
+        assert_eq!(nylon_track_instrument_set(handle, 0, std::ptr::null()), 0);
+        nylon_project_free(handle);
     }
 }
 

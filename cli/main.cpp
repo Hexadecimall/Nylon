@@ -129,6 +129,42 @@ bool automationCurve(const QString& text, nylon::AutomationCurve& curve)
     return true;
 }
 
+bool oscillatorShape(const QString& text, nylon::OscillatorShape& shape)
+{
+    if (text == "sine") shape = nylon::OscillatorShape::Sine;
+    else if (text == "saw") shape = nylon::OscillatorShape::Saw;
+    else if (text == "square") shape = nylon::OscillatorShape::Square;
+    else if (text == "triangle") shape = nylon::OscillatorShape::Triangle;
+    else return false;
+    return true;
+}
+
+QString oscillatorShapeName(nylon::OscillatorShape shape)
+{
+    switch (shape) {
+    case nylon::OscillatorShape::Sine: return "sine";
+    case nylon::OscillatorShape::Saw: return "saw";
+    case nylon::OscillatorShape::Square: return "square";
+    case nylon::OscillatorShape::Triangle: return "triangle";
+    }
+    return "sine";
+}
+
+QJsonObject instrumentJson(const nylon::InstrumentPatch& patch)
+{
+    return {{"shapeA", oscillatorShapeName(patch.shapeA)},
+        {"shapeB", oscillatorShapeName(patch.shapeB)},
+        {"oscillatorMix", patch.oscillatorMix},
+        {"oscillatorBDetuneCents", patch.oscillatorBDetuneCents},
+        {"subLevel", patch.subLevel}, {"noiseLevel", patch.noiseLevel},
+        {"unisonVoices", static_cast<double>(patch.unisonVoices)},
+        {"unisonDetuneCents", patch.unisonDetuneCents},
+        {"attackSeconds", patch.attackSeconds}, {"decaySeconds", patch.decaySeconds},
+        {"sustain", patch.sustain}, {"releaseSeconds", patch.releaseSeconds},
+        {"cutoffHz", patch.cutoffHz}, {"resonance", patch.resonance},
+        {"levelDb", patch.levelDb}};
+}
+
 QString automationCurveName(nylon::AutomationCurve curve)
 {
     switch (curve) {
@@ -431,6 +467,13 @@ int directCommand(const QString& bundle, const QStringList& positional)
         return writeJson({{"ok", true}, {"track", static_cast<double>(track)},
             {"devices", devices}});
     }
+    if (command == "instrument" && positional.size() == 2) {
+        std::uint64_t track = 0;
+        nylon::InstrumentPatch patch;
+        if (!indexNumber(positional[1], track) || !project.trackInstrument(track, patch))
+            return fail("Invalid instrument track");
+        return writeJson({{"ok", true}, {"instrument", instrumentJson(patch)}});
+    }
     if (command == "automation" && positional.size() == 3) {
         std::uint64_t track = 0;
         nylon::AutomationParameter parameter = nylon::AutomationParameter::Volume;
@@ -638,6 +681,27 @@ int directCommand(const QString& bundle, const QStringList& positional)
         if (!indexNumber(positional[1], track) || !unsignedNumber(positional[2], frames))
             return fail("Invalid track latency");
         changed = project.setTrackLatencyFrames(track, frames);
+    } else if (command == "set-instrument" && positional.size() == 17) {
+        std::uint64_t track = 0;
+        nylon::InstrumentPatch patch;
+        if (!indexNumber(positional[1], track)
+            || !oscillatorShape(positional[2], patch.shapeA)
+            || !oscillatorShape(positional[3], patch.shapeB)
+            || !parameter(positional[4], patch.oscillatorMix)
+            || !parameter(positional[5], patch.oscillatorBDetuneCents)
+            || !parameter(positional[6], patch.subLevel)
+            || !parameter(positional[7], patch.noiseLevel)
+            || !unsignedNumber(positional[8], patch.unisonVoices)
+            || !parameter(positional[9], patch.unisonDetuneCents)
+            || !parameter(positional[10], patch.attackSeconds)
+            || !parameter(positional[11], patch.decaySeconds)
+            || !parameter(positional[12], patch.sustain)
+            || !parameter(positional[13], patch.releaseSeconds)
+            || !parameter(positional[14], patch.cutoffHz)
+            || !parameter(positional[15], patch.resonance)
+            || !parameter(positional[16], patch.levelDb))
+            return fail("Invalid instrument patch");
+        changed = project.setTrackInstrument(track, patch);
     } else if (command == "add-route" && (positional.size() == 4 || positional.size() == 5)) {
         std::uint64_t source = 0;
         std::uint64_t destination = 0;

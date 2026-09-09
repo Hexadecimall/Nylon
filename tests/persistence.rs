@@ -5,6 +5,7 @@ use nylon::dsp::saturator::{
     Parameters as SaturatorParameters,
 };
 use nylon::engine::device::{DeviceConfig, DeviceKind};
+use nylon::engine::voice::Patch;
 use nylon::persistence::PersistenceError;
 use nylon::project::{
     AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, Project, TrackKind,
@@ -31,6 +32,20 @@ fn session() -> Project {
             Command::SetTrackVolume { id, db: -8.0 },
             Command::SetTrackPan { id, pan: 0.25 },
             Command::SetTrackArm { id, enabled: true },
+            Command::SetInstrumentPatch {
+                id,
+                patch: Patch {
+                    oscillator_mix: 0.7,
+                    sub_level: 0.35,
+                    noise_level: 0.05,
+                    unison_voices: 3,
+                    unison_detune_cents: 16.0,
+                    cutoff: 3_200.0,
+                    resonance: 1.2,
+                    level_db: -10.0,
+                    ..Patch::default()
+                },
+            },
             Command::SetAutomation {
                 track: id,
                 parameter: AutomationParameter::Volume,
@@ -225,7 +240,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 10;
+    future[4] = 11;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)
@@ -291,6 +306,49 @@ fn version_two_empty_project_migrates_without_data_loss() {
     assert!(loaded.snapshot().scenes().is_empty());
     assert!(loaded.snapshot().clips().is_empty());
     assert!(loaded.snapshot().audio_clips().is_empty());
+}
+
+#[test]
+fn version_nine_midi_tracks_receive_the_default_instrument() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"NYLN");
+    bytes.extend_from_slice(&9_u32.to_le_bytes());
+    bytes.extend_from_slice(&10_u64.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&120_f64.to_le_bytes());
+    bytes.extend_from_slice(&4_u16.to_le_bytes());
+    bytes.extend_from_slice(&4_u16.to_le_bytes());
+    bytes.extend_from_slice(&48_000_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    bytes.extend_from_slice(&9_u64.to_le_bytes());
+    bytes.extend_from_slice(&[1, 0, 0]);
+    bytes.extend_from_slice(&0_f64.to_le_bytes());
+    bytes.extend_from_slice(&0_f64.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&5_u32.to_le_bytes());
+    bytes.extend_from_slice(b"Synth");
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    let mut checksum = !0_u32;
+    for byte in &bytes {
+        checksum ^= u32::from(*byte);
+        for _ in 0..8 {
+            checksum = (checksum >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(checksum & 1));
+        }
+    }
+    bytes.extend_from_slice(&(!checksum).to_le_bytes());
+    let loaded = Project::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        loaded.snapshot().tracks()[0].instrument_patch(),
+        Patch::default()
+    );
 }
 
 #[test]

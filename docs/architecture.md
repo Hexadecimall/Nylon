@@ -102,10 +102,12 @@ releases notes rather than cutting them dead.
 
 ## Instruments and notes
 
-`src/engine/voice` is a polyphonic instrument: an oscillator through a
-filter with an amplitude envelope, one per voice. A repeated pitch
-restarts a single voice rather than doubling it, and when every voice is
-busy the quietest is taken, which a listener notices least.
+`src/engine/voice` is a polyphonic subtractive instrument. Each voice mixes
+two band-limited oscillators, a sine sub oscillator, and deterministic white
+noise before a resonant filter and amplitude envelope. Each pitched oscillator
+can render up to four detuned copies. A repeated pitch restarts a single voice,
+and a full bank takes the quietest sounding voice. Patch values are bounded on
+the control side and rendering uses fixed storage.
 
 `src/engine/schedule` converts notes written in beats into note events
 carrying the frame they land on. A note contained in one block gets both

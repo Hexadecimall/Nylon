@@ -5,13 +5,16 @@ use crate::audio::{DeviceId, DeviceInfo, Direction, Name, Rates};
 use crate::bounce::{Options as BounceOptions, render_wave};
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::compressor::Parameters as CompressorParameters;
+use crate::dsp::env::Settings as EnvelopeSettings;
 use crate::dsp::gate::Parameters as GateParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
+use crate::dsp::osc::Shape;
 use crate::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
     Parameters as SaturatorParameters,
 };
 use crate::engine::device::DeviceKind as TrackDeviceKind;
+use crate::engine::voice::Patch;
 use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::project::{
@@ -96,6 +99,27 @@ pub struct NylonAutomationPoint {
     pub beat: f64,
     pub value: f32,
     pub curve: i32,
+}
+
+/// Fixed-size subtractive instrument patch for a MIDI track.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NylonInstrumentPatch {
+    pub shape_a: i32,
+    pub shape_b: i32,
+    pub oscillator_mix: f32,
+    pub oscillator_b_detune_cents: f32,
+    pub sub_level: f32,
+    pub noise_level: f32,
+    pub unison_voices: u32,
+    pub unison_detune_cents: f32,
+    pub attack_seconds: f32,
+    pub decay_seconds: f32,
+    pub sustain: f32,
+    pub release_seconds: f32,
+    pub cutoff_hz: f32,
+    pub resonance: f32,
+    pub level_db: f32,
 }
 
 impl From<Levels> for NylonLevels {
@@ -237,6 +261,117 @@ pub unsafe extern "C" fn nylon_track_latency_frames(handle: *const Project, inde
     unsafe { handle.as_ref() }
         .and_then(|project| project.current.tracks.get(index))
         .map_or(0, |track| track.latency_frames())
+}
+
+fn oscillator_shape(code: i32) -> Option<Shape> {
+    match code {
+        0 => Some(Shape::Sine),
+        1 => Some(Shape::Saw),
+        2 => Some(Shape::Square),
+        3 => Some(Shape::Triangle),
+        _ => None,
+    }
+}
+
+fn oscillator_shape_code(shape: Shape) -> i32 {
+    match shape {
+        Shape::Sine => 0,
+        Shape::Saw => 1,
+        Shape::Square => 2,
+        Shape::Triangle => 3,
+    }
+}
+
+fn instrument_patch(record: NylonInstrumentPatch) -> Option<Patch> {
+    Some(Patch {
+        shape: oscillator_shape(record.shape_a)?,
+        shape_b: oscillator_shape(record.shape_b)?,
+        oscillator_mix: record.oscillator_mix,
+        oscillator_b_detune_cents: record.oscillator_b_detune_cents,
+        sub_level: record.sub_level,
+        noise_level: record.noise_level,
+        unison_voices: u8::try_from(record.unison_voices).ok()?,
+        unison_detune_cents: record.unison_detune_cents,
+        envelope: EnvelopeSettings {
+            attack: record.attack_seconds,
+            decay: record.decay_seconds,
+            sustain: record.sustain,
+            release: record.release_seconds,
+        },
+        cutoff: record.cutoff_hz,
+        resonance: record.resonance,
+        level_db: record.level_db,
+    })
+}
+
+fn native_instrument_patch(patch: Patch) -> NylonInstrumentPatch {
+    NylonInstrumentPatch {
+        shape_a: oscillator_shape_code(patch.shape),
+        shape_b: oscillator_shape_code(patch.shape_b),
+        oscillator_mix: patch.oscillator_mix,
+        oscillator_b_detune_cents: patch.oscillator_b_detune_cents,
+        sub_level: patch.sub_level,
+        noise_level: patch.noise_level,
+        unison_voices: u32::from(patch.unison_voices),
+        unison_detune_cents: patch.unison_detune_cents,
+        attack_seconds: patch.envelope.attack,
+        decay_seconds: patch.envelope.decay,
+        sustain: patch.envelope.sustain,
+        release_seconds: patch.envelope.release,
+        cutoff_hz: patch.cutoff,
+        resonance: patch.resonance,
+        level_db: patch.level_db,
+    }
+}
+
+/// # Safety
+/// The handle must be live and `out` must reference writable storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_instrument_get(
+    handle: *const Project,
+    track: u64,
+    out: *mut NylonInstrumentPatch,
+) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    let Ok(track) = usize::try_from(track) else {
+        return 0;
+    };
+    // SAFETY: Handle validity is required by the native interface.
+    let Some(patch) = (unsafe { handle.as_ref() })
+        .and_then(|project| project.current.tracks.get(track))
+        .filter(|track| track.kind() == TrackKind::Midi)
+        .map(|track| track.instrument_patch())
+    else {
+        return 0;
+    };
+    // SAFETY: The caller supplies writable storage for one record.
+    unsafe { out.write(native_instrument_patch(patch)) };
+    1
+}
+
+/// # Safety
+/// The handle must be live and exclusive; `patch` must reference readable storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_instrument_set(
+    handle: *mut Project,
+    track: u64,
+    patch: *const NylonInstrumentPatch,
+) -> i32 {
+    if patch.is_null() {
+        return 0;
+    }
+    // SAFETY: The caller supplies readable storage for one record.
+    let Some(patch) = instrument_patch(unsafe { patch.read() }) else {
+        return 0;
+    };
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_track(handle, track, |id| {
+            Some(Command::SetInstrumentPatch { id, patch })
+        })
+    }
 }
 
 unsafe fn edit_track(

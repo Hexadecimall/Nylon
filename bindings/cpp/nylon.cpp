@@ -226,6 +226,39 @@ TrackDevice trackDevice(const NylonTrackDevice& device)
         result.parameters[index] = device.parameters[index];
     return result;
 }
+
+NylonInstrumentPatch nativeInstrument(const InstrumentPatch& patch)
+{
+    return {static_cast<int>(patch.shapeA), static_cast<int>(patch.shapeB),
+        patch.oscillatorMix, patch.oscillatorBDetuneCents, patch.subLevel,
+        patch.noiseLevel, patch.unisonVoices, patch.unisonDetuneCents,
+        patch.attackSeconds, patch.decaySeconds, patch.sustain, patch.releaseSeconds,
+        patch.cutoffHz, patch.resonance, patch.levelDb};
+}
+
+InstrumentPatch instrumentPatch(const NylonInstrumentPatch& patch)
+{
+    return {static_cast<OscillatorShape>(patch.shape_a),
+        static_cast<OscillatorShape>(patch.shape_b), patch.oscillator_mix,
+        patch.oscillator_b_detune_cents, patch.sub_level, patch.noise_level,
+        patch.unison_voices, patch.unison_detune_cents, patch.attack_seconds,
+        patch.decay_seconds, patch.sustain, patch.release_seconds, patch.cutoff_hz,
+        patch.resonance, patch.level_db};
+}
+}
+
+bool Project::trackInstrument(std::uint64_t track, InstrumentPatch& patch) const
+{
+    NylonInstrumentPatch native{};
+    if (!nylon_track_instrument_get(m_handle, track, &native)) return false;
+    patch = instrumentPatch(native);
+    return true;
+}
+
+bool Project::setTrackInstrument(std::uint64_t track, const InstrumentPatch& patch)
+{
+    const auto native = nativeInstrument(patch);
+    return nylon_track_instrument_set(m_handle, track, &native) != 0;
 }
 
 std::vector<TrackDevice> Project::trackDevices(std::uint64_t track) const

@@ -1,4 +1,5 @@
 use nylon::engine::device::{DeviceConfig, DeviceKind};
+use nylon::engine::voice::Patch;
 use nylon::project::{
     AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, Project,
     ProjectError, TrackKind,
@@ -367,6 +368,66 @@ fn mixer_edits_are_validated_and_undoable() {
         project.snapshot().tracks()[0].volume_db(),
         f64::NEG_INFINITY
     );
+}
+
+#[test]
+fn instrument_patches_are_typed_validated_and_undoable() {
+    let mut project = Project::new();
+    project
+        .apply(&[
+            Command::CreateTrack {
+                name: "Lead".into(),
+                kind: TrackKind::Midi,
+            },
+            Command::CreateTrack {
+                name: "Audio".into(),
+                kind: TrackKind::Audio,
+            },
+        ])
+        .unwrap();
+    let snapshot = project.snapshot();
+    let midi = snapshot.tracks()[0].id();
+    let audio = snapshot.tracks()[1].id();
+    let patch = Patch {
+        oscillator_mix: 0.65,
+        oscillator_b_detune_cents: -12.0,
+        sub_level: 0.4,
+        noise_level: 0.08,
+        unison_voices: 4,
+        unison_detune_cents: 18.0,
+        cutoff: 2_400.0,
+        resonance: 1.4,
+        level_db: -9.0,
+        ..Patch::default()
+    };
+    project
+        .apply(&[Command::SetInstrumentPatch { id: midi, patch }])
+        .unwrap();
+    assert_eq!(project.snapshot().tracks()[0].instrument_patch(), patch);
+    assert!(project.undo());
+    assert_eq!(
+        project.snapshot().tracks()[0].instrument_patch(),
+        Patch::default()
+    );
+    assert!(project.redo());
+
+    let before = project.snapshot();
+    let invalid = Patch {
+        unison_voices: 0,
+        ..patch
+    };
+    assert_eq!(
+        project.apply(&[Command::SetInstrumentPatch {
+            id: midi,
+            patch: invalid,
+        }]),
+        Err(ProjectError::InvalidInstrument)
+    );
+    assert_eq!(
+        project.apply(&[Command::SetInstrumentPatch { id: audio, patch }]),
+        Err(ProjectError::InvalidInstrument)
+    );
+    assert_eq!(*project.snapshot(), *before);
 }
 
 #[test]

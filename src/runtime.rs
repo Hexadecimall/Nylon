@@ -901,6 +901,7 @@ fn state_from_snapshot_with_session(
             continue;
         };
         destination.set_enabled(true);
+        destination.set_patch(track.instrument_patch());
         if let Some(session) = sessions[index] {
             let Some(clip) = snapshot.clip_at(index, session.scene) else {
                 continue;
@@ -994,6 +995,7 @@ mod tests {
     use super::*;
     use crate::dsp::limiter::Parameters as LimiterParameters;
     use crate::engine::device::{DeviceConfig, DeviceKind};
+    use crate::engine::voice::Patch;
     use crate::project::{AutomationPoint, Command, MidiNote};
 
     fn midi_project() -> Project {
@@ -1024,13 +1026,24 @@ mod tests {
 
     #[test]
     fn project_mix_state_maps_to_engine_settings() {
-        let project = midi_project();
+        let mut project = midi_project();
+        let track = project.snapshot().tracks()[1].id();
+        let patch = Patch {
+            oscillator_mix: 0.75,
+            unison_voices: 3,
+            cutoff: 1_800.0,
+            ..Patch::default()
+        };
+        project
+            .apply(&[Command::SetInstrumentPatch { id: track, patch }])
+            .unwrap();
         let (settings, score) = state_from_snapshot(&project.snapshot(), true);
         assert_eq!(settings.track_count(), 2);
         assert_eq!(settings.tempo(), 96.0);
         assert!(settings.is_playing());
         assert_eq!(settings.track(1).volume_db, -6.0);
         assert!(score.track(1).unwrap().is_enabled());
+        assert_eq!(score.track(1).unwrap().patch(), patch);
         assert!(!score.track(0).unwrap().is_enabled());
     }
 

@@ -58,6 +58,10 @@ def main():
             assert call("status")["tempo"] == 141
             call("set-track-volume", "0", "-9")
             call("set-track-mute", "0", "on")
+            call("set-instrument", "0", "saw", "square", "0.6", "-7", "0.35", "0.04",
+                 "4", "18", "0.01", "0.2", "0.7", "0.3", "2400", "1.2", "-9")
+            instrument = call("instrument", "0")["instrument"]
+            assert instrument["unisonVoices"] == 4 and instrument["cutoffHz"] == 2400, instrument
             call("create-midi-clip", "0", "0", "4")
             call("add-note", "0", "0", "60", "80", "0.22", "0.5")
             call("quantize-notes", "0", "0", "0.25", "1")

@@ -2,13 +2,16 @@
 
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::compressor::Parameters as CompressorParameters;
+use crate::dsp::env::Settings as EnvelopeSettings;
 use crate::dsp::gate::Parameters as GateParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
+use crate::dsp::osc::Shape;
 use crate::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
     Parameters as SaturatorParameters,
 };
 use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
+use crate::engine::voice::Patch;
 use crate::project::{
     self, ArrangementPlacement, AudioClip, AutomationCurve, AutomationLane, AutomationParameter,
     AutomationPoint, ClipId, Device, DeviceId, MidiClip, MidiNote, Project, Route, RouteId, Scene,
@@ -25,7 +28,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 9;
+const VERSION: u32 = 10;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -181,6 +184,28 @@ impl Encoder {
                     self.bytes(&point.value.to_le_bytes())?;
                     self.bytes(&[point.curve.code()])?;
                 }
+            }
+            let patch = track.instrument_patch;
+            self.bytes(&[
+                shape_code(patch.shape),
+                shape_code(patch.shape_b),
+                patch.unison_voices,
+            ])?;
+            for value in [
+                patch.oscillator_mix,
+                patch.oscillator_b_detune_cents,
+                patch.sub_level,
+                patch.noise_level,
+                patch.unison_detune_cents,
+                patch.envelope.attack,
+                patch.envelope.decay,
+                patch.envelope.sustain,
+                patch.envelope.release,
+                patch.cutoff,
+                patch.resonance,
+                patch.level_db,
+            ] {
+                self.bytes(&value.to_le_bytes())?;
             }
         }
         self.count(snapshot.scenes.len())?;
@@ -465,6 +490,34 @@ impl<'a> Decoder<'a> {
                     automation.push(AutomationLane { parameter, points });
                 }
             }
+            let instrument_patch = if version >= 10 {
+                let [shape_a, shape_b, unison_voices] = self.array()?;
+                let patch = Patch {
+                    shape: shape_from_code(shape_a).ok_or(PersistenceError::InvalidFormat)?,
+                    shape_b: shape_from_code(shape_b).ok_or(PersistenceError::InvalidFormat)?,
+                    unison_voices,
+                    oscillator_mix: f32::from_le_bytes(self.array()?),
+                    oscillator_b_detune_cents: f32::from_le_bytes(self.array()?),
+                    sub_level: f32::from_le_bytes(self.array()?),
+                    noise_level: f32::from_le_bytes(self.array()?),
+                    unison_detune_cents: f32::from_le_bytes(self.array()?),
+                    envelope: EnvelopeSettings {
+                        attack: f32::from_le_bytes(self.array()?),
+                        decay: f32::from_le_bytes(self.array()?),
+                        sustain: f32::from_le_bytes(self.array()?),
+                        release: f32::from_le_bytes(self.array()?),
+                    },
+                    cutoff: f32::from_le_bytes(self.array()?),
+                    resonance: f32::from_le_bytes(self.array()?),
+                    level_db: f32::from_le_bytes(self.array()?),
+                };
+                if !patch.is_valid() {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                patch
+            } else {
+                Patch::default()
+            };
             tracks.push(Track {
                 id: TrackId(id),
                 name: name.into(),
@@ -478,6 +531,7 @@ impl<'a> Decoder<'a> {
                 latency_frames,
                 devices,
                 automation,
+                instrument_patch,
                 session_slots: Vec::new(),
                 arrangement: Vec::new(),
             });
@@ -795,6 +849,25 @@ fn filter_from_code(code: u8) -> Option<FilterKind> {
         5 => Some(FilterKind::Peaking),
         6 => Some(FilterKind::LowShelf),
         7 => Some(FilterKind::HighShelf),
+        _ => None,
+    }
+}
+
+fn shape_code(shape: Shape) -> u8 {
+    match shape {
+        Shape::Sine => 0,
+        Shape::Saw => 1,
+        Shape::Square => 2,
+        Shape::Triangle => 3,
+    }
+}
+
+fn shape_from_code(code: u8) -> Option<Shape> {
+    match code {
+        0 => Some(Shape::Sine),
+        1 => Some(Shape::Saw),
+        2 => Some(Shape::Square),
+        3 => Some(Shape::Triangle),
         _ => None,
     }
 }

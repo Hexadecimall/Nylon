@@ -80,6 +80,26 @@ typedef struct NylonAutomationPoint {
     int curve;
 } NylonAutomationPoint;
 
+/* Subtractive instrument oscillator shapes: 0 sine, 1 saw, 2 square,
+ * 3 triangle. Levels and mix values use 0..1. */
+typedef struct NylonInstrumentPatch {
+    int shape_a;
+    int shape_b;
+    float oscillator_mix;
+    float oscillator_b_detune_cents;
+    float sub_level;
+    float noise_level;
+    unsigned int unison_voices;
+    float unison_detune_cents;
+    float attack_seconds;
+    float decay_seconds;
+    float sustain;
+    float release_seconds;
+    float cutoff_hz;
+    float resonance;
+    float level_db;
+} NylonInstrumentPatch;
+
 /* Allocates a new, empty project. Returns null on allocation failure. */
 void* nylon_project_new(void);
 
@@ -193,6 +213,10 @@ int nylon_track_set_color_index(void* project, unsigned long long index, int col
 unsigned int nylon_track_latency_frames(const void* project, unsigned long long index);
 int nylon_track_set_latency_frames(
     void* project, unsigned long long index, unsigned int frames);
+int nylon_track_instrument_get(
+    const void* project, unsigned long long track, NylonInstrumentPatch* out);
+int nylon_track_instrument_set(
+    void* project, unsigned long long track, const NylonInstrumentPatch* patch);
 
 unsigned long long nylon_track_device_count(
     const void* project, unsigned long long track);

@@ -10,6 +10,7 @@
 #include <QLocalSocket>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -64,6 +65,37 @@ bool byteValue(const QJsonValue& value, std::uint8_t& result)
     return true;
 }
 
+bool parameterValue(const QJsonValue& value, float& result)
+{
+    double parsed = 0.0;
+    if (!numberValue(value, parsed)) return false;
+    result = static_cast<float>(parsed);
+    return std::isfinite(result);
+}
+
+bool oscillatorShapeValue(const QJsonValue& value, nylon::OscillatorShape& shape)
+{
+    if (!value.isString()) return false;
+    const QString text = value.toString();
+    if (text == "sine") shape = nylon::OscillatorShape::Sine;
+    else if (text == "saw") shape = nylon::OscillatorShape::Saw;
+    else if (text == "square") shape = nylon::OscillatorShape::Square;
+    else if (text == "triangle") shape = nylon::OscillatorShape::Triangle;
+    else return false;
+    return true;
+}
+
+QString oscillatorShapeName(nylon::OscillatorShape shape)
+{
+    switch (shape) {
+    case nylon::OscillatorShape::Sine: return "sine";
+    case nylon::OscillatorShape::Saw: return "saw";
+    case nylon::OscillatorShape::Square: return "square";
+    case nylon::OscillatorShape::Triangle: return "triangle";
+    }
+    return "sine";
+}
+
 class ControlHost {
 public:
     bool open(const ServerOptions& options, QString& message)
@@ -93,6 +125,7 @@ public:
         if (command.isEmpty()) return error("The command is missing");
         if (command == "status" && args.isEmpty()) return status();
         if (command == "notes" && args.size() == 2) return notes(args);
+        if (command == "instrument" && args.size() == 1) return instrument(args);
         if (command == "quit" && args.isEmpty()) {
             quit = true;
             return {{"ok", true}};
@@ -151,6 +184,33 @@ public:
             double tempo = 0.0;
             if (!numberValue(args[0], tempo) || !m_project.setTempo(tempo))
                 return error("Invalid tempo");
+            return commitEdit();
+        }
+        if (command == "set-instrument" && args.size() == 16) {
+            std::uint64_t track = 0;
+            std::uint64_t unisonVoices = 0;
+            nylon::InstrumentPatch patch;
+            if (!indexValue(args[0], track)
+                || !oscillatorShapeValue(args[1], patch.shapeA)
+                || !oscillatorShapeValue(args[2], patch.shapeB)
+                || !parameterValue(args[3], patch.oscillatorMix)
+                || !parameterValue(args[4], patch.oscillatorBDetuneCents)
+                || !parameterValue(args[5], patch.subLevel)
+                || !parameterValue(args[6], patch.noiseLevel)
+                || !indexValue(args[7], unisonVoices)
+                || unisonVoices > std::numeric_limits<std::uint32_t>::max()
+                || !parameterValue(args[8], patch.unisonDetuneCents)
+                || !parameterValue(args[9], patch.attackSeconds)
+                || !parameterValue(args[10], patch.decaySeconds)
+                || !parameterValue(args[11], patch.sustain)
+                || !parameterValue(args[12], patch.releaseSeconds)
+                || !parameterValue(args[13], patch.cutoffHz)
+                || !parameterValue(args[14], patch.resonance)
+                || !parameterValue(args[15], patch.levelDb))
+                return error("Invalid instrument patch");
+            patch.unisonVoices = static_cast<std::uint32_t>(unisonVoices);
+            if (!m_project.setTrackInstrument(track, patch))
+                return error("Invalid instrument patch");
             return commitEdit();
         }
         if (command == "create-midi-clip" && args.size() == 3) {
@@ -292,6 +352,27 @@ private:
                 {"startBeats", note.startBeats}, {"lengthBeats", note.lengthBeats}});
         }
         return {{"ok", true}, {"notes", notes}};
+    }
+
+    QJsonObject instrument(const QJsonArray& args)
+    {
+        std::uint64_t track = 0;
+        nylon::InstrumentPatch patch;
+        if (!indexValue(args[0], track) || !m_project.trackInstrument(track, patch))
+            return error("Invalid instrument track");
+        return {{"ok", true},
+            {"instrument",
+                QJsonObject{{"shapeA", oscillatorShapeName(patch.shapeA)},
+                    {"shapeB", oscillatorShapeName(patch.shapeB)},
+                    {"oscillatorMix", patch.oscillatorMix},
+                    {"oscillatorBDetuneCents", patch.oscillatorBDetuneCents},
+                    {"subLevel", patch.subLevel}, {"noiseLevel", patch.noiseLevel},
+                    {"unisonVoices", static_cast<double>(patch.unisonVoices)},
+                    {"unisonDetuneCents", patch.unisonDetuneCents},
+                    {"attackSeconds", patch.attackSeconds},
+                    {"decaySeconds", patch.decaySeconds}, {"sustain", patch.sustain},
+                    {"releaseSeconds", patch.releaseSeconds}, {"cutoffHz", patch.cutoffHz},
+                    {"resonance", patch.resonance}, {"levelDb", patch.levelDb}}}};
     }
 
     QJsonObject audioResult(bool accepted, const QString& operation)

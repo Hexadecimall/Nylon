@@ -51,6 +51,7 @@ nylon-control --endpoint nylon-live locate 16
 nylon-control --endpoint nylon-live create-midi-clip 0 0 4
 nylon-control --endpoint nylon-live add-note 0 0 60 100 0 1
 nylon-control --endpoint nylon-live quantize-notes 0 0 0.25 1
+nylon-control --endpoint nylon-live set-instrument 0 saw square 0.6 -7 0.35 0.04 4 18 0.01 0.2 0.7 0.3 2400 1.2 -9
 nylon-control --endpoint nylon-live launch-clip 0 0 1
 nylon-control --endpoint nylon-live stop-clip 0
 nylon-control --endpoint nylon-live quit

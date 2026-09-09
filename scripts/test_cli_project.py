@@ -42,6 +42,14 @@ def main():
         tracks = call("tracks")["tracks"]
         assert tracks[0]["name"] == "Lead" and tracks[0]["kind"] == "midi", tracks
         assert tracks[1]["name"] == "Take" and tracks[1]["kind"] == "audio", tracks
+        call("set-instrument", "0", "saw", "square", "0.6", "-7", "0.35", "0.04",
+             "4", "18", "0.01", "0.2", "0.7", "0.3", "2400", "1.2", "-9")
+        instrument = call("instrument", "0")["instrument"]
+        assert instrument["shapeA"] == "saw" and instrument["shapeB"] == "square", instrument
+        assert instrument["unisonVoices"] == 4 and instrument["cutoffHz"] == 2400, instrument
+        call("set-instrument", "1", "saw", "square", "0.6", "-7", "0.35", "0.04",
+             "4", "18", "0.01", "0.2", "0.7", "0.3", "2400", "1.2", "-9",
+             succeeds=False)
         call("create-midi-clip", "0", "0", "4")
         call("add-note", "0", "0", "60", "80", "0.22", "0.5")
         call("add-note", "0", "0", "64", "100", "0.81", "0.5")
