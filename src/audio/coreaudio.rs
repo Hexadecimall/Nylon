@@ -13,8 +13,8 @@
 #![cfg(target_os = "macos")]
 
 use super::{
-    AudioError, Backend, BlockTiming, DeviceId, DeviceInfo, Direction, Name, Rates, Renderer,
-    Stream, StreamConfig,
+    AudioError, Backend, BlockTiming, Capturer, DeviceId, DeviceInfo, Direction, InputBackend,
+    Name, Rates, Renderer, Stream, StreamConfig,
 };
 use crate::mixer::MAX_FRAMES;
 use core::ffi::{c_char, c_void};
@@ -78,6 +78,14 @@ struct Buffer {
     channels: u32,
     data_byte_size: u32,
     data: *mut c_void,
+}
+
+/// The head of an `AudioBufferList`, used only to find where its buffers
+/// begin. The real list carries as many buffers as the count says.
+#[repr(C)]
+struct BufferListHeader {
+    count: u32,
+    first: Buffer,
 }
 
 /// `AudioBufferList` with room for the channels a stereo unit provides.
@@ -147,6 +155,7 @@ const ELEMENT_OUTPUT: AudioUnitElement = 0;
 
 const PROPERTY_STREAM_FORMAT: AudioUnitPropertyID = 8;
 const PROPERTY_SET_RENDER_CALLBACK: AudioUnitPropertyID = 23;
+const PROPERTY_SET_INPUT_CALLBACK: AudioUnitPropertyID = 2005;
 const PROPERTY_MAXIMUM_FRAMES: AudioUnitPropertyID = 14;
 const PROPERTY_CURRENT_DEVICE: AudioUnitPropertyID = 2000;
 const PROPERTY_ENABLE_IO: AudioUnitPropertyID = 2003;
@@ -154,6 +163,7 @@ const ELEMENT_INPUT: AudioUnitElement = 1;
 
 const OBJECT_SYSTEM: AudioObjectID = 1;
 const SELECTOR_DEFAULT_OUTPUT_DEVICE: u32 = four_cc(b"dOut");
+const SELECTOR_DEFAULT_INPUT_DEVICE: u32 = four_cc(b"dIn ");
 const SELECTOR_DEVICES: u32 = four_cc(b"dev#");
 const SELECTOR_DEVICE_NAME: u32 = four_cc(b"lnam");
 const SELECTOR_STREAM_CONFIGURATION: u32 = four_cc(b"slay");
@@ -161,12 +171,21 @@ const SELECTOR_NOMINAL_SAMPLE_RATE: u32 = four_cc(b"nsrt");
 const SELECTOR_BUFFER_FRAME_SIZE: u32 = four_cc(b"fsiz");
 const SCOPE_OBJECT_GLOBAL: u32 = four_cc(b"glob");
 const SCOPE_OBJECT_OUTPUT: u32 = four_cc(b"outp");
+const SCOPE_OBJECT_INPUT: u32 = four_cc(b"inpt");
 const ELEMENT_MAIN: u32 = 0;
 
 // SAFETY: These are the platform's audio entry points, declared with the
 // signatures its headers give them. Each call below documents the
 // invariants it upholds.
 unsafe extern "C" {
+    fn AudioUnitRender(
+        unit: AudioUnit,
+        flags: *mut u32,
+        timestamp: *const TimeStamp,
+        bus: u32,
+        frames: u32,
+        buffers: *mut BufferList,
+    ) -> OSStatus;
     fn AudioComponentFindNext(
         in_component: AudioComponent,
         description: *const ComponentDescription,
@@ -260,9 +279,18 @@ impl CoreAudioBackend {
         Self
     }
 
+    fn default_input_id() -> Result<AudioObjectID, AudioError> {
+        Self::default_device_id(SELECTOR_DEFAULT_INPUT_DEVICE)
+    }
+
     fn default_output_id() -> Result<AudioObjectID, AudioError> {
+        Self::default_device_id(SELECTOR_DEFAULT_OUTPUT_DEVICE)
+    }
+
+    /// The system's current default device for one direction.
+    fn default_device_id(selector: u32) -> Result<AudioObjectID, AudioError> {
         let address = PropertyAddress {
-            selector: SELECTOR_DEFAULT_OUTPUT_DEVICE,
+            selector,
             scope: SCOPE_OBJECT_GLOBAL,
             element: ELEMENT_MAIN,
         };
@@ -287,9 +315,15 @@ impl CoreAudioBackend {
 
     /// Output channels the device carries, or zero when it has none.
     fn output_channels(device: AudioObjectID) -> u32 {
+        Self::channels(device, SCOPE_OBJECT_OUTPUT)
+    }
+
+    /// Channels a device carries in one direction. Zero means it carries
+    /// none, which is how an output-only device is told from an input.
+    fn channels(device: AudioObjectID, scope: u32) -> u32 {
         let address = PropertyAddress {
             selector: SELECTOR_STREAM_CONFIGURATION,
-            scope: SCOPE_OBJECT_OUTPUT,
+            scope,
             element: ELEMENT_MAIN,
         };
         let mut size: u32 = 0;
@@ -321,7 +355,11 @@ impl CoreAudioBackend {
         // many `AudioBuffer` values.
         let count = unsafe { ptr::read_unaligned(bytes.as_ptr().cast::<u32>()) };
         let mut channels = 0;
-        let first = size_of::<u32>();
+        // The buffers do not begin straight after the count: the list is a
+        // C structure, so the first one starts at its own alignment. Taking
+        // the count's size instead reads each buffer four bytes early and
+        // sees nothing.
+        let first = core::mem::offset_of!(BufferListHeader, first);
         for index in 0..count as usize {
             let offset = first + index * size_of::<Buffer>();
             if offset + size_of::<Buffer>() > bytes.len() {
@@ -814,6 +852,103 @@ impl Backend for CoreAudioBackend {
     }
 }
 
+/// Shared state the input callback reads.
+struct CaptureShared {
+    // The unit the callback pulls from, which the stream keeps alive.
+    unit: AudioUnit,
+    capturer: *mut dyn Capturer,
+    frames: AtomicU64,
+    dropouts: AtomicU64,
+    // The buffer the unit is asked to fill. It is allocated when the
+    // stream opens, so the callback only writes into it.
+    channels: usize,
+    storage: [[f32; MAX_FRAMES]; 2],
+}
+
+// SAFETY: The state is owned by one stream, which stops the unit before
+// dropping it, so the callback never runs beside the control thread.
+unsafe impl Send for CaptureShared {}
+
+/// Called by the platform when the device has audio to hand over.
+///
+/// # Safety
+///
+/// The platform states the arguments are those it documents. Nothing here
+/// allocates, locks, or blocks.
+unsafe extern "C" fn input_callback(
+    ref_con: *mut c_void,
+    flags: *mut u32,
+    timestamp: *const TimeStamp,
+    bus: u32,
+    frames: u32,
+    _buffers: *mut BufferList,
+) -> OSStatus {
+    if ref_con.is_null() {
+        return NO_ERROR;
+    }
+    // SAFETY: The pointer is the shared state handed to the unit, which
+    // outlives the callback.
+    let shared = unsafe { &mut *ref_con.cast::<CaptureShared>() };
+    let count = frames as usize;
+    if count > MAX_FRAMES {
+        // More than the engine handles. Counting it keeps the gap visible
+        // rather than silently dropping part of a take.
+        shared.dropouts.fetch_add(1, Ordering::Relaxed);
+        return NO_ERROR;
+    }
+
+    // The unit hands over audio only when asked for it, into a list that
+    // points at storage this stream already owns.
+    let mut list = BufferList {
+        count: shared.channels as u32,
+        buffers: [
+            Buffer {
+                channels: 1,
+                data_byte_size: (count * size_of::<f32>()) as u32,
+                data: shared.storage[0].as_mut_ptr().cast(),
+            },
+            Buffer {
+                channels: 1,
+                data_byte_size: (count * size_of::<f32>()) as u32,
+                data: shared.storage[1].as_mut_ptr().cast(),
+            },
+        ],
+    };
+    // SAFETY: The unit is running and the list points at storage large
+    // enough for the frames it was asked for.
+    let status =
+        unsafe { AudioUnitRender(shared.unit, flags, timestamp, bus, frames, &raw mut list) };
+    if status != NO_ERROR {
+        shared.dropouts.fetch_add(1, Ordering::Relaxed);
+        return NO_ERROR;
+    }
+
+    // The channels arrive apart; the capturer takes stereo frames.
+    let mut block = [[0.0_f32; 2]; MAX_FRAMES];
+    // A mono device is heard on both sides rather than only the left.
+    let right = usize::from(shared.channels > 1);
+    for (index, frame) in block[..count].iter_mut().enumerate() {
+        *frame = [shared.storage[0][index], shared.storage[right][index]];
+    }
+    let timing = BlockTiming {
+        frame: shared.frames.load(Ordering::Relaxed),
+        dropouts: shared.dropouts.load(Ordering::Relaxed),
+    };
+    // SAFETY: The capturer is owned by the stream, which stops the unit
+    // before dropping it, so no other reference exists during this call.
+    let capturer = unsafe { &mut *shared.capturer };
+    capturer.capture(&block[..count], timing);
+    shared.frames.fetch_add(count as u64, Ordering::Relaxed);
+    NO_ERROR
+}
+
+/// Stands in for the capturer pointer before the real one is stored.
+struct PlaceholderCapturer;
+
+impl Capturer for PlaceholderCapturer {
+    fn capture(&mut self, _input: &[[f32; 2]], _timing: BlockTiming) {}
+}
+
 /// Stands in for the renderer pointer before the real one is stored.
 struct PlaceholderRenderer;
 
@@ -913,6 +1048,347 @@ impl Drop for CoreAudioStream {
     }
 }
 
+impl InputBackend for CoreAudioBackend {
+    type Capture = CoreAudioCapture;
+
+    fn input_devices(&self, out: &mut [DeviceInfo]) -> Result<usize, AudioError> {
+        let mut ids = Vec::new();
+        Self::all_device_ids(&mut ids)?;
+        let default = Self::default_input_id().unwrap_or(0);
+        let mut written = 0;
+        for id in ids {
+            if written == out.len() {
+                break;
+            }
+            let channels = Self::channels(id, SCOPE_OBJECT_INPUT);
+            if channels == 0 {
+                continue;
+            }
+            let rate = Self::nominal_rate(id);
+            let mut rates = Rates::new();
+            if rate != 0 {
+                let _ = rates.push(rate);
+            }
+            for candidate in super::SUPPORTED_RATES {
+                if candidate != rate {
+                    let _ = rates.push(candidate);
+                }
+            }
+            out[written] = DeviceInfo {
+                id: DeviceId(u64::from(id)),
+                name: Self::device_name(id),
+                direction: Direction::Input,
+                channels: channels.min(u32::from(u16::MAX)) as u16,
+                rates,
+                is_default: id == default,
+            };
+            written += 1;
+        }
+        Ok(written)
+    }
+
+    fn default_input(&self) -> Result<DeviceId, AudioError> {
+        Self::default_input_id().map(|id| DeviceId(u64::from(id)))
+    }
+
+    fn open_input<C: Capturer + 'static>(
+        &self,
+        config: StreamConfig,
+        capturer: C,
+    ) -> Result<Self::Capture, AudioError> {
+        config.validate()?;
+        if config.channels == 0 || config.channels > 2 {
+            return Err(AudioError::Unsupported("channel count"));
+        }
+
+        // A device of zero means whatever the system currently defaults to.
+        let device = if config.device.0 == 0 {
+            Self::default_input_id()?
+        } else {
+            u32::try_from(config.device.0).map_err(|_| AudioError::DeviceMissing)?
+        };
+        let available = Self::channels(device, SCOPE_OBJECT_INPUT);
+        if available == 0 {
+            return Err(AudioError::DeviceMissing);
+        }
+
+        let description = ComponentDescription {
+            component_type: COMPONENT_TYPE_OUTPUT,
+            component_subtype: COMPONENT_SUBTYPE_HAL_OUTPUT,
+            manufacturer: MANUFACTURER_APPLE,
+            flags: 0,
+            flags_mask: 0,
+        };
+        // SAFETY: The description is a valid value of the expected type.
+        let component = unsafe { AudioComponentFindNext(ptr::null_mut(), &description) };
+        if component.is_null() {
+            return Err(AudioError::Host("no input component"));
+        }
+        let mut unit: AudioUnit = ptr::null_mut();
+        // SAFETY: `unit` receives the new instance.
+        let status = unsafe { AudioComponentInstanceNew(component, &mut unit) };
+        if status != NO_ERROR || unit.is_null() {
+            return Err(AudioError::Host("the input unit could not be created"));
+        }
+
+        // From here on the unit must be disposed of on every failure.
+        let taken = usize::from(config.channels).min(available as usize).max(1);
+        let mut stream = CoreAudioCapture {
+            unit,
+            initialized: false,
+            running: false,
+            config,
+            shared: Box::new(CaptureShared {
+                unit,
+                capturer: ptr::null_mut::<PlaceholderCapturer>(),
+                frames: AtomicU64::new(0),
+                dropouts: AtomicU64::new(0),
+                channels: taken,
+                storage: [[0.0; MAX_FRAMES]; 2],
+            }),
+            capturer: None,
+        };
+
+        let mut prepared = capturer;
+        prepared.prepare(config);
+        let boxed: Box<dyn Capturer> = Box::new(prepared);
+        let mut boxed = boxed;
+        stream.shared.capturer = &raw mut *boxed;
+        stream.capturer = Some(boxed);
+
+        // The hardware unit carries both directions; only input is wanted.
+        let enable: u32 = 1;
+        // SAFETY: The property takes one `u32`.
+        let status = unsafe {
+            AudioUnitSetProperty(
+                unit,
+                PROPERTY_ENABLE_IO,
+                SCOPE_INPUT,
+                ELEMENT_INPUT,
+                (&raw const enable).cast(),
+                size_of::<u32>() as u32,
+            )
+        };
+        if status != NO_ERROR {
+            return Err(AudioError::Host("input could not be enabled"));
+        }
+        let disable: u32 = 0;
+        // SAFETY: As above.
+        let status = unsafe {
+            AudioUnitSetProperty(
+                unit,
+                PROPERTY_ENABLE_IO,
+                SCOPE_OUTPUT,
+                ELEMENT_OUTPUT,
+                (&raw const disable).cast(),
+                size_of::<u32>() as u32,
+            )
+        };
+        if status != NO_ERROR {
+            return Err(AudioError::Host("output could not be disabled"));
+        }
+
+        // SAFETY: The property takes one device identifier.
+        let status = unsafe {
+            AudioUnitSetProperty(
+                unit,
+                PROPERTY_CURRENT_DEVICE,
+                SCOPE_GLOBAL,
+                ELEMENT_OUTPUT,
+                (&raw const device).cast(),
+                size_of::<AudioObjectID>() as u32,
+            )
+        };
+        if status != NO_ERROR {
+            return Err(AudioError::DeviceMissing);
+        }
+
+        let granted = Self::negotiate_buffer_size(device, config.block_frames as u32);
+        stream.config.block_frames = (granted as usize).clamp(super::MIN_BLOCK, MAX_FRAMES);
+
+        // The format the unit hands audio over in, on the output side of
+        // its input element.
+        let format = StreamDescription {
+            sample_rate: f64::from(config.sample_rate),
+            format_id: FORMAT_LINEAR_PCM,
+            format_flags: FLAG_IS_FLOAT | FLAG_IS_PACKED | FLAG_IS_NON_INTERLEAVED,
+            bytes_per_packet: size_of::<f32>() as u32,
+            frames_per_packet: 1,
+            bytes_per_frame: size_of::<f32>() as u32,
+            channels_per_frame: taken as u32,
+            bits_per_channel: 32,
+            reserved: 0,
+        };
+        // SAFETY: The property takes a stream description of this size.
+        let status = unsafe {
+            AudioUnitSetProperty(
+                unit,
+                PROPERTY_STREAM_FORMAT,
+                SCOPE_OUTPUT,
+                ELEMENT_INPUT,
+                (&raw const format).cast(),
+                size_of::<StreamDescription>() as u32,
+            )
+        };
+        if status != NO_ERROR {
+            return Err(AudioError::Unsupported("stream format"));
+        }
+
+        // The most the callback will ever be handed, which is what the
+        // storage in the shared state is sized for.
+        let maximum = MAX_FRAMES as u32;
+        // SAFETY: The property takes one `u32`.
+        let status = unsafe {
+            AudioUnitSetProperty(
+                unit,
+                PROPERTY_MAXIMUM_FRAMES,
+                SCOPE_GLOBAL,
+                ELEMENT_OUTPUT,
+                (&raw const maximum).cast(),
+                size_of::<u32>() as u32,
+            )
+        };
+        if status != NO_ERROR {
+            return Err(AudioError::Unsupported("block size"));
+        }
+
+        let callback = RenderCallbackStruct {
+            proc_: Some(input_callback),
+            ref_con: (&raw mut *stream.shared).cast(),
+        };
+        // SAFETY: The property takes a callback structure of this size, and
+        // the reference it carries outlives the unit.
+        let status = unsafe {
+            AudioUnitSetProperty(
+                unit,
+                PROPERTY_SET_INPUT_CALLBACK,
+                SCOPE_GLOBAL,
+                ELEMENT_OUTPUT,
+                (&raw const callback).cast(),
+                size_of::<RenderCallbackStruct>() as u32,
+            )
+        };
+        if status != NO_ERROR {
+            return Err(AudioError::Host("the input callback was refused"));
+        }
+
+        // SAFETY: The unit is configured and not yet running.
+        let status = unsafe { AudioUnitInitialize(unit) };
+        if status != NO_ERROR {
+            return Err(AudioError::Host("the input unit could not start"));
+        }
+        stream.initialized = true;
+
+        // The device may have granted a different rate than was asked for.
+        let mut settled = StreamDescription::default();
+        let mut size = size_of::<StreamDescription>() as u32;
+        // SAFETY: The destination matches the property's type and size.
+        let status = unsafe {
+            AudioUnitGetProperty(
+                unit,
+                PROPERTY_STREAM_FORMAT,
+                SCOPE_OUTPUT,
+                ELEMENT_INPUT,
+                (&raw mut settled).cast(),
+                &mut size,
+            )
+        };
+        if status == NO_ERROR && settled.sample_rate > 0.0 {
+            stream.config.sample_rate = settled.sample_rate as u32;
+        }
+        Ok(stream)
+    }
+}
+
+/// An input stream on the platform's audio system.
+pub struct CoreAudioCapture {
+    unit: AudioUnit,
+    initialized: bool,
+    running: bool,
+    config: StreamConfig,
+    // Boxed so its address is stable: the unit holds a pointer to it.
+    shared: Box<CaptureShared>,
+    // Kept alive for as long as the callback can run.
+    capturer: Option<Box<dyn Capturer>>,
+}
+
+impl CoreAudioCapture {
+    /// Returns the capturer, ending the stream. The unit is stopped first,
+    /// so the callback cannot be running when it is handed over.
+    #[must_use]
+    pub fn into_capturer(mut self) -> Option<Box<dyn Capturer>> {
+        if self.running {
+            let _ = self.stop();
+        }
+        self.capturer.take()
+    }
+}
+
+impl Stream for CoreAudioCapture {
+    fn config(&self) -> StreamConfig {
+        self.config
+    }
+
+    fn start(&mut self) -> Result<(), AudioError> {
+        if self.running {
+            return Err(AudioError::WrongState);
+        }
+        // SAFETY: The unit is initialized and not running.
+        let status = unsafe { AudioOutputUnitStart(self.unit) };
+        if status != NO_ERROR {
+            return Err(AudioError::Host("the input unit refused to start"));
+        }
+        self.running = true;
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), AudioError> {
+        if !self.running {
+            return Err(AudioError::WrongState);
+        }
+        // SAFETY: The unit is running. This returns once the callback has
+        // finished, so the capturer is free afterwards.
+        let status = unsafe { AudioOutputUnitStop(self.unit) };
+        if status != NO_ERROR {
+            return Err(AudioError::Host("the input unit refused to stop"));
+        }
+        self.running = false;
+        Ok(())
+    }
+
+    fn is_running(&self) -> bool {
+        self.running
+    }
+
+    fn frames_rendered(&self) -> u64 {
+        self.shared.frames.load(Ordering::Relaxed)
+    }
+
+    fn dropouts(&self) -> u64 {
+        self.shared.dropouts.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for CoreAudioCapture {
+    fn drop(&mut self) {
+        if self.running {
+            // SAFETY: The unit is running.
+            unsafe { AudioOutputUnitStop(self.unit) };
+            self.running = false;
+        }
+        if self.initialized {
+            // SAFETY: The unit was initialized and is stopped.
+            unsafe { AudioUnitUninitialize(self.unit) };
+            self.initialized = false;
+        }
+        if !self.unit.is_null() {
+            // SAFETY: The instance was created by this type.
+            unsafe { AudioComponentInstanceDispose(self.unit) };
+            self.unit = ptr::null_mut();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -991,6 +1467,15 @@ mod tests {
                     assert!(device.channels > 0);
                     assert!(!device.rates.is_empty());
                 }
+                // A machine that has a default output must list it. This
+                // is what catches an enumeration that reads the device
+                // list wrongly and quietly returns nothing.
+                if let Ok(default) = backend.default_output() {
+                    assert!(
+                        devices[..count].iter().any(|device| device.id == default),
+                        "the default output was not listed among {count} devices"
+                    );
+                }
             }
             Err(error) => {
                 // A machine with no audio system is a valid outcome.
@@ -1046,6 +1531,68 @@ mod tests {
             0,
             "the device asked for oversized blocks"
         );
+    }
+
+    #[test]
+    fn input_devices_are_listed_apart_from_outputs() {
+        let backend = CoreAudioBackend::new();
+        let mut inputs = [device_placeholder(); 8];
+        let count = backend.input_devices(&mut inputs).unwrap_or(0);
+        for device in &inputs[..count] {
+            assert_eq!(device.direction, Direction::Input);
+            assert!(device.channels > 0, "an input with no channels was listed");
+            assert!(!device.name.is_empty());
+        }
+        // A caller with room for one gets one.
+        let mut single = [device_placeholder(); 1];
+        assert_eq!(
+            backend.input_devices(&mut single).unwrap_or(0),
+            count.min(1)
+        );
+        // A machine that has a default input must list it. This is what
+        // catches an enumeration that reads the device list wrongly and
+        // quietly returns nothing.
+        if let Ok(default) = backend.default_input() {
+            assert!(
+                inputs[..count].iter().any(|device| device.id == default),
+                "the default input was not listed among {count} inputs"
+            );
+        }
+    }
+
+    #[test]
+    fn opening_an_input_that_is_not_there_is_refused() {
+        let backend = CoreAudioBackend::new();
+        let config = StreamConfig {
+            device: DeviceId(0xffff_fffe),
+            sample_rate: 48_000,
+            channels: 2,
+            block_frames: 512,
+        };
+        assert!(matches!(
+            backend.open_input(config, SilentCapturer),
+            Err(AudioError::DeviceMissing)
+        ));
+    }
+
+    /// A capturer that keeps nothing, for the paths that never reach a
+    /// device.
+    struct SilentCapturer;
+
+    impl Capturer for SilentCapturer {
+        fn capture(&mut self, _input: &[[f32; 2]], _timing: BlockTiming) {}
+    }
+
+    /// An empty entry for a buffer the host fills.
+    fn device_placeholder() -> DeviceInfo {
+        DeviceInfo {
+            id: DeviceId(0),
+            name: Name::new(),
+            direction: Direction::Input,
+            channels: 0,
+            rates: Rates::new(),
+            is_default: false,
+        }
     }
 
     /// Opening two streams at once must work: one is the main output and
