@@ -4,8 +4,9 @@
 //! stores a deterministic processing order and the delay required on each edge
 //! to align every input at a destination.
 
-pub const MAX_NODES: usize = 256;
-pub const MAX_EDGES: usize = 1024;
+pub const MAX_NODES: usize = crate::mixer::MAX_TRACKS + 1;
+/// Explicit routes plus one implicit master route per track.
+pub const MAX_EDGES: usize = 1_280;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EdgeKind {

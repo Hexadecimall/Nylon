@@ -28,6 +28,10 @@ harness = false
 name = "audio_timeline"
 harness = false
 
+[[bench]]
+name = "routed_playback"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

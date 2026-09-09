@@ -192,6 +192,7 @@ fn the_playback_engine_renders_without_allocating() {
     use nylon::engine::playback::{MixSettings, PlaybackEngine, TrackSettings};
     use nylon::engine::sample::Sample;
     use nylon::engine::timeline::{AudioRegion, AudioTimeline};
+    use nylon::routing::{Edge, EdgeKind, RoutingGraph};
 
     let (mut engine, mut publisher) = PlaybackEngine::new(48_000.0);
     let mut settings = MixSettings::new();
@@ -219,9 +220,25 @@ fn the_playback_engine_renders_without_allocating() {
     assert!(region.set_loop(Some(0..4_096)));
     timeline.add_region(region).unwrap();
     assert!(publisher.publish_audio(timeline));
+    let mut graph = RoutingGraph::new(17).unwrap();
+    for track in 0..16 {
+        graph
+            .add_edge(Edge {
+                source: track,
+                destination: 16,
+                kind: EdgeKind::Main,
+                gain: 1.0,
+            })
+            .unwrap();
+    }
+    let compiled = graph.compile().unwrap();
+    assert!(publisher.publish_routing(&compiled, 16).unwrap());
     let mut output = vec![[0.0_f32; 2]; BLOCK];
     // One block before counting so the settings are taken up.
     engine.render_block(&mut output, &[]);
+    // Prepare another revision so the measured callback also exercises
+    // graph replacement and deferred reclamation.
+    assert!(publisher.publish_routing(&compiled, 16).unwrap());
 
     let operations = measure(|| {
         for index in 0..64 {

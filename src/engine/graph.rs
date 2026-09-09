@@ -2,6 +2,9 @@
 
 use crate::routing::{CompiledRouting, Edge, EdgeKind};
 
+/// Maximum combined delay storage accepted by one graph revision.
+pub const MAX_COMPENSATION_FRAMES: usize = 1_920_000;
+
 #[derive(Clone, Copy, Debug)]
 pub struct NodeInput<'a> {
     pub node: u16,
@@ -81,15 +84,25 @@ impl GraphRenderer {
             return Err(GraphRenderError::BufferSize);
         }
         let mut routes = Vec::with_capacity(compiled.edges().len());
+        let mut compensation_frames = 0_usize;
         for (index, edge) in compiled.edges().iter().copied().enumerate() {
             let delay = compiled
                 .edge_delay(index)
                 .ok_or(GraphRenderError::CompensationCapacity)?;
             let delay =
                 usize::try_from(delay).map_err(|_| GraphRenderError::CompensationCapacity)?;
+            compensation_frames = compensation_frames
+                .checked_add(delay)
+                .filter(|frames| *frames <= MAX_COMPENSATION_FRAMES)
+                .ok_or(GraphRenderError::CompensationCapacity)?;
+            let mut storage = Vec::new();
+            storage
+                .try_reserve_exact(delay)
+                .map_err(|_| GraphRenderError::CompensationCapacity)?;
+            storage.resize(delay, [0.0; 2]);
             routes.push(RouteState {
                 edge,
-                delay: vec![[0.0; 2]; delay],
+                delay: storage,
                 cursor: 0,
             });
         }
@@ -290,5 +303,25 @@ mod tests {
             Err(GraphRenderError::BufferSize)
         );
         assert_eq!(output, [[7.0; 2]; 5]);
+    }
+
+    #[test]
+    fn excessive_compensation_is_rejected_before_allocation() {
+        let mut graph = RoutingGraph::new(3).unwrap();
+        graph.set_node_latency(0, u32::MAX).unwrap();
+        for source in 0..2 {
+            graph
+                .add_edge(Edge {
+                    source,
+                    destination: 2,
+                    kind: EdgeKind::Main,
+                    gain: 1.0,
+                })
+                .unwrap();
+        }
+        assert!(matches!(
+            GraphRenderer::new(&graph.compile().unwrap(), 4),
+            Err(GraphRenderError::CompensationCapacity)
+        ));
     }
 }

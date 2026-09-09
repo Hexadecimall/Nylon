@@ -10,7 +10,7 @@ use crate::engine::playback::{MAX_INSTRUMENTS, PlaybackEngine, Score};
 use crate::engine::schedule::ScheduledNote;
 use crate::media::{MediaError, timeline_from_project};
 use crate::project::Project;
-use crate::runtime::state_from_snapshot;
+use crate::runtime::{playback_routing, state_from_snapshot};
 use crate::wave::{Format, WaveError, WaveWriter};
 use std::io::{Seek, Write};
 
@@ -173,6 +173,19 @@ pub fn render_wave<W: Write + Seek>(
             "initial media could not be published",
         )));
     }
+    let (routing, output_node) = playback_routing(&snapshot).map_err(|_| {
+        BounceError::Audio(AudioError::Host("project routing could not be compiled"))
+    })?;
+    if !publisher
+        .publish_routing(&routing, output_node)
+        .map_err(|_| {
+            BounceError::Audio(AudioError::Host("project routing could not be prepared"))
+        })?
+    {
+        return Err(BounceError::Audio(AudioError::Host(
+            "initial routing could not be published",
+        )));
+    }
     let backend = OfflineBackend::new();
     let mut stream = backend.open_output(config, engine)?;
     stream.start()?;
@@ -300,6 +313,54 @@ mod tests {
             .into_inner()
         };
         assert_eq!(render(), render());
+    }
+
+    #[test]
+    fn project_routing_changes_the_offline_mix() {
+        let direct = project_with_note();
+        let direct_peak = render_wave(
+            &direct,
+            Cursor::new(Vec::new()),
+            Options::stereo(0.25, 48_000),
+        )
+        .unwrap()
+        .1
+        .peak_left;
+
+        let mut routed = project_with_note();
+        routed
+            .apply(&[Command::CreateTrack {
+                name: "Bus".into(),
+                kind: TrackKind::Return,
+            }])
+            .unwrap();
+        let snapshot = routed.snapshot();
+        let source = snapshot.tracks()[0].id();
+        let bus = snapshot.tracks()[1].id();
+        routed
+            .apply(&[
+                Command::SetTrackVolume {
+                    id: bus,
+                    db: -6.020_6,
+                },
+                Command::CreateRoute {
+                    source,
+                    destination: bus,
+                    kind: crate::routing::EdgeKind::Main,
+                    gain: 1.0,
+                },
+            ])
+            .unwrap();
+        let routed_peak = render_wave(
+            &routed,
+            Cursor::new(Vec::new()),
+            Options::stereo(0.25, 48_000),
+        )
+        .unwrap()
+        .1
+        .peak_left;
+
+        assert!((routed_peak / direct_peak - 0.5).abs() < 0.01);
     }
 
     #[test]

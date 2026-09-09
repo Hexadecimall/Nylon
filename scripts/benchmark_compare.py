@@ -21,6 +21,7 @@ BENCHMARKS = (
     ("render", "render_ns_per_block"),
     ("mixer", "mixer_ns_per_block"),
     ("audio_timeline", "audio_timeline_ns_per_block"),
+    ("routed_playback", "routed_playback_ns_per_block"),
 )
 THRESHOLD = 1.05
 SAMPLES = 21

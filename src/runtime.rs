@@ -11,6 +11,7 @@ use crate::engine::playback::{
 use crate::engine::schedule::ScheduledNote;
 use crate::media::timeline_from_project;
 use crate::project::{Project, Snapshot, TrackKind};
+use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
 
 #[cfg(target_os = "linux")]
 use crate::audio::alsa::{AlsaBackend, AlsaStream};
@@ -107,12 +108,17 @@ impl AudioRuntime {
         config.validate()?;
         let timeline = timeline_from_project(project)
             .map_err(|_| AudioError::Host("project media could not be loaded"))?;
+        let (routing, output_node) = playback_routing(&project.snapshot())
+            .map_err(|_| AudioError::Host("project routing could not be compiled"))?;
         let (engine, mut publisher) = PlaybackEngine::new(f64::from(sample_rate));
         let playing = false;
         (self.settings, self.score) = state_from_snapshot(&project.snapshot(), playing);
         if !publisher.publish(&self.settings)
             || !publisher.publish_score(&self.score)
             || !publisher.publish_audio(timeline)
+            || !publisher
+                .publish_routing(&routing, output_node)
+                .map_err(|_| AudioError::Host("project routing could not be prepared"))?
         {
             return Err(AudioError::Host("initial state could not be published"));
         }
@@ -199,6 +205,9 @@ impl AudioRuntime {
         let Ok(timeline) = timeline_from_project(project) else {
             return false;
         };
+        let Ok((routing, output_node)) = playback_routing(&project.snapshot()) else {
+            return false;
+        };
         let playing = self.settings.is_playing();
         (self.settings, self.score) = state_from_snapshot(&project.snapshot(), playing);
         self.dirty_settings = true;
@@ -208,7 +217,12 @@ impl AudioRuntime {
             .publisher
             .as_mut()
             .is_some_and(|publisher| publisher.publish_audio(timeline));
-        state_sent && audio_sent
+        let routing_sent = self.publisher.as_mut().is_some_and(|publisher| {
+            publisher
+                .publish_routing(&routing, output_node)
+                .unwrap_or(false)
+        });
+        state_sent && audio_sent && routing_sent
     }
 
     /// Starts the musical transport.
@@ -288,6 +302,50 @@ impl AudioRuntime {
         }
         accepted
     }
+}
+
+pub(crate) fn playback_routing(
+    snapshot: &Snapshot,
+) -> Result<(CompiledRouting, u16), RoutingError> {
+    let track_count = snapshot.tracks().len();
+    let output_node = u16::try_from(track_count).map_err(|_| RoutingError::NodeCapacity)?;
+    let mut graph = RoutingGraph::new(track_count + 1)?;
+    for (index, track) in snapshot.tracks().iter().enumerate() {
+        graph.set_node_latency(index as u16, track.latency_frames())?;
+    }
+    for route in snapshot.routes() {
+        let source = snapshot
+            .tracks()
+            .iter()
+            .position(|track| track.id() == route.source())
+            .ok_or(RoutingError::InvalidNode)?;
+        let destination = snapshot
+            .tracks()
+            .iter()
+            .position(|track| track.id() == route.destination())
+            .ok_or(RoutingError::InvalidNode)?;
+        graph.add_edge(Edge {
+            source: source as u16,
+            destination: destination as u16,
+            kind: route.kind(),
+            gain: route.gain(),
+        })?;
+    }
+    for (index, track) in snapshot.tracks().iter().enumerate() {
+        let has_main_route = snapshot
+            .routes()
+            .iter()
+            .any(|route| route.source() == track.id() && route.kind() == EdgeKind::Main);
+        if !has_main_route {
+            graph.add_edge(Edge {
+                source: index as u16,
+                destination: output_node,
+                kind: EdgeKind::Main,
+                gain: 1.0,
+            })?;
+        }
+    }
+    Ok((graph.compile()?, output_node))
 }
 
 /// Lists output devices available from the platform backend.
@@ -459,6 +517,47 @@ mod tests {
         assert_eq!(settings.track(1).volume_db, -6.0);
         assert!(score.track(1).unwrap().is_enabled());
         assert!(!score.track(0).unwrap().is_enabled());
+    }
+
+    #[test]
+    fn project_routes_compile_with_an_explicit_master_bus() {
+        let mut project = midi_project();
+        let snapshot = project.snapshot();
+        let audio = snapshot.tracks()[0].id();
+        let keys = snapshot.tracks()[1].id();
+        project
+            .apply(&[
+                Command::SetTrackLatency {
+                    id: audio,
+                    frames: 192,
+                },
+                Command::CreateRoute {
+                    source: audio,
+                    destination: keys,
+                    kind: EdgeKind::Main,
+                    gain: 0.75,
+                },
+            ])
+            .unwrap();
+
+        let (compiled, output) = playback_routing(&project.snapshot()).unwrap();
+        assert_eq!(output, 2);
+        assert!(compiled.edges().iter().any(|edge| {
+            edge.source == 0
+                && edge.destination == 1
+                && edge.kind == EdgeKind::Main
+                && edge.gain == 0.75
+        }));
+        assert!(compiled.edges().iter().any(|edge| {
+            edge.source == 1 && edge.destination == output && edge.kind == EdgeKind::Main
+        }));
+        assert!(
+            !compiled
+                .edges()
+                .iter()
+                .any(|edge| edge.source == 0 && edge.destination == output)
+        );
+        assert_eq!(compiled.output_latency(output), Some(192));
     }
 
     #[test]

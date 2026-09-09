@@ -374,7 +374,7 @@ impl<'a> Decoder<'a> {
         let mut routes = Vec::new();
         if version >= 4 {
             let route_count = self.count()?;
-            if route_count > crate::routing::MAX_EDGES {
+            if route_count > crate::project::MAX_PROJECT_ROUTES {
                 return Err(PersistenceError::InvalidFormat);
             }
             for _ in 0..route_count {

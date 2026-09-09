@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
 
+/// Largest number of routes stored in one project snapshot.
+pub const MAX_PROJECT_ROUTES: usize = 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrackId(pub(crate) u64);
 
@@ -632,7 +635,7 @@ impl Project {
                     kind,
                     gain,
                 } => {
-                    if snapshot.routes.len() == crate::routing::MAX_EDGES
+                    if snapshot.routes.len() == MAX_PROJECT_ROUTES
                         || !gain.is_finite()
                         || !(0.0..=4.0).contains(gain)
                         || snapshot.routes.iter().any(|route| {

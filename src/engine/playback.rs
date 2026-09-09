@@ -3,15 +3,15 @@
 //! [`PlaybackEngine`] owns the mixer and the transport and implements
 //! [`Renderer`](crate::audio::Renderer), so the same object feeds a device
 //! stream and an offline bounce. It never reads the project model
-//! directly: the control thread publishes a [`MixSettings`] snapshot
-//! through a [`Publisher`], and the engine picks it up at a block
-//! boundary. Nothing on this path allocates, locks, or blocks.
+//! directly: the control thread publishes mixer, timeline, score, and
+//! routing revisions through a [`Publisher`], and the engine picks them up
+//! at a block boundary. Nothing on this path allocates, locks, or blocks.
 //!
-//! MIDI tracks currently drive the built-in polyphonic instrument. Audio
-//! sample playback is provided separately and joins the timeline in the
-//! next graph layer.
+//! MIDI tracks drive the built-in polyphonic instrument. Audio regions and
+//! instrument output enter the same latency-compensated routing graph.
 
 use crate::audio::{BlockTiming, Renderer, StreamConfig};
+use crate::engine::graph::{GraphRenderError, GraphRenderer, NodeInput};
 use crate::engine::schedule::{
     MAX_NOTE_EVENTS, NoteAction, NoteEvent, ScheduledNote, Span, schedule_block, sort_notes,
 };
@@ -21,6 +21,7 @@ use crate::exchange::{AudioSlot, ControlSlot, exchange};
 use crate::latest::{Reader, Writer, latest};
 use crate::mixer::{Levels, MASTER, MAX_TRACKS, MixEvent, Mixer};
 use crate::mixer::{MAX_FRAMES, TrackInput};
+use crate::routing::CompiledRouting;
 use crate::transport::{LoopRange, Transport};
 
 /// Tracks that can carry an instrument. A project may hold more tracks
@@ -387,6 +388,7 @@ pub struct Publisher {
     settings: Writer<MixSettings>,
     score: ControlSlot<Box<Score>>,
     audio: ControlSlot<Box<AudioTimeline>>,
+    routing: ControlSlot<Option<Box<PublishedRouting>>>,
     state: Reader<PlaybackState>,
 }
 
@@ -423,6 +425,26 @@ impl Publisher {
         while self.audio.reclaim().is_some() {}
         self.audio.publish(Box::new(timeline)).is_ok()
     }
+
+    /// Builds and transfers a routing revision to the engine.
+    ///
+    /// Construction and allocation happen on the control thread. The old
+    /// revision returns here for destruction after the callback swaps it.
+    pub fn publish_routing(
+        &mut self,
+        compiled: &CompiledRouting,
+        output_node: u16,
+    ) -> Result<bool, GraphRenderError> {
+        if compiled.output_latency(output_node).is_none() {
+            return Err(GraphRenderError::InvalidNode);
+        }
+        while self.routing.reclaim().is_some() {}
+        let routing = PublishedRouting {
+            renderer: GraphRenderer::new(compiled, MAX_FRAMES)?,
+            output_node,
+        };
+        Ok(self.routing.publish(Some(Box::new(routing))).is_ok())
+    }
     // back on the audio thread
 
     /// Reads whatever the engine last reported. Repeats the previous
@@ -430,6 +452,11 @@ impl Publisher {
     pub fn state(&mut self) -> PlaybackState {
         *self.state.current()
     }
+}
+
+struct PublishedRouting {
+    renderer: GraphRenderer,
+    output_node: u16,
 }
 
 // off the audio thread
@@ -455,6 +482,7 @@ pub struct PlaybackEngine {
     settings: Reader<MixSettings>,
     score: AudioSlot<Box<Score>>,
     audio: AudioSlot<Box<AudioTimeline>>,
+    routing: AudioSlot<Option<Box<PublishedRouting>>>,
     state: Writer<PlaybackState>,
     // Settings currently in force, kept so they can be read back.
     applied: MixSettings,
@@ -485,6 +513,7 @@ impl PlaybackEngine {
         let (settings_control, settings_audio) = latest(MixSettings::new());
         let (score_control, score_audio) = exchange(Score::boxed());
         let (audio_control, audio_audio) = exchange(Box::new(AudioTimeline::new()));
+        let (routing_control, routing_audio) = exchange(None);
         let (state_writer, state_reader) = latest(PlaybackState::default());
         let engine = Self {
             mixer: Mixer::new(0, rate as f32),
@@ -492,6 +521,7 @@ impl PlaybackEngine {
             settings: settings_audio,
             score: score_audio,
             audio: audio_audio,
+            routing: routing_audio,
             state: state_writer,
             applied: MixSettings::new(),
             applied_score: Score::boxed(),
@@ -504,6 +534,7 @@ impl PlaybackEngine {
             settings: settings_control,
             score: score_control,
             audio: audio_control,
+            routing: routing_control,
             state: state_reader,
         };
         (engine, publisher)
@@ -552,6 +583,12 @@ impl PlaybackEngine {
     /// on this thread.
     fn take_audio(&mut self) {
         self.audio.apply_pending();
+    }
+
+    /// Takes a prepared routing revision without releasing its predecessor
+    /// on this thread.
+    fn take_routing(&mut self) {
+        self.routing.apply_pending();
     }
 
     /// Takes any published settings and applies them to the mixer and the
@@ -668,12 +705,14 @@ impl PlaybackEngine {
     /// Mixes one block into `output`, advancing the transport.
     ///
     /// Instrument tracks play the notes the published score gives them,
-    /// each into its own buffer, and the mixer sums those through the
-    /// strips. `events` land on the sample they name.
+    /// each into its own buffer. A published graph routes those buffers;
+    /// the direct mixer remains the fallback. `events` land on the sample
+    /// they name.
     pub fn render_block(&mut self, output: &mut [[f32; 2]], events: &[MixEvent]) {
         self.take_settings();
         self.take_score();
         self.take_audio();
+        self.take_routing();
         let frames = output.len().min(MAX_FRAMES);
 
         // The span this block covers, taken before the transport moves so
@@ -699,6 +738,23 @@ impl PlaybackEngine {
                 .render_track(index, span, &mut buffer[..frames]);
         }
 
+        if self.routing.current().is_some() {
+            self.render_routed(output, events, frames, track_count);
+        } else {
+            self.render_direct(output, events, frames, track_count);
+        }
+        output[frames..].fill([0.0; 2]);
+        self.transport.advance(frames);
+        self.report();
+    }
+
+    fn render_direct(
+        &mut self,
+        output: &mut [[f32; 2]],
+        events: &[MixEvent],
+        frames: usize,
+        track_count: usize,
+    ) {
         // Borrowing the buffers and the mixer at once needs the fields
         // apart, since both live on this value.
         let Self {
@@ -722,8 +778,83 @@ impl PlaybackEngine {
             // whatever the device left in the buffer.
             output.fill([0.0, 0.0]);
         }
-        self.transport.advance(frames);
-        self.report();
+    }
+
+    fn render_routed(
+        &mut self,
+        output: &mut [[f32; 2]],
+        events: &[MixEvent],
+        frames: usize,
+        track_count: usize,
+    ) {
+        if self.mixer.validate_events(frames, events).is_err() {
+            output.fill([0.0; 2]);
+            return;
+        }
+        let mut inputs = [NodeInput {
+            node: 0,
+            samples: &[],
+        }; MAX_TRACKS];
+        for (index, buffer) in self.track_audio.iter().take(track_count).enumerate() {
+            inputs[index] = NodeInput {
+                node: index as u16,
+                samples: &buffer[..frames],
+            };
+        }
+
+        let mut start = 0;
+        let mut cursor = 0;
+        loop {
+            let event_start = cursor;
+            while cursor < events.len() && events[cursor].offset <= start {
+                cursor += 1;
+            }
+            self.mixer.apply_events(&events[event_start..cursor]);
+            if start >= frames {
+                break;
+            }
+            let end = events.get(cursor).map_or(frames, |event| event.offset);
+            let Self { mixer, routing, .. } = self;
+            let Some(routing) = routing.current_mut().as_mut() else {
+                output[start..end].fill([0.0; 2]);
+                return;
+            };
+            let output_node = routing.output_node;
+            let mut span_inputs = [NodeInput {
+                node: 0,
+                samples: &[],
+            }; MAX_TRACKS];
+            for (destination, source) in span_inputs[..track_count]
+                .iter_mut()
+                .zip(&inputs[..track_count])
+            {
+                *destination = NodeInput {
+                    node: source.node,
+                    samples: &source.samples[start..end],
+                };
+            }
+            if routing
+                .renderer
+                .render(
+                    &span_inputs[..track_count],
+                    output_node,
+                    &mut output[start..end],
+                    |node, main, _, pre, post| {
+                        pre.copy_from_slice(main);
+                        if node == output_node {
+                            mixer.process_master(main, post);
+                        } else {
+                            mixer.process_track(node, main, post);
+                        }
+                    },
+                )
+                .is_err()
+            {
+                output[start..].fill([0.0; 2]);
+                return;
+            }
+            start = end;
+        }
     }
 
     /// The instrument on a track, for a caller driving the engine
@@ -909,6 +1040,67 @@ mod tests {
         }];
         engine.render_block(&mut output, &events);
         assert!((engine.mixer().volume_db(1) + 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_published_routing_graph_drives_the_live_mix() {
+        use crate::engine::sample::Sample;
+        use crate::engine::timeline::{AudioRegion, AudioTimeline};
+        use crate::routing::{Edge, EdgeKind, RoutingGraph};
+
+        let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
+        let mut settings = playing_settings(2);
+        settings.set_track(
+            1,
+            TrackSettings {
+                volume_db: -6.020_6,
+                ..TrackSettings::default()
+            },
+        );
+        assert!(publisher.publish(&settings));
+
+        let mut graph = RoutingGraph::new(3).unwrap();
+        graph
+            .add_edge(Edge {
+                source: 0,
+                destination: 1,
+                kind: EdgeKind::Main,
+                gain: 0.5,
+            })
+            .unwrap();
+        graph
+            .add_edge(Edge {
+                source: 1,
+                destination: 2,
+                kind: EdgeKind::Main,
+                gain: 1.0,
+            })
+            .unwrap();
+        assert_eq!(
+            publisher.publish_routing(&graph.compile().unwrap(), 9),
+            Err(GraphRenderError::InvalidNode)
+        );
+        assert!(
+            publisher
+                .publish_routing(&graph.compile().unwrap(), 2)
+                .unwrap()
+        );
+
+        let mut timeline = AudioTimeline::new();
+        let media = timeline
+            .add_sample(Sample::new(48_000, vec![[0.4, -0.4]; 512]).unwrap())
+            .unwrap();
+        timeline
+            .add_region(AudioRegion::new(media, 0, 0.0, 1.0, 0.0, 512.0).unwrap())
+            .unwrap();
+        assert!(publisher.publish_audio(timeline));
+
+        let mut output = [[0.0_f32; 2]; 64];
+        engine.render_block(&mut output, &[]);
+        for frame in output {
+            assert!((frame[0] - 0.1).abs() < 1e-4);
+            assert!((frame[1] + 0.1).abs() < 1e-4);
+        }
     }
 
     #[test]

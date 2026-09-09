@@ -406,39 +406,7 @@ impl Mixer {
                 return Err(MixError::BufferSize);
             }
         }
-        let mut previous = 0;
-        for event in events {
-            if event.offset > frames {
-                return Err(MixError::EventOffset);
-            }
-            if event.offset < previous {
-                return Err(MixError::EventOrder);
-            }
-            previous = event.offset;
-            if event.track != MASTER && usize::from(event.track) >= self.track_count {
-                return Err(MixError::EventTrack);
-            }
-            if !event.value.is_finite() {
-                return Err(MixError::EventValue);
-            }
-            match event.parameter {
-                Parameter::Volume => {
-                    if event.value > MAX_VOLUME_DB {
-                        return Err(MixError::EventValue);
-                    }
-                }
-                Parameter::Pan => {
-                    if !(-1.0..=1.0).contains(&event.value) {
-                        return Err(MixError::EventValue);
-                    }
-                }
-                Parameter::Mute | Parameter::Solo => {
-                    if event.track == MASTER && event.parameter == Parameter::Solo {
-                        return Err(MixError::EventTrack);
-                    }
-                }
-            }
-        }
+        self.validate_events(frames, events)?;
 
         output.fill([0.0, 0.0]);
         let mut start = 0;
@@ -461,6 +429,106 @@ impl Mixer {
             start = end;
         }
         Ok(())
+    }
+
+    /// Validates automation before a routed render changes any state.
+    pub(crate) fn validate_events(
+        &self,
+        frames: usize,
+        events: &[MixEvent],
+    ) -> Result<(), MixError> {
+        if events.len() > MAX_EVENTS {
+            return Err(MixError::EventCapacity);
+        }
+        let mut previous = 0;
+        for event in events {
+            if event.offset > frames {
+                return Err(MixError::EventOffset);
+            }
+            if event.offset < previous {
+                return Err(MixError::EventOrder);
+            }
+            previous = event.offset;
+            if event.track != MASTER && usize::from(event.track) >= self.track_count {
+                return Err(MixError::EventTrack);
+            }
+            if !event.value.is_finite() {
+                return Err(MixError::EventValue);
+            }
+            match event.parameter {
+                Parameter::Volume if event.value > MAX_VOLUME_DB => {
+                    return Err(MixError::EventValue);
+                }
+                Parameter::Pan if !(-1.0..=1.0).contains(&event.value) => {
+                    return Err(MixError::EventValue);
+                }
+                Parameter::Solo if event.track == MASTER => return Err(MixError::EventTrack),
+                Parameter::Volume | Parameter::Pan | Parameter::Mute | Parameter::Solo => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies every event at one sub-block boundary.
+    pub(crate) fn apply_events(&mut self, events: &[MixEvent]) {
+        for event in events {
+            self.apply(*event);
+        }
+    }
+
+    /// Processes one routed track without applying the master strip.
+    pub(crate) fn process_track(
+        &mut self,
+        track: u16,
+        input: &[[f32; 2]],
+        output: &mut [[f32; 2]],
+    ) {
+        if input.len() != output.len() {
+            output.fill([0.0; 2]);
+            return;
+        }
+        let any_solo = self.any_solo;
+        let Some(strip) = self
+            .strips
+            .get_mut(usize::from(track))
+            .filter(|_| usize::from(track) < self.track_count)
+        else {
+            output.fill([0.0; 2]);
+            return;
+        };
+        strip.gain.set_target(strip.target_gain(any_solo));
+        strip.pan.set_target(strip.pan_position);
+        for (source, destination) in input.iter().zip(output) {
+            let gain = strip.gain.process();
+            let gains = strip.pan_gains();
+            *destination = [
+                source[0] * gain * gains.left,
+                source[1] * gain * gains.right,
+            ];
+            strip.meter_left.push(destination[0]);
+            strip.meter_right.push(destination[1]);
+        }
+    }
+
+    /// Processes the master strip for the final routed bus.
+    pub(crate) fn process_master(&mut self, input: &[[f32; 2]], output: &mut [[f32; 2]]) {
+        if input.len() != output.len() {
+            output.fill([0.0; 2]);
+            return;
+        }
+        let master = &mut self.master;
+        master.gain.set_target(master.target_gain(false));
+        master.pan.set_target(master.pan_position);
+        for (source, destination) in input.iter().zip(output) {
+            let gain = master.gain.process();
+            let gains = master.pan_gains();
+            *destination = [
+                source[0] * gain * gains.left,
+                source[1] * gain * gains.right,
+            ];
+            master.meter_left.push(destination[0]);
+            master.meter_right.push(destination[1]);
+        }
     }
 
     /// Mixes one span of the block, exclusive of `end`.
