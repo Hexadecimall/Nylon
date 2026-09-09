@@ -75,8 +75,9 @@ carries the core library and the C header directory.
 project, opens stopped, and creates one undoable audio clip when finished.
 `nylon::ClapInstance` exposes plugin activation, parameter metadata and current
 values, reported latency, and stereo processing. A caller can pass a bounded,
-sample-ordered array of parameter events to processing without allocating in
-the binding. Production playback places each instance in a separate worker
+sample-ordered array of parameter and note events to processing without
+allocating in the binding. Note events retain their identifier, port, channel,
+key, velocity, and exact frame offset. Production playback places each instance in a separate worker
 process so a plugin fault does not terminate the controlling process. State
 save returns an owned opaque byte buffer in C and a byte vector in C++. Loading
 restores the same opaque data with a 256 MiB upper bound.

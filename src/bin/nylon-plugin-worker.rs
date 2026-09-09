@@ -1,10 +1,12 @@
-use nylon::plugin::clap::{Instance, MAX_PARAMETER_EVENTS, MAX_STATE_BYTES, ParameterEvent};
+use nylon::plugin::clap::{
+    Instance, MAX_NOTE_EVENTS, MAX_PARAMETER_EVENTS, MAX_STATE_BYTES, NoteEvent, ParameterEvent,
+};
 use nylon::wave::{Format, SampleFormat, WaveWriter, read};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-const HEADER: [u8; 8] = *b"NYWORK3\0";
+const HEADER: [u8; 8] = *b"NYWORK4\0";
 const MAX_BLOCK_FRAMES: usize = 8_192;
 const SAVE_STATE: u32 = u32::MAX;
 const LOAD_STATE: u32 = u32::MAX - 1;
@@ -188,6 +190,12 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
     output
         .write_all(&(parameters.len() as u32).to_le_bytes())
         .map_err(|_| "Worker output failed")?;
+    output
+        .write_all(&instance.input_audio_ports().to_le_bytes())
+        .map_err(|_| "Worker output failed")?;
+    output
+        .write_all(&instance.input_note_ports().to_le_bytes())
+        .map_err(|_| "Worker output failed")?;
     for parameter in parameters {
         let name = parameter.name.as_bytes();
         let module = parameter.module.as_bytes();
@@ -214,6 +222,7 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
     let mut output_left = vec![0.0; max_frames];
     let mut output_right = vec![0.0; max_frames];
     let mut parameter_events = Vec::with_capacity(MAX_PARAMETER_EVENTS);
+    let mut note_events = Vec::with_capacity(MAX_NOTE_EVENTS);
     loop {
         let mut count = [0; 4];
         input
@@ -268,6 +277,14 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
         if event_count > MAX_PARAMETER_EVENTS {
             return Err("Parameter event count exceeds the configured limit");
         }
+        let mut note_event_count = [0; 4];
+        input
+            .read_exact(&mut note_event_count)
+            .map_err(|_| "Note event count is missing")?;
+        let note_event_count = u32::from_le_bytes(note_event_count) as usize;
+        if note_event_count > MAX_NOTE_EVENTS {
+            return Err("Note event count exceeds the configured limit");
+        }
         parameter_events.clear();
         for _ in 0..event_count {
             let mut event = [0; 16];
@@ -280,6 +297,22 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
                 value: f64::from_le_bytes(event[8..16].try_into().unwrap()),
             });
         }
+        note_events.clear();
+        for _ in 0..note_event_count {
+            let mut event = [0; 26];
+            input
+                .read_exact(&mut event)
+                .map_err(|_| "Note event is truncated")?;
+            note_events.push(NoteEvent {
+                sample_offset: u32::from_le_bytes(event[0..4].try_into().unwrap()),
+                kind: u32::from_le_bytes(event[4..8].try_into().unwrap()),
+                note_id: i32::from_le_bytes(event[8..12].try_into().unwrap()),
+                port_index: i16::from_le_bytes(event[12..14].try_into().unwrap()),
+                channel: i16::from_le_bytes(event[14..16].try_into().unwrap()),
+                key: i16::from_le_bytes(event[16..18].try_into().unwrap()),
+                velocity: f64::from_le_bytes(event[18..26].try_into().unwrap()),
+            });
+        }
         let byte_count = frames.checked_mul(8).ok_or("Audio block is too large")?;
         input
             .read_exact(&mut bytes[..byte_count])
@@ -290,12 +323,15 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
             input_right[frame] =
                 f32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap());
         }
+        let plugin_input = (instance.input_audio_ports() != 0)
+            .then_some((&input_left[..frames], &input_right[..frames]));
         instance
-            .process_stereo_with_events(
-                Some((&input_left[..frames], &input_right[..frames])),
+            .process_stereo_with_all_events(
+                plugin_input,
                 &mut output_left[..frames],
                 &mut output_right[..frames],
                 &parameter_events,
+                &note_events,
             )
             .map_err(|_| "Plugin processing failed")?;
         for frame in 0..frames {

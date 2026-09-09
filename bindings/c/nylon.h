@@ -80,6 +80,17 @@ typedef struct NylonClapParameterEvent {
     double value;
 } NylonClapParameterEvent;
 
+/* Note event kinds: 0 on, 1 off, 2 choke. */
+typedef struct NylonClapNoteEvent {
+    unsigned int sample_offset;
+    unsigned int kind;
+    int note_id;
+    short port_index;
+    short channel;
+    short key;
+    double velocity;
+} NylonClapNoteEvent;
+
 typedef struct NylonClapParameterInfo {
     unsigned int identifier;
     unsigned int flags;
@@ -411,7 +422,8 @@ unsigned long long nylon_plugin_catalog_descriptor_feature(const void* catalog,
  * workers. Input pointers may both be null for instruments. Non-null audio
  * regions contain `frames` values and may not overlap. Request bits are:
  * restart=1, process=2, callback=4, parameter rescan=8, parameter clear=16,
- * parameter flush=32, latency change=64, state dirty=128. */
+ * parameter flush=32, latency change=64, state dirty=128,
+ * note port change=256. */
 void* nylon_clap_instance_open(const char* path, const char* identifier);
 void nylon_clap_instance_free(void* instance);
 int nylon_clap_instance_activate(void* instance, double sample_rate,
@@ -423,6 +435,14 @@ int nylon_clap_instance_process_stereo_events(void* instance,
     const float* input_left, const float* input_right,
     float* output_left, float* output_right, unsigned int frames,
     const NylonClapParameterEvent* events, unsigned int event_count);
+int nylon_clap_instance_process_stereo_all_events(void* instance,
+    const float* input_left, const float* input_right,
+    float* output_left, float* output_right, unsigned int frames,
+    const NylonClapParameterEvent* parameter_events,
+    unsigned int parameter_event_count,
+    const NylonClapNoteEvent* note_events, unsigned int note_event_count);
+unsigned int nylon_clap_instance_input_note_ports(const void* instance);
+unsigned int nylon_clap_instance_input_audio_ports(const void* instance);
 unsigned long long nylon_clap_instance_parameter_count(const void* instance);
 int nylon_clap_instance_parameter_info(const void* instance,
     unsigned long long index, NylonClapParameterInfo* info);

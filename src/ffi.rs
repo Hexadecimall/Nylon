@@ -20,7 +20,9 @@ use crate::engine::voice::Patch;
 use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::plugin::Catalog as PluginCatalog;
-use crate::plugin::clap::{Instance as ClapInstance, ParameterEvent as ClapParameterEvent};
+use crate::plugin::clap::{
+    Instance as ClapInstance, NoteEvent as ClapNoteEvent, ParameterEvent as ClapParameterEvent,
+};
 use crate::project::{
     AutomationCurve, AutomationParameter, AutomationPoint, ClipId, Command, MidiNote, Project,
     SceneId, TrackId, TrackKind,
@@ -3757,6 +3759,99 @@ pub unsafe extern "C" fn nylon_clap_instance_process_stereo_events(
 }
 
 /// # Safety
+/// The handle and audio buffers follow `nylon_clap_instance_process_stereo`.
+/// Each event pointer must be null for a zero count or cover that many records.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_process_stereo_all_events(
+    instance: *mut ClapInstance,
+    input_left: *const f32,
+    input_right: *const f32,
+    output_left: *mut f32,
+    output_right: *mut f32,
+    frames: u32,
+    parameter_events: *const ClapParameterEvent,
+    parameter_event_count: u32,
+    note_events: *const ClapNoteEvent,
+    note_event_count: u32,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    let Some(instance) = (unsafe { instance.as_mut() }) else {
+        return 0;
+    };
+    if output_left.is_null()
+        || output_right.is_null()
+        || frames == 0
+        || (parameter_events.is_null() && parameter_event_count != 0)
+        || (note_events.is_null() && note_event_count != 0)
+    {
+        return 0;
+    }
+    let frames = frames as usize;
+    let input = if input_left.is_null() && input_right.is_null() {
+        None
+    } else if input_left.is_null() || input_right.is_null() {
+        return 0;
+    } else {
+        // SAFETY: The caller supplies two readable regions containing frames samples.
+        Some(unsafe {
+            (
+                std::slice::from_raw_parts(input_left, frames),
+                std::slice::from_raw_parts(input_right, frames),
+            )
+        })
+    };
+    let parameter_events = if parameter_event_count == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller supplies parameter_event_count readable records.
+        unsafe { std::slice::from_raw_parts(parameter_events, parameter_event_count as usize) }
+    };
+    let note_events = if note_event_count == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller supplies note_event_count readable records.
+        unsafe { std::slice::from_raw_parts(note_events, note_event_count as usize) }
+    };
+    // SAFETY: The caller supplies two writable regions containing frames samples.
+    let (output_left, output_right) = unsafe {
+        (
+            std::slice::from_raw_parts_mut(output_left, frames),
+            std::slice::from_raw_parts_mut(output_right, frames),
+        )
+    };
+    instance
+        .process_stereo_with_all_events(
+            input,
+            output_left,
+            output_right,
+            parameter_events,
+            note_events,
+        )
+        .is_ok()
+        .into()
+}
+
+/// # Safety
+/// The handle must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_input_note_ports(
+    instance: *const ClapInstance,
+) -> u32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { instance.as_ref() }.map_or(0, ClapInstance::input_note_ports)
+}
+
+/// # Safety
+/// The handle must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_input_audio_ports(
+    instance: *const ClapInstance,
+) -> u32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { instance.as_ref() }.map_or(0, ClapInstance::input_audio_ports)
+}
+
+/// # Safety
 /// The handle must remain live for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nylon_clap_instance_parameter_count(instance: *const ClapInstance) -> u64 {
@@ -3931,4 +4026,5 @@ pub unsafe extern "C" fn nylon_clap_instance_take_requests(instance: *const Clap
         | (u32::from(requests.parameter_flush) << 5)
         | (u32::from(requests.latency_changed) << 6)
         | (u32::from(requests.state_dirty) << 7)
+        | (u32::from(requests.note_ports_changed) << 8)
 }

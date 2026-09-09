@@ -207,9 +207,24 @@ public:
         double maximum;
         double defaultValue;
     };
+    struct NoteEvent {
+        std::uint32_t sampleOffset;
+        std::uint32_t kind;
+        std::int32_t noteId;
+        std::int16_t portIndex;
+        std::int16_t channel;
+        std::int16_t key;
+        double velocity;
+    };
     bool processStereo(const float* inputLeft, const float* inputRight,
         float* outputLeft, float* outputRight, std::uint32_t frames,
         const ParameterEvent* events, std::uint32_t eventCount);
+    bool processStereo(const float* inputLeft, const float* inputRight,
+        float* outputLeft, float* outputRight, std::uint32_t frames,
+        const ParameterEvent* parameterEvents, std::uint32_t parameterEventCount,
+        const NoteEvent* noteEvents, std::uint32_t noteEventCount);
+    std::uint32_t inputNotePorts() const;
+    std::uint32_t inputAudioPorts() const;
     std::vector<ParameterInfo> parameters() const;
     bool parameterValue(std::uint32_t identifier, double& value) const;
     bool latency(std::uint32_t& frames) const;

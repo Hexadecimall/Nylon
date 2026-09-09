@@ -164,6 +164,30 @@ bool ClapInstance::processStereo(const float* inputLeft, const float* inputRight
 }
 bool ClapInstance::processStereo(const float* inputLeft, const float* inputRight,
     float* outputLeft, float* outputRight, std::uint32_t frames,
+    const ParameterEvent* parameterEvents, std::uint32_t parameterEventCount,
+    const NoteEvent* noteEvents, std::uint32_t noteEventCount)
+{
+    static_assert(sizeof(ParameterEvent) == sizeof(NylonClapParameterEvent));
+    static_assert(alignof(ParameterEvent) == alignof(NylonClapParameterEvent));
+    static_assert(sizeof(NoteEvent) == sizeof(NylonClapNoteEvent));
+    static_assert(alignof(NoteEvent) == alignof(NylonClapNoteEvent));
+    return nylon_clap_instance_process_stereo_all_events(m_handle, inputLeft,
+               inputRight, outputLeft, outputRight, frames,
+               reinterpret_cast<const NylonClapParameterEvent*>(parameterEvents),
+               parameterEventCount,
+               reinterpret_cast<const NylonClapNoteEvent*>(noteEvents), noteEventCount)
+        != 0;
+}
+std::uint32_t ClapInstance::inputNotePorts() const
+{
+    return nylon_clap_instance_input_note_ports(m_handle);
+}
+std::uint32_t ClapInstance::inputAudioPorts() const
+{
+    return nylon_clap_instance_input_audio_ports(m_handle);
+}
+bool ClapInstance::processStereo(const float* inputLeft, const float* inputRight,
+    float* outputLeft, float* outputRight, std::uint32_t frames,
     const ParameterEvent* events, std::uint32_t eventCount)
 {
     static_assert(sizeof(ParameterEvent) == sizeof(NylonClapParameterEvent));

@@ -4,13 +4,18 @@ use super::probe::clap_binary;
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, clap_event_header, clap_event_param_value,
-    clap_input_events, clap_output_events,
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
+    clap_event_header, clap_event_note, clap_event_param_value, clap_input_events,
+    clap_output_events,
 };
 use clap_sys::ext::audio_ports::{
     CLAP_EXT_AUDIO_PORTS, clap_audio_port_info, clap_plugin_audio_ports,
 };
 use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_host_latency, clap_plugin_latency};
+use clap_sys::ext::note_ports::{
+    CLAP_EXT_NOTE_PORTS, CLAP_NOTE_DIALECT_CLAP, clap_host_note_ports, clap_note_port_info,
+    clap_plugin_note_ports,
+};
 use clap_sys::ext::params::{
     CLAP_EXT_PARAMS, clap_host_params, clap_param_clear_flags, clap_param_info,
     clap_param_rescan_flags, clap_plugin_params,
@@ -27,17 +32,19 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt;
 use std::path::Path;
 use std::ptr;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU16, Ordering};
 
-const RESTART_REQUESTED: u8 = 1;
-const PROCESS_REQUESTED: u8 = 2;
-const CALLBACK_REQUESTED: u8 = 4;
-const PARAMETER_RESCAN_REQUESTED: u8 = 8;
-const PARAMETER_CLEAR_REQUESTED: u8 = 16;
-const PARAMETER_FLUSH_REQUESTED: u8 = 32;
-const LATENCY_CHANGED: u8 = 64;
-const STATE_DIRTY: u8 = 128;
+const RESTART_REQUESTED: u16 = 1;
+const PROCESS_REQUESTED: u16 = 2;
+const CALLBACK_REQUESTED: u16 = 4;
+const PARAMETER_RESCAN_REQUESTED: u16 = 8;
+const PARAMETER_CLEAR_REQUESTED: u16 = 16;
+const PARAMETER_FLUSH_REQUESTED: u16 = 32;
+const LATENCY_CHANGED: u16 = 64;
+const STATE_DIRTY: u16 = 128;
+const NOTE_PORTS_CHANGED: u16 = 256;
 pub const MAX_PARAMETER_EVENTS: usize = 1_024;
+pub const MAX_NOTE_EVENTS: usize = 1_024;
 pub const MAX_STATE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_PARAMETERS: u32 = 16_384;
 
@@ -58,6 +65,32 @@ const EMPTY_PARAMETER_EVENT: clap_event_param_value = clap_event_param_value {
     value: 0.0,
 };
 
+const EMPTY_NOTE_EVENT: clap_event_note = clap_event_note {
+    header: clap_event_header {
+        size: std::mem::size_of::<clap_event_note>() as u32,
+        time: 0,
+        space_id: CLAP_CORE_EVENT_SPACE_ID,
+        type_: CLAP_EVENT_NOTE_ON,
+        flags: 0,
+    },
+    note_id: -1,
+    port_index: 0,
+    channel: 0,
+    key: 0,
+    velocity: 0.0,
+};
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union InputEventStorage {
+    parameter: clap_event_param_value,
+    note: clap_event_note,
+}
+
+const EMPTY_INPUT_EVENT: InputEventStorage = InputEventStorage {
+    parameter: EMPTY_PARAMETER_EVENT,
+};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HostRequests {
     pub restart: bool,
@@ -68,6 +101,7 @@ pub struct HostRequests {
     pub parameter_flush: bool,
     pub latency_changed: bool,
     pub state_dirty: bool,
+    pub note_ports_changed: bool,
 }
 
 #[repr(C)]
@@ -76,6 +110,18 @@ pub struct ParameterEvent {
     pub sample_offset: u32,
     pub identifier: u32,
     pub value: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NoteEvent {
+    pub sample_offset: u32,
+    pub kind: u32,
+    pub note_id: i32,
+    pub port_index: i16,
+    pub channel: i16,
+    pub key: i16,
+    pub velocity: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,6 +150,7 @@ pub enum Error {
     PluginInitialization,
     InvalidConfiguration,
     UnsupportedPorts,
+    UnsupportedNotePorts,
     UnsupportedParameters,
     InvalidParameters,
     UnsupportedState,
@@ -134,6 +181,9 @@ impl fmt::Display for Error {
                 output.write_str("CLAP processing configuration is invalid")
             }
             Self::UnsupportedPorts => output.write_str("CLAP plugin needs unsupported audio ports"),
+            Self::UnsupportedNotePorts => {
+                output.write_str("CLAP plugin needs unsupported note ports")
+            }
             Self::UnsupportedParameters => {
                 output.write_str("CLAP plugin does not expose parameters")
             }
@@ -166,14 +216,15 @@ pub struct Instance {
     plugin: *const clap_plugin,
     _entry: EntryLibrary,
     _host: Box<clap_host>,
-    requests: Box<AtomicU8>,
+    requests: Box<AtomicU16>,
     active: bool,
     processing: bool,
     min_frames: u32,
     max_frames: u32,
     input_ports: u32,
+    input_note_ports: u32,
     steady_time: i64,
-    parameter_events: Box<[clap_event_param_value; MAX_PARAMETER_EVENTS]>,
+    input_events: Box<[InputEventStorage; MAX_PARAMETER_EVENTS + MAX_NOTE_EVENTS]>,
 }
 
 impl Instance {
@@ -182,7 +233,7 @@ impl Instance {
         let path =
             CString::new(binary.to_string_lossy().as_bytes()).map_err(|_| Error::InvalidPath)?;
         let identifier = CString::new(identifier).map_err(|_| Error::InvalidPath)?;
-        let requests = Box::new(AtomicU8::new(0));
+        let requests = Box::new(AtomicU16::new(0));
         let mut host = Box::new(clap_host {
             clap_version: CLAP_VERSION,
             host_data: ptr::null_mut(),
@@ -261,8 +312,9 @@ impl Instance {
                 min_frames: 0,
                 max_frames: 0,
                 input_ports: 0,
+                input_note_ports: 0,
                 steady_time: 0,
-                parameter_events: Box::new([EMPTY_PARAMETER_EVENT; MAX_PARAMETER_EVENTS]),
+                input_events: Box::new([EMPTY_INPUT_EVENT; MAX_PARAMETER_EVENTS + MAX_NOTE_EVENTS]),
             })
         }
     }
@@ -297,6 +349,14 @@ impl Instance {
                     return Err(error);
                 }
             };
+            let input_note_ports = match note_port_counts(self.plugin) {
+                Ok(input_ports) => input_ports,
+                Err(error) => {
+                    (plugin.deactivate.unwrap())(self.plugin);
+                    self.active = false;
+                    return Err(error);
+                }
+            };
             if !(plugin.start_processing.unwrap())(self.plugin) {
                 (plugin.deactivate.unwrap())(self.plugin);
                 self.active = false;
@@ -306,6 +366,7 @@ impl Instance {
             self.min_frames = min_frames;
             self.max_frames = max_frames;
             self.input_ports = input_ports;
+            self.input_note_ports = input_note_ports;
             self.steady_time = 0;
         }
         Ok(())
@@ -327,6 +388,17 @@ impl Instance {
         output_right: &mut [f32],
         parameter_events: &[ParameterEvent],
     ) -> Result<clap_process_status, Error> {
+        self.process_stereo_with_all_events(input, output_left, output_right, parameter_events, &[])
+    }
+
+    pub fn process_stereo_with_all_events(
+        &mut self,
+        input: Option<(&[f32], &[f32])>,
+        output_left: &mut [f32],
+        output_right: &mut [f32],
+        parameter_events: &[ParameterEvent],
+        note_events: &[NoteEvent],
+    ) -> Result<clap_process_status, Error> {
         if !self.processing {
             return Err(Error::NotProcessing);
         }
@@ -337,25 +409,66 @@ impl Instance {
             || usize::from(input.is_some()) != self.input_ports as usize
             || input.is_some_and(|(left, right)| left.len() != frames || right.len() != frames)
             || parameter_events.len() > MAX_PARAMETER_EVENTS
+            || note_events.len() > MAX_NOTE_EVENTS
             || parameter_events
                 .iter()
                 .any(|event| event.sample_offset >= frames as u32 || !event.value.is_finite())
             || parameter_events
                 .windows(2)
                 .any(|events| events[0].sample_offset > events[1].sample_offset)
+            || note_events.iter().any(|event| {
+                event.sample_offset >= frames as u32
+                    || event.kind > CLAP_EVENT_NOTE_CHOKE as u32
+                    || event.port_index < 0
+                    || event.port_index as u32 >= self.input_note_ports
+                    || !(0..=15).contains(&event.channel)
+                    || !(0..=127).contains(&event.key)
+                    || !event.velocity.is_finite()
+                    || !(0.0..=1.0).contains(&event.velocity)
+            })
+            || note_events
+                .windows(2)
+                .any(|events| events[0].sample_offset > events[1].sample_offset)
         {
             return Err(Error::InvalidBlock);
         }
-        for (destination, source) in self.parameter_events.iter_mut().zip(parameter_events) {
-            *destination = clap_event_param_value {
-                header: clap_event_header {
-                    time: source.sample_offset,
-                    ..EMPTY_PARAMETER_EVENT.header
-                },
-                param_id: source.identifier,
-                value: source.value,
-                ..EMPTY_PARAMETER_EVENT
-            };
+        let mut parameter_index = 0;
+        let mut note_index = 0;
+        let mut output_index = 0;
+        while parameter_index < parameter_events.len() || note_index < note_events.len() {
+            let use_parameter = note_index == note_events.len()
+                || (parameter_index < parameter_events.len()
+                    && parameter_events[parameter_index].sample_offset
+                        <= note_events[note_index].sample_offset);
+            if use_parameter {
+                let source = parameter_events[parameter_index];
+                self.input_events[output_index].parameter = clap_event_param_value {
+                    header: clap_event_header {
+                        time: source.sample_offset,
+                        ..EMPTY_PARAMETER_EVENT.header
+                    },
+                    param_id: source.identifier,
+                    value: source.value,
+                    ..EMPTY_PARAMETER_EVENT
+                };
+                parameter_index += 1;
+            } else {
+                let source = note_events[note_index];
+                self.input_events[output_index].note = clap_event_note {
+                    header: clap_event_header {
+                        time: source.sample_offset,
+                        type_: source.kind as u16,
+                        ..EMPTY_NOTE_EVENT.header
+                    },
+                    note_id: source.note_id,
+                    port_index: source.port_index,
+                    channel: source.channel,
+                    key: source.key,
+                    velocity: source.velocity,
+                };
+                note_index += 1;
+            }
+            output_index += 1;
         }
         let mut output_channels = [output_left.as_mut_ptr(), output_right.as_mut_ptr()];
         let mut output = clap_audio_buffer {
@@ -377,8 +490,8 @@ impl Instance {
             }
         });
         let event_context = InputEventContext {
-            events: self.parameter_events.as_ptr(),
-            count: parameter_events.len() as u32,
+            events: self.input_events.as_ptr(),
+            count: output_index as u32,
         };
         let input_events = clap_input_events {
             ctx: ptr::from_ref(&event_context).cast_mut().cast(),
@@ -455,6 +568,14 @@ impl Instance {
             });
         }
         Ok(parameters)
+    }
+
+    pub fn input_note_ports(&self) -> u32 {
+        self.input_note_ports
+    }
+
+    pub fn input_audio_ports(&self) -> u32 {
+        self.input_ports
     }
 
     pub fn parameter_value(&self, identifier: u32) -> Result<f64, Error> {
@@ -580,6 +701,7 @@ impl Instance {
             parameter_flush: requests & PARAMETER_FLUSH_REQUESTED != 0,
             latency_changed: requests & LATENCY_CHANGED != 0,
             state_dirty: requests & STATE_DIRTY != 0,
+            note_ports_changed: requests & NOTE_PORTS_CHANGED != 0,
         }
     }
 }
@@ -636,6 +758,37 @@ unsafe fn stereo_port_counts(plugin: *const clap_plugin) -> Result<u32, Error> {
     Ok(inputs)
 }
 
+unsafe fn note_port_counts(plugin: *const clap_plugin) -> Result<u32, Error> {
+    // SAFETY: The instance is initialized and owns the extension pointer.
+    let raw = unsafe { plugin.as_ref() }.ok_or(Error::InvalidPlugin)?;
+    // SAFETY: The plugin owns the returned extension pointer.
+    let extension = unsafe { (raw.get_extension.unwrap())(plugin, CLAP_EXT_NOTE_PORTS.as_ptr()) }
+        .cast::<clap_plugin_note_ports>();
+    // SAFETY: A null extension means the plugin has no note ports.
+    let Some(ports) = (unsafe { extension.as_ref() }) else {
+        return Ok(0);
+    };
+    let count = ports.count.ok_or(Error::UnsupportedNotePorts)?;
+    let get = ports.get.ok_or(Error::UnsupportedNotePorts)?;
+    // SAFETY: The note-ports extension belongs to this initialized plugin.
+    let inputs = unsafe { count(plugin, true) };
+    if inputs > 1 {
+        return Err(Error::UnsupportedNotePorts);
+    }
+    if inputs == 1 {
+        let mut info = std::mem::MaybeUninit::<clap_note_port_info>::zeroed();
+        // SAFETY: The output has storage for one complete note-port record.
+        if !unsafe { get(plugin, 0, true, info.as_mut_ptr()) } {
+            return Err(Error::UnsupportedNotePorts);
+        }
+        // SAFETY: A successful callback initializes the complete record.
+        if unsafe { info.assume_init() }.supported_dialects & CLAP_NOTE_DIALECT_CLAP == 0 {
+            return Err(Error::UnsupportedNotePorts);
+        }
+    }
+    Ok(inputs)
+}
+
 unsafe extern "C" fn host_get_extension(
     _host: *const clap_host,
     extension_id: *const c_char,
@@ -654,6 +807,9 @@ unsafe extern "C" fn host_get_extension(
     if identifier == CLAP_EXT_STATE {
         return ptr::from_ref(&HOST_STATE).cast();
     }
+    if identifier == CLAP_EXT_NOTE_PORTS {
+        return ptr::from_ref(&HOST_NOTE_PORTS).cast();
+    }
     ptr::null()
 }
 
@@ -669,6 +825,11 @@ static HOST_LATENCY: clap_host_latency = clap_host_latency {
 
 static HOST_STATE: clap_host_state = clap_host_state {
     mark_dirty: Some(host_state_dirty),
+};
+
+static HOST_NOTE_PORTS: clap_host_note_ports = clap_host_note_ports {
+    supported_dialects: Some(host_note_dialects),
+    rescan: Some(host_note_ports_rescan),
 };
 
 unsafe extern "C" fn host_parameter_rescan(
@@ -703,13 +864,22 @@ unsafe extern "C" fn host_state_dirty(host: *const clap_host) {
     unsafe { request(host, STATE_DIRTY) };
 }
 
-unsafe fn request(host: *const clap_host, bit: u8) {
+unsafe extern "C" fn host_note_dialects(_host: *const clap_host) -> u32 {
+    CLAP_NOTE_DIALECT_CLAP
+}
+
+unsafe extern "C" fn host_note_ports_rescan(host: *const clap_host, _flags: u32) {
+    // SAFETY: CLAP passes back the host pointer supplied at creation.
+    unsafe { request(host, NOTE_PORTS_CHANGED) };
+}
+
+unsafe fn request(host: *const clap_host, bit: u16) {
     // SAFETY: The host and request bits live until after plugin destruction.
     let Some(host) = (unsafe { host.as_ref() }) else {
         return;
     };
     // SAFETY: host_data points to the boxed atomic owned by Instance.
-    if let Some(requests) = unsafe { host.host_data.cast::<AtomicU8>().as_ref() } {
+    if let Some(requests) = unsafe { host.host_data.cast::<AtomicU16>().as_ref() } {
         requests.fetch_or(bit, Ordering::Release);
     }
 }
@@ -730,7 +900,7 @@ unsafe extern "C" fn host_request_callback(host: *const clap_host) {
 }
 
 struct InputEventContext {
-    events: *const clap_event_param_value,
+    events: *const InputEventStorage,
     count: u32,
 }
 
@@ -833,7 +1003,12 @@ unsafe extern "C" fn parameter_event_get(
         return ptr::null();
     }
     // SAFETY: count never exceeds the preallocated event array length.
-    unsafe { ptr::from_ref(&(*context.events.add(index as usize)).header) }
+    unsafe {
+        context
+            .events
+            .add(index as usize)
+            .cast::<clap_event_header>()
+    }
 }
 
 unsafe extern "C" fn discard_output_event(
@@ -876,6 +1051,7 @@ mod tests {
                 && !requests.parameter_flush
                 && !requests.latency_changed
                 && !requests.state_dirty
+                && !requests.note_ports_changed
         );
     }
 

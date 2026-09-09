@@ -80,6 +80,15 @@ typedef struct ClapEventParamValue {
     double value;
 } ClapEventParamValue;
 
+typedef struct ClapEventNote {
+    ClapEventHeader header;
+    int32_t note_id;
+    int16_t port_index;
+    int16_t channel;
+    int16_t key;
+    double velocity;
+} ClapEventNote;
+
 struct ClapInputEvents {
     void* context;
     uint32_t (*size)(const ClapInputEvents* list);
@@ -150,6 +159,19 @@ typedef struct ClapParams {
 typedef struct ClapLatency {
     uint32_t (*get)(const ClapPlugin* plugin);
 } ClapLatency;
+
+typedef struct ClapNotePortInfo {
+    uint32_t id;
+    uint32_t supported_dialects;
+    uint32_t preferred_dialect;
+    char name[256];
+} ClapNotePortInfo;
+
+typedef struct ClapNotePorts {
+    uint32_t (*count)(const ClapPlugin* plugin, bool input);
+    bool (*get)(const ClapPlugin* plugin, uint32_t index, bool input,
+        ClapNotePortInfo* info);
+} ClapNotePorts;
 
 typedef struct ClapState {
     bool (*save)(const ClapPlugin* plugin, const ClapOutputStream* stream);
@@ -291,6 +313,25 @@ static uint32_t fixture_latency(const ClapPlugin* plugin)
     return 32;
 }
 
+static uint32_t fixture_note_port_count(const ClapPlugin* plugin, bool input)
+{
+    (void)plugin;
+    return input ? 1 : 0;
+}
+
+static bool fixture_note_port_get(const ClapPlugin* plugin, uint32_t index, bool input,
+    ClapNotePortInfo* info)
+{
+    (void)plugin;
+    if (!input || index != 0 || info == 0) return false;
+    memset(info, 0, sizeof(*info));
+    info->id = 3;
+    info->supported_dialects = 1;
+    info->preferred_dialect = 1;
+    memcpy(info->name, "Notes", 6);
+    return true;
+}
+
 static bool fixture_state_save(const ClapPlugin* plugin, const ClapOutputStream* stream)
 {
     (void)plugin;
@@ -315,6 +356,8 @@ static const ClapParams fixture_parameters = {fixture_parameter_count,
     fixture_parameter_info, fixture_parameter_value, 0, 0, 0};
 static const ClapLatency fixture_latency_extension = {fixture_latency};
 static const ClapState fixture_state = {fixture_state_save, fixture_state_load};
+static const ClapNotePorts fixture_note_ports = {
+    fixture_note_port_count, fixture_note_port_get};
 
 static const void* fixture_plugin_extension(const ClapPlugin* plugin, const char* id)
 {
@@ -324,6 +367,7 @@ static const void* fixture_plugin_extension(const ClapPlugin* plugin, const char
     if (strcmp(id, "clap.params") == 0) return &fixture_parameters;
     if (strcmp(id, "clap.latency") == 0) return &fixture_latency_extension;
     if (strcmp(id, "clap.state") == 0) return &fixture_state;
+    if (strcmp(id, "clap.note-ports") == 0) return &fixture_note_ports;
     return 0;
 }
 
@@ -350,6 +394,13 @@ static int32_t fixture_plugin_process(const ClapPlugin* plugin, const ClapProces
                 const ClapEventParamValue* event = (const ClapEventParamValue*)header;
                 if (event->param_id == 7 && event->value >= 0.0 && event->value <= 1.0)
                     fixture_gain = event->value;
+            }
+            if (header->time == frame && header->space_id == 0 && header->type <= 2
+                && header->size >= sizeof(ClapEventNote)) {
+                const ClapEventNote* event = (const ClapEventNote*)header;
+                if (event->port_index == 0 && event->channel >= 0 && event->channel <= 15
+                    && event->key >= 0 && event->key <= 127)
+                    fixture_gain = header->type == 0 ? event->velocity : 0.0;
             }
             ++event_index;
         }

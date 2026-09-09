@@ -90,6 +90,23 @@ fn null_handles_are_rejected() {
             ),
             0
         );
+        assert_eq!(
+            nylon_clap_instance_process_stereo_all_events(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            ),
+            0
+        );
+        assert_eq!(nylon_clap_instance_input_note_ports(std::ptr::null()), 0);
+        assert_eq!(nylon_clap_instance_input_audio_ports(std::ptr::null()), 0);
         let mut parameter = NylonClapParameterInfo::default();
         let mut value = 0.0;
         let mut latency = 0;
