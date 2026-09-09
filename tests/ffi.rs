@@ -413,6 +413,12 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
         auto_filter.parameters[..11].copy_from_slice(&[
             2.0, 1_600.0, 2.5, 8.0, -1.5, 0.004, 0.2, 0.75, 1.25, 0.6, 1.0,
         ]);
+        let mut phaser = NylonTrackDevice {
+            kind: 10,
+            enabled: 1,
+            ..NylonTrackDevice::default()
+        };
+        phaser.parameters[..7].copy_from_slice(&[0.6, 850.0, 2.25, 0.45, 0.7, 0.4, 10.0]);
         assert_eq!(nylon_track_device_add(handle, 0, &utility), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &delay), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &limiter), 1);
@@ -421,7 +427,8 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
         assert_eq!(nylon_track_device_add(handle, 0, &chorus), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &reverb), 1);
         assert_eq!(nylon_track_device_add(handle, 0, &auto_filter), 1);
-        assert_eq!(nylon_track_device_count(handle, 0), 8);
+        assert_eq!(nylon_track_device_add(handle, 0, &phaser), 1);
+        assert_eq!(nylon_track_device_count(handle, 0), 9);
         let mut read = NylonTrackDevice::default();
         assert_eq!(nylon_track_device_get(handle, 0, 0, &mut read), 1);
         assert_eq!(read, utility);
@@ -440,6 +447,8 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
         assert_eq!(read, reverb);
         assert_eq!(nylon_track_device_get(handle, 0, 7, &mut read), 1);
         assert_eq!(read, auto_filter);
+        assert_eq!(nylon_track_device_get(handle, 0, 8, &mut read), 1);
+        assert_eq!(read, phaser);
 
         let changed = NylonTrackDevice {
             kind: 0,
@@ -464,8 +473,8 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
         };
         assert_eq!(nylon_track_device_set(handle, 0, 0, &invalid), 0);
         assert_eq!(nylon_track_device_delete(handle, 0, 0), 1);
-        assert_eq!(nylon_track_device_count(handle, 0), 7);
-        assert_eq!(nylon_track_device_get(handle, 0, 7, &mut read), 0);
+        assert_eq!(nylon_track_device_count(handle, 0), 8);
+        assert_eq!(nylon_track_device_get(handle, 0, 8, &mut read), 0);
         assert_eq!(
             nylon_track_device_get(handle, 0, 0, std::ptr::null_mut()),
             0

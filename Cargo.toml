@@ -58,6 +58,10 @@ harness = false
 name = "auto_filter"
 harness = false
 
+[[bench]]
+name = "phaser"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

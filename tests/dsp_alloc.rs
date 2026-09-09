@@ -14,6 +14,7 @@ use nylon::dsp::gate::{Gate, Parameters as GateParameters};
 use nylon::dsp::limiter::{Limiter, Parameters as LimiterParameters};
 use nylon::dsp::meter::Meter;
 use nylon::dsp::osc::{Oscillator, Shape};
+use nylon::dsp::phaser::{Parameters as PhaserParameters, Phaser};
 use nylon::dsp::reverb::{Parameters as ReverbParameters, Reverb};
 use nylon::dsp::saturator::{Parameters as SaturatorParameters, Saturator};
 use nylon::dsp::smooth::{OnePole, Ramp};
@@ -73,6 +74,15 @@ fn filtering_a_block_performs_no_allocator_operations() {
     let mut audio = vec![[0.25_f32, -0.1_f32]; BLOCK];
     let sidechain = vec![[0.5_f32, 0.5_f32]; BLOCK];
     let operations = measure(|| filter.process_block(&mut audio, Some(&sidechain)));
+    assert_eq!(operations, 0, "{operations} allocator operations");
+    assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
+}
+
+#[test]
+fn phasing_a_block_performs_no_allocator_operations() {
+    let mut phaser = Phaser::new(RATE, PhaserParameters::default());
+    let mut audio = vec![[0.25_f32, -0.1_f32]; BLOCK];
+    let operations = measure(|| phaser.process_block(&mut audio));
     assert_eq!(operations, 0, "{operations} allocator operations");
     assert!(audio.iter().flatten().all(|sample| sample.is_finite()));
 }

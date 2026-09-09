@@ -222,6 +222,7 @@ QString deviceKindName(nylon::DeviceKind kind)
     case nylon::DeviceKind::Chorus: return "chorus";
     case nylon::DeviceKind::Reverb: return "reverb";
     case nylon::DeviceKind::AutoFilter: return "auto-filter";
+    case nylon::DeviceKind::Phaser: return "phaser";
     }
     return "utility";
 }
@@ -356,6 +357,14 @@ bool parseTrackDevice(
         device.parameters[10] = sidechain ? 1.0F : 0.0F;
         return true;
     }
+    if (kind == "phaser" && positional.size() == kindIndex + 8) {
+        device.kind = nylon::DeviceKind::Phaser;
+        for (int index = 0; index < 7; ++index) {
+            if (!parameter(positional[kindIndex + 1 + index], device.parameters[index]))
+                return false;
+        }
+        return true;
+    }
     return false;
 }
 
@@ -432,6 +441,12 @@ QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
             {"externalSidechain", device.parameters[10] == 1.0F}};
         break;
     }
+    case nylon::DeviceKind::Phaser:
+        parameters = {{"rateHz", device.parameters[0]},
+            {"centerHz", device.parameters[1]}, {"depthOctaves", device.parameters[2]},
+            {"feedback", device.parameters[3]}, {"mix", device.parameters[4]},
+            {"stereoPhase", device.parameters[5]}, {"stages", device.parameters[6]}};
+        break;
     }
     return {{"index", static_cast<double>(index)}, {"kind", deviceKindName(device.kind)},
         {"enabled", device.enabled}, {"parameters", parameters}};

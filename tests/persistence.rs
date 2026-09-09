@@ -2,6 +2,7 @@ use nylon::dsp::auto_filter::{Mode as AutoFilterMode, Parameters as AutoFilterPa
 use nylon::dsp::chorus::Parameters as ChorusParameters;
 use nylon::dsp::gate::Parameters as GateParameters;
 use nylon::dsp::limiter::Parameters as LimiterParameters;
+use nylon::dsp::phaser::Parameters as PhaserParameters;
 use nylon::dsp::reverb::Parameters as ReverbParameters;
 use nylon::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
@@ -160,6 +161,23 @@ fn session() -> Project {
                     },
                 },
             },
+            Command::AddDevice {
+                track: id,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Phaser {
+                        parameters: PhaserParameters {
+                            rate_hz: 0.6,
+                            center_hz: 850.0,
+                            depth_octaves: 2.25,
+                            feedback: 0.45,
+                            mix: 0.7,
+                            stereo_phase: 0.4,
+                            stages: 10,
+                        },
+                    },
+                },
+            },
             Command::SetTimeSignature {
                 numerator: 7,
                 denominator: 8,
@@ -282,7 +300,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 14;
+    future[4] = 15;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

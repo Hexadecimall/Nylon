@@ -8,6 +8,7 @@ use crate::dsp::env::Settings as EnvelopeSettings;
 use crate::dsp::gate::Parameters as GateParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
 use crate::dsp::osc::Shape;
+use crate::dsp::phaser::Parameters as PhaserParameters;
 use crate::dsp::reverb::Parameters as ReverbParameters;
 use crate::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
@@ -31,7 +32,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 13;
+const VERSION: u32 = 14;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -227,6 +228,19 @@ impl Encoder {
                             parameters.lfo_rate_hz,
                             parameters.lfo_amount_octaves,
                             parameters.mix,
+                        ] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::Phaser { parameters } => {
+                        self.bytes(&[10, parameters.stages])?;
+                        for value in [
+                            parameters.rate_hz,
+                            parameters.center_hz,
+                            parameters.depth_octaves,
+                            parameters.feedback,
+                            parameters.mix,
+                            parameters.stereo_phase,
                         ] {
                             self.bytes(&value.to_le_bytes())?;
                         }
@@ -552,6 +566,17 @@ impl<'a> Decoder<'a> {
                                 external_sidechain,
                             }
                         }
+                        10 if version >= 14 => DeviceKind::Phaser {
+                            parameters: PhaserParameters {
+                                stages: self.array::<1>()?[0],
+                                rate_hz: f32::from_le_bytes(self.array()?),
+                                center_hz: f32::from_le_bytes(self.array()?),
+                                depth_octaves: f32::from_le_bytes(self.array()?),
+                                feedback: f32::from_le_bytes(self.array()?),
+                                mix: f32::from_le_bytes(self.array()?),
+                                stereo_phase: f32::from_le_bytes(self.array()?),
+                            },
+                        },
                         _ => return Err(PersistenceError::InvalidFormat),
                     };
                     let config = DeviceConfig { enabled, kind };

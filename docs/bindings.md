@@ -54,7 +54,7 @@ per project C function, `std::string` for names, and `nylon::MidiNote` /
 `nylon::BeatRange` value types. `nylon::TrackDevice` carries a typed device,
 its enabled state, and sixteen fixed parameter slots across the ABI.
 Device kinds include utility, equalizer, compressor, delay, limiter, saturator,
-gate, chorus, reverb, and auto filter.
+gate, chorus, reverb, auto filter, and phaser.
 `nylon::InstrumentPatch` configures both oscillators, sub and noise levels,
 unison, amplitude envelope, filter, and output level.
 `Project::bounceWave` writes a selected beat
@@ -99,6 +99,7 @@ nylon-control --project Session.nylon instrument 0
 nylon-control --project Session.nylon add-device 0 chorus 0.8 0.012 0.003 0.1 0.5 0.25
 nylon-control --project Session.nylon add-device 0 reverb 0.6 2.8 0.35 0.7 0.02 1 0.3
 nylon-control --project Session.nylon add-device 0 auto-filter band-pass 1600 2.5 8 -1.5 0.004 0.2 0.75 1.25 0.6 on
+nylon-control --project Session.nylon add-device 0 phaser 0.6 850 2.25 0.45 0.7 0.4 10
 nylon-control --project Session.nylon create-midi-clip 0 0 4
 nylon-control --project Session.nylon add-note 0 0 60 100 0.25 0.5
 nylon-control --project Session.nylon quantize-notes 0 0 0.25 1

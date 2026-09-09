@@ -49,9 +49,10 @@ limiting, stereo-linked gating with sidechain detection, saturation with
 selectable transfer curves and bounded oversampling, a stereo chorus with
 phase-offset modulated delay lines, an algorithmic stereo reverb with
 parallel damped combs and diffusion stages, and a resonant auto filter with
-envelope, sidechain, drive, and low-frequency modulation. Each processor is fixed-size. Storage that
-must outlive a call, such
-as a delay buffer, is borrowed from the caller, which allocates it on the
+envelope, sidechain, drive, and low-frequency modulation. A stereo phaser runs
+up to twelve modulated all-pass stages with feedback and channel phase offset.
+Each processor is fixed-size. Storage that must outlive a call, such as a delay
+buffer, is borrowed from the caller, which allocates it on the
 control thread before playback.
 
 Second-order sections carry an analytic magnitude response alongside the
@@ -225,6 +226,7 @@ The render benchmark reports nanoseconds per 256-frame stereo block after warmup
 The reverb benchmark measures one active stereo instance over the same block.
 The auto-filter benchmark measures a driven stereo instance with envelope and
 low-frequency modulation active.
+The phaser benchmark measures a six-stage stereo instance with feedback.
 The mixer benchmark measures a 32-track block with automation. The audio timeline
 benchmark measures the complete callback for 32 tracks and 64 looping regions.
 Both arrangement benchmarks report their share of the block's real-time budget.

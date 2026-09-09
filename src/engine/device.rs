@@ -8,6 +8,7 @@ use crate::dsp::db;
 use crate::dsp::delay::DelayLine;
 use crate::dsp::gate::{Gate, Parameters as GateParameters};
 use crate::dsp::limiter::{Limiter, Parameters as LimiterParameters};
+use crate::dsp::phaser::{Parameters as PhaserParameters, Phaser};
 use crate::dsp::reverb::{Parameters as ReverbParameters, Reverb};
 use crate::dsp::saturator::{Parameters as SaturatorParameters, Saturator};
 
@@ -80,6 +81,9 @@ pub enum DeviceKind {
         parameters: AutoFilterParameters,
         external_sidechain: bool,
     },
+    Phaser {
+        parameters: PhaserParameters,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +140,9 @@ enum Processor {
     AutoFilter {
         processor: AutoFilter,
         external_sidechain: bool,
+    },
+    Phaser {
+        processor: Phaser,
     },
 }
 
@@ -265,6 +272,9 @@ impl DeviceChain {
                 } => Processor::AutoFilter {
                     processor: AutoFilter::new(sample_rate, parameters),
                     external_sidechain,
+                },
+                DeviceKind::Phaser { parameters } => Processor::Phaser {
+                    processor: Phaser::new(sample_rate, parameters),
                 },
             };
             devices.push(Device {
@@ -428,6 +438,17 @@ fn validate_kind(kind: DeviceKind, sample_rate: f32) -> Result<usize, DeviceErro
         {
             Ok(0)
         }
+        DeviceKind::Phaser { parameters }
+            if finite_range(parameters.rate_hz, 0.01, 20.0)
+                && finite_range(parameters.center_hz, 20.0, sample_rate * 0.45)
+                && finite_range(parameters.depth_octaves, 0.0, 8.0)
+                && finite_range(parameters.feedback, -0.95, 0.95)
+                && finite_range(parameters.mix, 0.0, 1.0)
+                && finite_range(parameters.stereo_phase, 0.0, 1.0)
+                && (2..=crate::dsp::phaser::MAX_STAGES as u8).contains(&parameters.stages) =>
+        {
+            Ok(0)
+        }
         _ => Err(DeviceError::InvalidParameter),
     }
 }
@@ -513,6 +534,7 @@ impl Processor {
                 let detector = (*external_sidechain).then_some(sidechain);
                 processor.process_block(audio, detector);
             }
+            Self::Phaser { processor } => processor.process_block(audio),
         }
     }
 
@@ -546,6 +568,7 @@ impl Processor {
             } => processor.reset(left_storage, right_storage),
             Self::Reverb { processor, storage } => processor.reset(storage),
             Self::AutoFilter { processor, .. } => processor.reset(),
+            Self::Phaser { processor } => processor.reset(),
             Self::Utility { .. } => {}
         }
     }
@@ -850,6 +873,26 @@ mod tests {
             .process(&input, &vec![[1.0; 2]; input.len()], &mut repeated)
             .unwrap();
         assert_eq!(loud, repeated);
+    }
+
+    #[test]
+    fn phaser_runs_in_a_chain_and_resets() {
+        let config = DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Phaser {
+                parameters: PhaserParameters::default(),
+            },
+        };
+        let mut chain = DeviceChain::new(&[config], RATE).unwrap();
+        let mut input = [[0.0; 2]; 512];
+        input[0] = [1.0, 1.0];
+        let mut first = [[0.0; 2]; 512];
+        chain.process(&input, &[], &mut first).unwrap();
+        assert_ne!(first, input);
+        chain.reset();
+        let mut second = [[0.0; 2]; 512];
+        chain.process(&input, &[], &mut second).unwrap();
+        assert_eq!(first, second);
     }
 
     #[test]

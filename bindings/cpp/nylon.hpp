@@ -80,7 +80,8 @@ enum class DeviceKind : int {
     Gate = 6,
     Chorus = 7,
     Reverb = 8,
-    AutoFilter = 9
+    AutoFilter = 9,
+    Phaser = 10
 };
 
 enum class FilterKind : int {

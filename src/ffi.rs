@@ -11,6 +11,7 @@ use crate::dsp::env::Settings as EnvelopeSettings;
 use crate::dsp::gate::Parameters as GateParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
 use crate::dsp::osc::Shape;
+use crate::dsp::phaser::Parameters as PhaserParameters;
 use crate::dsp::reverb::Parameters as ReverbParameters;
 use crate::dsp::saturator::{
     Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
@@ -766,6 +767,23 @@ fn track_device_kind(record: NylonTrackDevice) -> Option<TrackDeviceKind> {
                 _ => return None,
             },
         }),
+        10 => {
+            let stages = parameters[6];
+            if !stages.is_finite() || stages.fract() != 0.0 || !(0.0..=255.0).contains(&stages) {
+                return None;
+            }
+            Some(TrackDeviceKind::Phaser {
+                parameters: PhaserParameters {
+                    rate_hz: parameters[0],
+                    center_hz: parameters[1],
+                    depth_octaves: parameters[2],
+                    feedback: parameters[3],
+                    mix: parameters[4],
+                    stereo_phase: parameters[5],
+                    stages: stages as u8,
+                },
+            })
+        }
         _ => None,
     }
 }
@@ -914,6 +932,18 @@ fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice
                 parameters.lfo_amount_octaves,
                 parameters.mix,
                 f32::from(u8::from(external_sidechain)),
+            ]);
+        }
+        TrackDeviceKind::Phaser { parameters } => {
+            record.kind = 10;
+            record.parameters[..7].copy_from_slice(&[
+                parameters.rate_hz,
+                parameters.center_hz,
+                parameters.depth_octaves,
+                parameters.feedback,
+                parameters.mix,
+                parameters.stereo_phase,
+                f32::from(parameters.stages),
             ]);
         }
     }
