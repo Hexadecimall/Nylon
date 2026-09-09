@@ -3,6 +3,7 @@
 // off the audio thread
 use super::device::{DeviceChain, DeviceConfig, DeviceError, MAX_DEVICES};
 use crate::plugin::bridge::Bridge;
+use crate::plugin::clap::{NoteEvent, ParameterEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RackError {
@@ -162,6 +163,17 @@ impl DeviceRack {
         sidechain: &[[f32; 2]],
         output: &mut [[f32; 2]],
     ) -> Result<(), RackError> {
+        self.process_events(input, sidechain, output, &[], &[])
+    }
+
+    pub fn process_events(
+        &mut self,
+        input: &[[f32; 2]],
+        sidechain: &[[f32; 2]],
+        output: &mut [[f32; 2]],
+        parameter_events: &[ParameterEvent],
+        note_events: &[NoteEvent],
+    ) -> Result<(), RackError> {
         let frames = input.len();
         if frames > self.max_frames
             || frames != output.len()
@@ -183,6 +195,8 @@ impl DeviceRack {
                     sidechain,
                     &mut self.second[..frames],
                     self.max_frames,
+                    parameter_events,
+                    note_events,
                 )
             } else {
                 process_stage(
@@ -191,6 +205,8 @@ impl DeviceRack {
                     sidechain,
                     &mut self.first[..frames],
                     self.max_frames,
+                    parameter_events,
+                    note_events,
                 )
             };
             result?;
@@ -212,6 +228,8 @@ fn process_stage(
     sidechain: &[[f32; 2]],
     output: &mut [[f32; 2]],
     max_frames: usize,
+    parameter_events: &[ParameterEvent],
+    note_events: &[NoteEvent],
 ) -> Result<(), RackError> {
     match stage {
         Stage::Native(chain) => chain.process(input, sidechain, output).map_err(Into::into),
@@ -222,14 +240,19 @@ fn process_stage(
             }
             stage.input_left[input.len()..max_frames].fill(0.0);
             stage.input_right[input.len()..max_frames].fill(0.0);
+            let note_events = if stage.bridge.input_note_ports() == 0 {
+                &[]
+            } else {
+                note_events
+            };
             stage
                 .bridge
                 .process_stereo(
                     Some((&stage.input_left, &stage.input_right)),
                     &mut stage.output_left,
                     &mut stage.output_right,
-                    &[],
-                    &[],
+                    parameter_events,
+                    note_events,
                 )
                 .map_err(|_| RackError::BufferSize)?;
             for (index, frame) in output.iter_mut().enumerate() {
@@ -273,6 +296,8 @@ mod tests {
 
     struct Gain(f32);
 
+    struct NoteSignal;
+
     impl BlockProcessor for Gain {
         fn process_block(
             &mut self,
@@ -286,6 +311,26 @@ mod tests {
             for index in 0..left.len() {
                 output_left[index] = left[index] * self.0;
                 output_right[index] = right[index] * self.0;
+            }
+            true
+        }
+    }
+
+    impl BlockProcessor for NoteSignal {
+        fn process_block(
+            &mut self,
+            _: Option<(&[f32], &[f32])>,
+            output_left: &mut [f32],
+            output_right: &mut [f32],
+            _: &[ParameterEvent],
+            note_events: &[NoteEvent],
+        ) -> bool {
+            output_left.fill(0.0);
+            output_right.fill(0.0);
+            for event in note_events {
+                let index = event.sample_offset as usize;
+                output_left[index] = event.velocity as f32;
+                output_right[index] = event.key as f32 / 127.0;
             }
             true
         }
@@ -342,5 +387,34 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(output, [[0.5, -1.0]; 3]);
+    }
+
+    #[test]
+    fn plugin_note_events_retain_their_sample_offset() {
+        let bridge = Bridge::new(NoteSignal, 8, 2, 0).unwrap();
+        let mut rack = DeviceRack::new(8).unwrap();
+        rack.push_plugin(bridge).unwrap();
+        let input = [[0.0; 2]; 8];
+        let event = NoteEvent {
+            sample_offset: 5,
+            kind: 0,
+            note_id: -1,
+            port_index: 0,
+            channel: 0,
+            key: 64,
+            velocity: 0.75,
+        };
+        let mut output = [[0.0; 2]; 8];
+        for _ in 0..10_000 {
+            rack.process_events(&input, &[], &mut output, &[], &[event])
+                .unwrap();
+            if output[5][0] == 0.75 {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_eq!(output[4], [0.0, 0.0]);
+        assert_eq!(output[5], [0.75, 64.0 / 127.0]);
+        assert_eq!(output[6], [0.0, 0.0]);
     }
 }

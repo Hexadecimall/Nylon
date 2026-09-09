@@ -29,6 +29,7 @@ use crate::mixer::{
     AutomationEvent, Levels, MASTER, MAX_AUTOMATION_EVENTS, MAX_TRACKS, MixEvent, MixPlan, Mixer,
 };
 use crate::mixer::{MAX_FRAMES, TrackInput};
+use crate::plugin::clap::NoteEvent as PluginNoteEvent;
 use crate::routing::CompiledRouting;
 use crate::transport::{LoopRange, Transport};
 
@@ -37,6 +38,35 @@ use crate::transport::{LoopRange, Transport};
 pub const MAX_INSTRUMENTS: usize = 8;
 /// Notes one instrument track can hold at a time.
 pub const MAX_NOTES_PER_TRACK: usize = 512;
+
+const EMPTY_PLUGIN_NOTE: PluginNoteEvent = PluginNoteEvent {
+    sample_offset: 0,
+    kind: 0,
+    note_id: -1,
+    port_index: 0,
+    channel: 0,
+    key: 0,
+    velocity: 0.0,
+};
+
+#[derive(Clone, Copy)]
+struct TrackPluginEvents {
+    events: [PluginNoteEvent; MAX_NOTE_EVENTS],
+    count: usize,
+}
+
+impl TrackPluginEvents {
+    const fn new() -> Self {
+        Self {
+            events: [EMPTY_PLUGIN_NOTE; MAX_NOTE_EVENTS],
+            count: 0,
+        }
+    }
+
+    fn as_slice(&self) -> &[PluginNoteEvent] {
+        &self.events[..self.count]
+    }
+}
 
 /// Mixer state for one track, as the control thread sees it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -648,6 +678,10 @@ fn voice_banks(sample_rate: f32) -> Box<[VoiceBank]> {
     banks.into_boxed_slice()
 }
 
+fn plugin_event_blocks() -> Box<[TrackPluginEvents]> {
+    vec![TrackPluginEvents::new(); MAX_TRACKS].into_boxed_slice()
+}
+
 /// The renderer that mixes a project.
 pub struct PlaybackEngine {
     mixer: Mixer,
@@ -668,6 +702,7 @@ pub struct PlaybackEngine {
     // thread with a small stack cannot afford that.
     applied_score: Box<Score>,
     instruments: Box<[VoiceBank]>,
+    plugin_notes: Box<[TrackPluginEvents]>,
     // One buffer per instrument track, which the mixer then sums. Owned so
     // the render path borrows it rather than allocating.
     track_audio: Box<[[[f32; 2]; MAX_FRAMES]; MAX_TRACKS]>,
@@ -705,6 +740,7 @@ impl PlaybackEngine {
             applied: MixSettings::new(),
             applied_score: Score::boxed(),
             instruments: voice_banks(rate as f32),
+            plugin_notes: plugin_event_blocks(),
             track_audio: zeroed_track_audio(),
             automation_dropped: 0,
         };
@@ -849,9 +885,55 @@ impl PlaybackEngine {
         self.state.publish(state);
     }
 
+    fn schedule_track(&self, index: usize, span: Span, note_events: &mut [NoteEvent]) -> usize {
+        let enabled = self
+            .applied_score
+            .track(index)
+            .is_some_and(TrackScore::is_enabled);
+        if !enabled {
+            return 0;
+        }
+        self.applied_score
+            .track(index)
+            .map_or_else(Default::default, |track| {
+                if let Some(session) = track.session_loop() {
+                    schedule_looped_block(
+                        track.notes(),
+                        session.loop_start_beats,
+                        session.loop_length_beats,
+                        session.launch_beats,
+                        span,
+                        note_events,
+                    )
+                } else {
+                    schedule_block(track.notes(), span, note_events)
+                }
+            })
+            .count
+    }
+
+    fn store_plugin_notes(&mut self, index: usize, note_events: &[NoteEvent]) {
+        let destination = &mut self.plugin_notes[index];
+        destination.count = note_events.len();
+        for (destination, source) in destination.events.iter_mut().zip(note_events) {
+            *destination = PluginNoteEvent {
+                sample_offset: source.offset as u32,
+                kind: match source.action {
+                    NoteAction::On => 0,
+                    NoteAction::Off => 1,
+                },
+                note_id: -1,
+                port_index: 0,
+                channel: 0,
+                key: i16::from(source.pitch),
+                velocity: f64::from(source.velocity) / 127.0,
+            };
+        }
+    }
+
     /// Plays one instrument track into its own buffer, starting and
     /// releasing notes at the frames the scheduler placed them on.
-    fn render_instrument(&mut self, index: usize, frames: usize, span: Span) {
+    fn render_instrument(&mut self, index: usize, frames: usize, note_events: &[NoteEvent]) {
         let enabled = self
             .applied_score
             .track(index)
@@ -866,34 +948,10 @@ impl PlaybackEngine {
             return;
         }
 
-        let mut note_events = [NoteEvent {
-            offset: 0,
-            pitch: 0,
-            velocity: 0,
-            action: NoteAction::On,
-        }; MAX_NOTE_EVENTS];
-        let scheduled = self
-            .applied_score
-            .track(index)
-            .map_or_else(Default::default, |track| {
-                if let Some(session) = track.session_loop() {
-                    schedule_looped_block(
-                        track.notes(),
-                        session.loop_start_beats,
-                        session.loop_length_beats,
-                        session.launch_beats,
-                        span,
-                        &mut note_events,
-                    )
-                } else {
-                    schedule_block(track.notes(), span, &mut note_events)
-                }
-            });
-
         // Render in spans between note events so each note starts and
         // stops on the frame it was written for.
         let mut start = 0;
-        for event in &note_events[..scheduled.count] {
+        for event in note_events {
             let at = event.offset.min(frames);
             if at > start {
                 bank.render_additive(&mut buffer[start..at], 0.0);
@@ -945,9 +1003,18 @@ impl PlaybackEngine {
         for buffer in self.track_audio.iter_mut().take(track_count) {
             buffer[..frames].fill([0.0; 2]);
         }
-        let instrument_tracks = MAX_INSTRUMENTS.min(track_count);
-        for index in 0..instrument_tracks {
-            self.render_instrument(index, frames, span);
+        for index in 0..track_count {
+            let mut note_events = [NoteEvent {
+                offset: 0,
+                pitch: 0,
+                velocity: 0,
+                action: NoteAction::On,
+            }; MAX_NOTE_EVENTS];
+            let count = self.schedule_track(index, span, &mut note_events);
+            self.store_plugin_notes(index, &note_events[..count]);
+            if index < MAX_INSTRUMENTS {
+                self.render_instrument(index, frames, &note_events[..count]);
+            }
         }
         for (index, buffer) in self.track_audio.iter_mut().take(track_count).enumerate() {
             self.audio
@@ -1029,6 +1096,7 @@ impl PlaybackEngine {
             mixer,
             mix_plan,
             routing,
+            plugin_notes,
             ..
         } = self;
         let Some(routing) = routing.current_mut().as_mut() else {
@@ -1047,8 +1115,11 @@ impl PlaybackEngine {
                 output_node,
                 &mut output[..frames],
                 |node, main, sidechain, pre, post| {
+                    let note_events = plugin_notes
+                        .get(usize::from(node))
+                        .map_or(&[][..], TrackPluginEvents::as_slice);
                     if devices[usize::from(node)]
-                        .process(main, sidechain, pre)
+                        .process_events(main, sidechain, pre, &[], note_events)
                         .is_err()
                     {
                         pre.fill([0.0; 2]);
@@ -1635,6 +1706,28 @@ mod tests {
 
         let loudest = play(&mut engine, 40, 256);
         assert!(loudest > 0.001, "the note never sounded: {loudest}");
+    }
+
+    #[test]
+    fn scheduled_notes_are_encoded_for_plugin_ports() {
+        let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
+        assert!(publisher.publish(&playing_settings(1)));
+        let mut score = Score::new();
+        let track = score.track_mut(0).unwrap();
+        track.set_enabled(true);
+        assert_eq!(track.set_notes(&[note(0.002, 0.002, 64)]), 1);
+        assert!(publisher.publish_score(&score));
+        let mut output = [[0.0_f32; 2]; 128];
+        engine.render_block(&mut output, &[]);
+
+        let events = engine.plugin_notes[0].as_slice();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].sample_offset, 48);
+        assert_eq!(events[0].kind, 0);
+        assert_eq!(events[0].key, 64);
+        assert!((events[0].velocity - 110.0 / 127.0).abs() < 1e-12);
+        assert_eq!(events[1].sample_offset, 96);
+        assert_eq!(events[1].kind, 1);
     }
 
     #[test]

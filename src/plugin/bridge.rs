@@ -189,6 +189,11 @@ impl Bridge {
     }
 
     #[must_use]
+    pub const fn input_note_ports(&self) -> u32 {
+        self.input_note_ports
+    }
+
+    #[must_use]
     pub fn submitted_blocks(&self) -> u64 {
         self.counters.submitted.load(Ordering::Relaxed)
     }
