@@ -114,6 +114,35 @@ pub struct TrackInput<'a> {
     pub samples: &'a [[f32; 2]],
 }
 
+/// Precomputed strip gains for one routed block.
+///
+/// Storage is allocated when the playback engine is built. Preparing and
+/// applying a plan on the audio thread performs no allocation.
+// off the audio thread
+pub(crate) struct MixPlan {
+    gains: Box<[[[f32; 2]; MAX_FRAMES]]>,
+}
+
+impl MixPlan {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self {
+            gains: vec![[[0.0; 2]; MAX_FRAMES]; MAX_TRACKS + 1].into_boxed_slice(),
+        }
+    }
+    // back on the audio thread
+
+    #[inline]
+    fn track(&self, track: usize, frames: usize) -> &[[f32; 2]] {
+        &self.gains[track][..frames]
+    }
+
+    #[inline]
+    fn master(&self, frames: usize) -> &[[f32; 2]] {
+        &self.gains[MAX_TRACKS][..frames]
+    }
+}
+
 /// Levels most recently measured on a strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Levels {
@@ -611,12 +640,6 @@ impl Mixer {
         Ok(())
     }
 
-    pub(crate) fn apply_automation_events(&mut self, events: &[AutomationEvent]) {
-        for event in events {
-            self.apply_automation(*event);
-        }
-    }
-
     /// Validates transient events before a routed render changes any state.
     pub(crate) fn validate_events(
         &self,
@@ -655,64 +678,102 @@ impl Mixer {
         Ok(())
     }
 
-    /// Applies every event at one sub-block boundary.
-    pub(crate) fn apply_events(&mut self, events: &[MixEvent]) {
-        for event in events {
-            self.apply(*event);
+    /// Advances every strip once per sample and records its stereo gain.
+    ///
+    /// Routed processing can then render every graph node for the complete
+    /// host block while retaining sample-accurate mixer changes.
+    pub(crate) fn prepare_plan(
+        &mut self,
+        plan: &mut MixPlan,
+        frames: usize,
+        events: &[MixEvent],
+        automation: &[AutomationEvent],
+    ) {
+        let mut event_cursor = 0;
+        let mut automation_cursor = 0;
+        for frame in 0..frames {
+            while event_cursor < events.len() && events[event_cursor].offset <= frame {
+                self.apply(events[event_cursor]);
+                event_cursor += 1;
+            }
+            while automation_cursor < automation.len()
+                && automation[automation_cursor].offset <= frame
+            {
+                self.apply_automation(automation[automation_cursor]);
+                automation_cursor += 1;
+            }
+
+            let any_solo = self.any_solo;
+            for index in 0..self.track_count {
+                let strip = &mut self.strips[index];
+                strip.prepare_sample(any_solo);
+                let gain = strip.gain.process();
+                let pan = strip.pan_gains();
+                plan.gains[index][frame] = [gain * pan.left, gain * pan.right];
+            }
+            self.master.prepare_sample(false);
+            let gain = self.master.gain.process();
+            let pan = self.master.pan_gains();
+            plan.gains[MAX_TRACKS][frame] = [gain * pan.left, gain * pan.right];
+        }
+
+        while event_cursor < events.len() && events[event_cursor].offset <= frames {
+            self.apply(events[event_cursor]);
+            event_cursor += 1;
+        }
+        while automation_cursor < automation.len() && automation[automation_cursor].offset <= frames
+        {
+            self.apply_automation(automation[automation_cursor]);
+            automation_cursor += 1;
         }
     }
 
-    /// Processes one routed track without applying the master strip.
-    pub(crate) fn process_track(
+    /// Applies a prepared routed-track plan and updates its meters.
+    pub(crate) fn process_track_planned(
         &mut self,
         track: u16,
+        plan: &MixPlan,
         input: &[[f32; 2]],
         output: &mut [[f32; 2]],
     ) {
-        if input.len() != output.len() {
-            output.fill([0.0; 2]);
-            return;
-        }
-        let any_solo = self.any_solo;
+        let index = usize::from(track);
         let Some(strip) = self
             .strips
-            .get_mut(usize::from(track))
-            .filter(|_| usize::from(track) < self.track_count)
+            .get_mut(index)
+            .filter(|_| index < self.track_count)
         else {
             output.fill([0.0; 2]);
             return;
         };
-        for (source, destination) in input.iter().zip(output) {
-            strip.prepare_sample(any_solo);
-            let gain = strip.gain.process();
-            let gains = strip.pan_gains();
-            *destination = [
-                source[0] * gain * gains.left,
-                source[1] * gain * gains.right,
-            ];
+        if input.len() != output.len() || input.len() > MAX_FRAMES {
+            output.fill([0.0; 2]);
+            return;
+        }
+        for ((source, destination), gains) in
+            input.iter().zip(output).zip(plan.track(index, input.len()))
+        {
+            *destination = [source[0] * gains[0], source[1] * gains[1]];
             strip.meter_left.push(destination[0]);
             strip.meter_right.push(destination[1]);
         }
     }
 
-    /// Processes the master strip for the final routed bus.
-    pub(crate) fn process_master(&mut self, input: &[[f32; 2]], output: &mut [[f32; 2]]) {
-        if input.len() != output.len() {
+    /// Applies the prepared master plan and updates its meters.
+    pub(crate) fn process_master_planned(
+        &mut self,
+        plan: &MixPlan,
+        input: &[[f32; 2]],
+        output: &mut [[f32; 2]],
+    ) {
+        if input.len() != output.len() || input.len() > MAX_FRAMES {
             output.fill([0.0; 2]);
             return;
         }
-        let master = &mut self.master;
-        master.gain.set_target(master.target_gain(false));
-        master.pan.set_target(master.pan_position);
-        for (source, destination) in input.iter().zip(output) {
-            let gain = master.gain.process();
-            let gains = master.pan_gains();
-            *destination = [
-                source[0] * gain * gains.left,
-                source[1] * gain * gains.right,
-            ];
-            master.meter_left.push(destination[0]);
-            master.meter_right.push(destination[1]);
+        for ((source, destination), gains) in input.iter().zip(output).zip(plan.master(input.len()))
+        {
+            *destination = [source[0] * gains[0], source[1] * gains[1]];
+            self.master.meter_left.push(destination[0]);
+            self.master.meter_right.push(destination[1]);
         }
     }
 

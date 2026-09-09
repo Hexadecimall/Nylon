@@ -230,6 +230,12 @@ underrun, queue-drop, and worker-failure counters expose its health. State save
 and load commands transfer opaque plugin state with a 256 MiB limit. State I/O
 never enters an audio callback.
 
+The routed mixer prepares fixed-capacity gain and pan control data for every
+sample before executing the graph. Each graph node and device chain therefore
+receives one complete host block while fader, pan, mute, solo, and persistent
+automation changes retain their exact sample offsets. The control storage is
+allocated when the playback engine is built.
+
 Project device chains store native processors and external plugins in one order.
 Each plugin record contains its format, portable package name, stable identifier,
 reported latency, enabled state, and opaque state bytes. Plugin state uses shared

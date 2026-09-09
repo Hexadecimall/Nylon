@@ -25,7 +25,7 @@ use crate::engine::voice::{Patch, VoiceBank};
 use crate::exchange::{AudioSlot, ControlSlot, exchange};
 use crate::latest::{Reader, Writer, latest};
 use crate::mixer::{
-    AutomationEvent, Levels, MASTER, MAX_AUTOMATION_EVENTS, MAX_TRACKS, MixEvent, Mixer,
+    AutomationEvent, Levels, MASTER, MAX_AUTOMATION_EVENTS, MAX_TRACKS, MixEvent, MixPlan, Mixer,
 };
 use crate::mixer::{MAX_FRAMES, TrackInput};
 use crate::routing::CompiledRouting;
@@ -611,6 +611,7 @@ fn voice_banks(sample_rate: f32) -> Box<[VoiceBank]> {
 /// The renderer that mixes a project.
 pub struct PlaybackEngine {
     mixer: Mixer,
+    mix_plan: MixPlan,
     transport: Transport,
     settings: Reader<MixSettings>,
     score: AudioSlot<Box<Score>>,
@@ -653,6 +654,7 @@ impl PlaybackEngine {
         let (state_writer, state_reader) = latest(PlaybackState::default());
         let engine = Self {
             mixer: Mixer::new(0, rate as f32),
+            mix_plan: MixPlan::new(),
             transport: Transport::new(rate, 120.0),
             settings: settings_audio,
             score: score_audio,
@@ -970,6 +972,8 @@ impl PlaybackEngine {
             output.fill([0.0; 2]);
             return;
         }
+        self.mixer
+            .prepare_plan(&mut self.mix_plan, frames, events, automation);
         let mut inputs = [NodeInput {
             node: 0,
             samples: &[],
@@ -981,80 +985,44 @@ impl PlaybackEngine {
             };
         }
 
-        let mut start = 0;
-        let mut cursor = 0;
-        let mut automation_cursor = 0;
-        loop {
-            let event_start = cursor;
-            while cursor < events.len() && events[cursor].offset <= start {
-                cursor += 1;
-            }
-            self.mixer.apply_events(&events[event_start..cursor]);
-            let automation_start = automation_cursor;
-            while automation_cursor < automation.len()
-                && automation[automation_cursor].offset <= start
-            {
-                automation_cursor += 1;
-            }
-            self.mixer
-                .apply_automation_events(&automation[automation_start..automation_cursor]);
-            if start >= frames {
-                break;
-            }
-            let event_end = events.get(cursor).map_or(frames, |event| event.offset);
-            let automation_end = automation
-                .get(automation_cursor)
-                .map_or(frames, |event| event.offset);
-            let end = event_end.min(automation_end);
-            let Self { mixer, routing, .. } = self;
-            let Some(routing) = routing.current_mut().as_mut() else {
-                output[start..end].fill([0.0; 2]);
-                return;
-            };
-            let PublishedRouting {
-                renderer,
+        let Self {
+            mixer,
+            mix_plan,
+            routing,
+            ..
+        } = self;
+        let Some(routing) = routing.current_mut().as_mut() else {
+            output[..frames].fill([0.0; 2]);
+            return;
+        };
+        let PublishedRouting {
+            renderer,
+            output_node,
+            devices,
+        } = routing.as_mut();
+        let output_node = *output_node;
+        if renderer
+            .render(
+                &inputs[..track_count],
                 output_node,
-                devices,
-            } = routing.as_mut();
-            let output_node = *output_node;
-            let mut span_inputs = [NodeInput {
-                node: 0,
-                samples: &[],
-            }; MAX_TRACKS];
-            for (destination, source) in span_inputs[..track_count]
-                .iter_mut()
-                .zip(&inputs[..track_count])
-            {
-                *destination = NodeInput {
-                    node: source.node,
-                    samples: &source.samples[start..end],
-                };
-            }
-            if renderer
-                .render(
-                    &span_inputs[..track_count],
-                    output_node,
-                    &mut output[start..end],
-                    |node, main, sidechain, pre, post| {
-                        if devices[usize::from(node)]
-                            .process(main, sidechain, pre)
-                            .is_err()
-                        {
-                            pre.fill([0.0; 2]);
-                        }
-                        if node == output_node {
-                            mixer.process_master(pre, post);
-                        } else {
-                            mixer.process_track(node, pre, post);
-                        }
-                    },
-                )
-                .is_err()
-            {
-                output[start..].fill([0.0; 2]);
-                return;
-            }
-            start = end;
+                &mut output[..frames],
+                |node, main, sidechain, pre, post| {
+                    if devices[usize::from(node)]
+                        .process(main, sidechain, pre)
+                        .is_err()
+                    {
+                        pre.fill([0.0; 2]);
+                    }
+                    if node == output_node {
+                        mixer.process_master_planned(mix_plan, pre, post);
+                    } else {
+                        mixer.process_track_planned(node, mix_plan, pre, post);
+                    }
+                },
+            )
+            .is_err()
+        {
+            output[..frames].fill([0.0; 2]);
         }
     }
 
@@ -1342,6 +1310,73 @@ mod tests {
         for frame in output {
             assert!((frame[0] - 0.05).abs() < 1e-4, "{frame:?}");
             assert!((frame[1] + 0.05).abs() < 1e-4, "{frame:?}");
+        }
+    }
+
+    #[test]
+    fn routed_mixer_events_match_the_direct_path() {
+        use crate::engine::sample::Sample;
+        use crate::engine::timeline::{AudioRegion, AudioTimeline};
+        use crate::routing::{Edge, EdgeKind, RoutingGraph};
+
+        let (mut direct, mut direct_publisher) = PlaybackEngine::new(RATE);
+        let (mut routed, mut routed_publisher) = PlaybackEngine::new(RATE);
+        let settings = playing_settings(1);
+        assert!(direct_publisher.publish(&settings));
+        assert!(routed_publisher.publish(&settings));
+
+        let mut timeline = AudioTimeline::new();
+        let media = timeline
+            .add_sample(Sample::new(48_000, vec![[0.25, -0.5]; 512]).unwrap())
+            .unwrap();
+        timeline
+            .add_region(AudioRegion::new(media, 0, 0.0, 1.0, 0.0, 512.0).unwrap())
+            .unwrap();
+        assert!(direct_publisher.publish_audio(timeline.clone()));
+        assert!(routed_publisher.publish_audio(timeline));
+
+        let mut graph = RoutingGraph::new(2).unwrap();
+        graph
+            .add_edge(Edge {
+                source: 0,
+                destination: 1,
+                kind: EdgeKind::Main,
+                gain: 1.0,
+            })
+            .unwrap();
+        assert!(
+            routed_publisher
+                .publish_routing(&graph.compile().unwrap(), 1)
+                .unwrap()
+        );
+
+        let events = [
+            MixEvent {
+                offset: 17,
+                track: 0,
+                parameter: Parameter::Volume,
+                value: -9.0,
+            },
+            MixEvent {
+                offset: 43,
+                track: 0,
+                parameter: Parameter::Pan,
+                value: 0.7,
+            },
+            MixEvent {
+                offset: 64,
+                track: MASTER,
+                parameter: Parameter::Volume,
+                value: -3.0,
+            },
+        ];
+        let mut direct_output = [[0.0_f32; 2]; 96];
+        let mut routed_output = [[0.0_f32; 2]; 96];
+        direct.render_block(&mut direct_output, &events);
+        routed.render_block(&mut routed_output, &events);
+        for (routed_frame, direct_frame) in routed_output.iter().zip(direct_output) {
+            assert!((routed_frame[0] - direct_frame[0]).abs() < 1e-6);
+            assert!((routed_frame[1] - direct_frame[1]).abs() < 1e-6);
         }
     }
 
