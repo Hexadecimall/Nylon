@@ -292,6 +292,59 @@ fn native_track_devices_are_typed_ordered_and_undoable() {
 }
 
 #[test]
+fn native_track_automation_is_typed_and_undoable() {
+    let handle = nylon_project_new();
+    // SAFETY: This thread owns the handle and every point record.
+    unsafe {
+        assert_eq!(nylon_project_add_track(handle), 1);
+        let points = [
+            NylonAutomationPoint {
+                beat: 0.0,
+                value: -12.0,
+                curve: 1,
+            },
+            NylonAutomationPoint {
+                beat: 4.0,
+                value: 0.0,
+                curve: 2,
+            },
+        ];
+        assert_eq!(
+            nylon_track_automation_set(handle, 0, 0, points.as_ptr(), points.len() as u64),
+            1
+        );
+        assert_eq!(nylon_track_automation_count(handle, 0, 0), 2);
+        let mut read = NylonAutomationPoint::default();
+        assert_eq!(nylon_track_automation_get(handle, 0, 0, 1, &mut read), 1);
+        assert_eq!(read, points[1]);
+        assert_eq!(nylon_project_undo(handle), 1);
+        assert_eq!(nylon_track_automation_count(handle, 0, 0), 0);
+        assert_eq!(nylon_project_redo(handle), 1);
+        assert_eq!(nylon_track_automation_clear(handle, 0, 0), 1);
+        assert_eq!(nylon_track_automation_count(handle, 0, 0), 0);
+
+        let invalid = [NylonAutomationPoint {
+            beat: 0.0,
+            value: 0.5,
+            curve: 1,
+        }];
+        assert_eq!(
+            nylon_track_automation_set(handle, 0, 2, invalid.as_ptr(), 1),
+            0
+        );
+        assert_eq!(
+            nylon_track_automation_set(handle, 0, 0, std::ptr::null(), 1),
+            0
+        );
+        assert_eq!(
+            nylon_track_automation_get(handle, 0, 0, 0, std::ptr::null_mut()),
+            0
+        );
+        nylon_project_free(handle);
+    }
+}
+
+#[test]
 fn native_save_open_preserves_state_and_rejects_corrupt_documents() {
     let tick = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

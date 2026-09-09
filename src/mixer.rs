@@ -21,6 +21,8 @@ pub const MAX_TRACKS: usize = 256;
 pub const MAX_FRAMES: usize = 2048;
 /// Largest number of parameter changes in one block.
 pub const MAX_EVENTS: usize = 512;
+/// Largest number of persistent automation segment changes in one block.
+pub const MAX_AUTOMATION_EVENTS: usize = 1024;
 /// Index that addresses the master strip rather than a track.
 pub const MASTER: u16 = u16::MAX;
 
@@ -60,6 +62,27 @@ pub struct MixEvent {
     pub value: f32,
 }
 
+/// Interpolation shape for a persistent automation segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutomationCurve {
+    Step,
+    Linear,
+    Smooth,
+}
+
+/// A persistent automation segment beginning at a frame offset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AutomationEvent {
+    pub offset: usize,
+    pub track: u16,
+    pub parameter: Parameter,
+    pub start_value: f32,
+    pub end_value: f32,
+    pub elapsed_frames: u64,
+    pub total_frames: u64,
+    pub curve: AutomationCurve,
+}
+
 /// Why a render was refused. A refused render changes nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MixError {
@@ -68,6 +91,8 @@ pub enum MixError {
     BufferSize,
     /// More events than [`MAX_EVENTS`].
     EventCapacity,
+    /// More automation events than [`MAX_AUTOMATION_EVENTS`].
+    AutomationCapacity,
     /// An event offset lies past the end of the block.
     EventOffset,
     /// Events are not in ascending offset order.
@@ -118,6 +143,48 @@ struct Strip {
     cached_gains: pan::Gains,
     meter_left: Meter,
     meter_right: Meter,
+    volume_automation: AutomationState,
+    pan_automation: AutomationState,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AutomationState {
+    active: bool,
+    start: f32,
+    end: f32,
+    elapsed: u64,
+    total: u64,
+    curve: Option<AutomationCurve>,
+}
+
+impl AutomationState {
+    fn set(&mut self, event: AutomationEvent) {
+        self.active = true;
+        self.start = event.start_value;
+        self.end = event.end_value;
+        self.elapsed = event.elapsed_frames.min(event.total_frames);
+        self.total = event.total_frames;
+        self.curve = Some(event.curve);
+    }
+
+    fn next(&mut self) -> Option<f32> {
+        if !self.active {
+            return None;
+        }
+        let phase = if self.total == 0 {
+            1.0
+        } else {
+            self.elapsed as f64 / self.total as f64
+        };
+        let shaped = match self.curve.unwrap_or(AutomationCurve::Step) {
+            AutomationCurve::Step => 0.0,
+            AutomationCurve::Linear => phase,
+            AutomationCurve::Smooth => phase * phase * (3.0 - 2.0 * phase),
+        } as f32;
+        let value = self.start + (self.end - self.start) * shaped;
+        self.elapsed = self.elapsed.saturating_add(1).min(self.total);
+        Some(value)
+    }
 }
 
 impl Strip {
@@ -138,6 +205,8 @@ impl Strip {
             cached_gains: gains,
             meter_left: Meter::with_defaults(sample_rate),
             meter_right: Meter::with_defaults(sample_rate),
+            volume_automation: AutomationState::default(),
+            pan_automation: AutomationState::default(),
         }
     }
 
@@ -175,6 +244,31 @@ impl Strip {
             rms_left: self.meter_left.rms(),
             rms_right: self.meter_right.rms(),
             clipped: self.meter_left.is_clipped() || self.meter_right.is_clipped(),
+        }
+    }
+
+    fn advance_automation(&mut self) {
+        if let Some(value) = self.volume_automation.next() {
+            self.volume_db = value;
+        }
+        if let Some(value) = self.pan_automation.next() {
+            self.pan_position = value;
+        }
+    }
+
+    #[inline]
+    fn prepare_sample(&mut self, any_solo: bool) {
+        self.advance_automation();
+        let gain = self.target_gain(any_solo);
+        if self.volume_automation.active {
+            self.gain.reset(gain);
+        } else {
+            self.gain.set_target(gain);
+        }
+        if self.pan_automation.active {
+            self.pan.reset(self.pan_position);
+        } else {
+            self.pan.set_target(self.pan_position);
         }
     }
 }
@@ -359,10 +453,20 @@ impl Mixer {
         for index in 0..self.track_count {
             self.strips[index].meter_left.reset();
             self.strips[index].meter_right.reset();
+            self.strips[index].volume_automation = AutomationState::default();
+            self.strips[index].pan_automation = AutomationState::default();
         }
         self.master.meter_left.reset();
         self.master.meter_right.reset();
         self.reset_gains();
+    }
+
+    /// Stops persistent ramps while retaining their current parameter values.
+    pub(crate) fn clear_automation(&mut self) {
+        for strip in &mut self.strips[..self.track_count] {
+            strip.volume_automation = AutomationState::default();
+            strip.pan_automation = AutomationState::default();
+        }
     }
 
     /// Mixes `inputs` into `output`, applying `events` at their offsets.
@@ -381,6 +485,17 @@ impl Mixer {
         inputs: &[TrackInput<'_>],
         output: &mut [[f32; 2]],
         events: &[MixEvent],
+    ) -> Result<(), MixError> {
+        self.render_automated(inputs, output, events, &[])
+    }
+
+    /// Mixes inputs while applying transient and persistent automation events.
+    pub fn render_automated(
+        &mut self,
+        inputs: &[TrackInput<'_>],
+        output: &mut [[f32; 2]],
+        events: &[MixEvent],
+        automation: &[AutomationEvent],
     ) -> Result<(), MixError> {
         let frames = output.len();
         if frames > MAX_FRAMES {
@@ -407,10 +522,12 @@ impl Mixer {
             }
         }
         self.validate_events(frames, events)?;
+        self.validate_automation(frames, automation)?;
 
         output.fill([0.0, 0.0]);
         let mut start = 0;
         let mut cursor = 0;
+        let mut automation_cursor = 0;
         loop {
             // An event takes effect before the sample at its offset, so
             // everything due at or before the cursor applies first. Events
@@ -420,18 +537,87 @@ impl Mixer {
                 self.apply(event);
                 cursor += 1;
             }
+            while automation_cursor < automation.len()
+                && automation[automation_cursor].offset <= start
+            {
+                self.apply_automation(automation[automation_cursor]);
+                automation_cursor += 1;
+            }
             if start >= frames {
                 break;
             }
             // The span runs to the next event, or to the end of the block.
-            let end = events.get(cursor).map_or(frames, |event| event.offset);
+            let event_end = events.get(cursor).map_or(frames, |event| event.offset);
+            let automation_end = automation
+                .get(automation_cursor)
+                .map_or(frames, |event| event.offset);
+            let end = event_end.min(automation_end);
             self.render_span(inputs, output, start, end);
             start = end;
         }
         Ok(())
     }
 
-    /// Validates automation before a routed render changes any state.
+    /// Validates persistent automation before a render changes any state.
+    pub(crate) fn validate_automation(
+        &self,
+        frames: usize,
+        events: &[AutomationEvent],
+    ) -> Result<(), MixError> {
+        if events.len() > MAX_AUTOMATION_EVENTS {
+            return Err(MixError::AutomationCapacity);
+        }
+        let mut previous = 0;
+        for event in events {
+            if event.offset > frames {
+                return Err(MixError::EventOffset);
+            }
+            if event.offset < previous {
+                return Err(MixError::EventOrder);
+            }
+            previous = event.offset;
+            if event.track == MASTER || usize::from(event.track) >= self.track_count {
+                return Err(MixError::EventTrack);
+            }
+            if !event.start_value.is_finite()
+                || !event.end_value.is_finite()
+                || event.elapsed_frames > event.total_frames
+            {
+                return Err(MixError::EventValue);
+            }
+            match event.parameter {
+                Parameter::Volume
+                    if !(MIN_VOLUME_DB..=MAX_VOLUME_DB).contains(&event.start_value)
+                        || !(MIN_VOLUME_DB..=MAX_VOLUME_DB).contains(&event.end_value) =>
+                {
+                    return Err(MixError::EventValue);
+                }
+                Parameter::Pan
+                    if !(-1.0..=1.0).contains(&event.start_value)
+                        || !(-1.0..=1.0).contains(&event.end_value) =>
+                {
+                    return Err(MixError::EventValue);
+                }
+                Parameter::Mute | Parameter::Solo
+                    if event.curve != AutomationCurve::Step
+                        || event.start_value != event.end_value
+                        || (event.start_value != 0.0 && event.start_value != 1.0) =>
+                {
+                    return Err(MixError::EventValue);
+                }
+                Parameter::Volume | Parameter::Pan | Parameter::Mute | Parameter::Solo => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn apply_automation_events(&mut self, events: &[AutomationEvent]) {
+        for event in events {
+            self.apply_automation(*event);
+        }
+    }
+
+    /// Validates transient events before a routed render changes any state.
     pub(crate) fn validate_events(
         &self,
         frames: usize,
@@ -496,9 +682,8 @@ impl Mixer {
             output.fill([0.0; 2]);
             return;
         };
-        strip.gain.set_target(strip.target_gain(any_solo));
-        strip.pan.set_target(strip.pan_position);
         for (source, destination) in input.iter().zip(output) {
+            strip.prepare_sample(any_solo);
             let gain = strip.gain.process();
             let gains = strip.pan_gains();
             *destination = [
@@ -547,8 +732,6 @@ impl Mixer {
         // silent track's meters fall the same way a sounding one does.
         for index in 0..self.track_count {
             let strip = &mut self.strips[index];
-            strip.gain.set_target(strip.target_gain(any_solo));
-            strip.pan.set_target(strip.pan_position);
             let samples = inputs
                 .iter()
                 .find(|input| usize::from(input.track) == index)
@@ -556,6 +739,7 @@ impl Mixer {
             match samples {
                 Some(samples) => {
                     for (frame, destination) in samples.iter().zip(&mut output[start..end]) {
+                        strip.prepare_sample(any_solo);
                         let gain = strip.gain.process();
                         let gains = strip.pan_gains();
                         let left = frame[0] * gain * gains.left;
@@ -568,6 +752,7 @@ impl Mixer {
                 }
                 None => {
                     for _ in start..end {
+                        strip.prepare_sample(any_solo);
                         strip.gain.process();
                         strip.pan_gains();
                         strip.meter_left.push(0.0);
@@ -615,6 +800,23 @@ impl Mixer {
                     strip.soloed = soloed;
                 }
                 self.refresh_solo();
+            }
+        }
+    }
+
+    fn apply_automation(&mut self, event: AutomationEvent) {
+        let index = usize::from(event.track);
+        match event.parameter {
+            Parameter::Volume => self.strips[index].volume_automation.set(event),
+            Parameter::Pan => self.strips[index].pan_automation.set(event),
+            Parameter::Mute => {
+                self.strips[index].muted = event.start_value != 0.0;
+                self.reset_gains();
+            }
+            Parameter::Solo => {
+                self.strips[index].soloed = event.start_value != 0.0;
+                self.refresh_solo();
+                self.reset_gains();
             }
         }
     }
@@ -1368,6 +1570,92 @@ mod tests {
             b.render(&inputs, &mut second, &events).unwrap();
         }
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn persistent_volume_automation_follows_the_selected_curve() {
+        let mut mixer = Mixer::new(1, RATE);
+        let signal = constant(4, 1.0, 1.0);
+        let inputs = [TrackInput {
+            track: 0,
+            samples: &signal,
+        }];
+        let event = AutomationEvent {
+            offset: 0,
+            track: 0,
+            parameter: Parameter::Volume,
+            start_value: -6.0,
+            end_value: 0.0,
+            elapsed_frames: 0,
+            total_frames: 3,
+            curve: AutomationCurve::Linear,
+        };
+        let mut output = silence(4);
+        mixer
+            .render_automated(&inputs, &mut output, &[], &[event])
+            .unwrap();
+        for (index, expected_db) in [-6.0, -4.0, -2.0, 0.0].into_iter().enumerate() {
+            let expected = db::to_linear(expected_db);
+            assert!((output[index][0] - expected).abs() < 0.000_001);
+            assert!((output[index][1] - expected).abs() < 0.000_001);
+        }
+    }
+
+    #[test]
+    fn persistent_step_automation_lands_at_its_offset() {
+        let mut mixer = Mixer::new(1, RATE);
+        let signal = constant(4, 1.0, 1.0);
+        let inputs = [TrackInput {
+            track: 0,
+            samples: &signal,
+        }];
+        let event = AutomationEvent {
+            offset: 2,
+            track: 0,
+            parameter: Parameter::Mute,
+            start_value: 1.0,
+            end_value: 1.0,
+            elapsed_frames: 0,
+            total_frames: 0,
+            curve: AutomationCurve::Step,
+        };
+        let mut output = silence(4);
+        mixer
+            .render_automated(&inputs, &mut output, &[], &[event])
+            .unwrap();
+        assert!(
+            output[..2]
+                .iter()
+                .flatten()
+                .all(|sample| (*sample - 1.0).abs() < 0.000_001)
+        );
+        assert_eq!(output[2..], [[0.0, 0.0]; 2]);
+    }
+
+    #[test]
+    fn invalid_persistent_automation_changes_nothing() {
+        let mut mixer = Mixer::new(1, RATE);
+        let signal = constant(4, 1.0, 1.0);
+        let inputs = [TrackInput {
+            track: 0,
+            samples: &signal,
+        }];
+        let mut output = constant(4, 9.0, 9.0);
+        let event = AutomationEvent {
+            offset: 0,
+            track: 0,
+            parameter: Parameter::Pan,
+            start_value: -2.0,
+            end_value: 0.0,
+            elapsed_frames: 0,
+            total_frames: 4,
+            curve: AutomationCurve::Linear,
+        };
+        assert_eq!(
+            mixer.render_automated(&inputs, &mut output, &[], &[event]),
+            Err(MixError::EventValue)
+        );
+        assert_eq!(output, constant(4, 9.0, 9.0));
     }
 
     #[test]

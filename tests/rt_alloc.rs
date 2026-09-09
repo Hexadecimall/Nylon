@@ -1,4 +1,8 @@
+use nylon::audio::{BlockTiming, Renderer};
+use nylon::engine::automation::{Lane, Point, Timeline};
+use nylon::engine::playback::{MixSettings, PlaybackEngine};
 use nylon::engine::{Engine, GainEvent, MAX_FRAMES};
+use nylon::mixer::{AutomationCurve, Parameter};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -74,4 +78,41 @@ fn state_swap_defers_all_deallocation() {
     assert_eq!(COUNT.with(Cell::get), 0);
     assert_eq!(audio.current()[0], 2.0);
     drop(control.reclaim());
+}
+
+#[test]
+fn automated_project_render_performs_no_allocator_operations() {
+    let (mut engine, mut publisher) = PlaybackEngine::new(48_000.0);
+    let mut settings = MixSettings::new();
+    settings.set_track_count(1);
+    settings.set_playing(true);
+    assert!(publisher.publish(&settings));
+    let mut timeline = Timeline::new();
+    assert!(timeline.add_lane(Lane {
+        track: 0,
+        parameter: Parameter::Pan,
+        points: vec![
+            Point {
+                beat: 0.0,
+                value: -1.0,
+                curve: AutomationCurve::Linear,
+            },
+            Point {
+                beat: 8.0,
+                value: 1.0,
+                curve: AutomationCurve::Smooth,
+            },
+        ],
+    }));
+    assert!(publisher.publish_automation(timeline));
+    let mut output = [[0.0_f32; 2]; MAX_FRAMES];
+    engine.render(&mut output, BlockTiming::default());
+
+    COUNT.with(|value| value.set(0));
+    ENABLED.with(|value| value.set(true));
+    for _ in 0..100 {
+        engine.render(&mut output, BlockTiming::default());
+    }
+    ENABLED.with(|value| value.set(false));
+    assert_eq!(COUNT.with(Cell::get), 0);
 }

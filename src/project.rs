@@ -7,6 +7,90 @@ use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph
 
 /// Largest number of routes stored in one project snapshot.
 pub const MAX_PROJECT_ROUTES: usize = 1024;
+/// Largest number of points stored in one automation lane.
+pub const MAX_AUTOMATION_POINTS: usize = 4096;
+
+/// Mixer parameter addressed by a track automation lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutomationParameter {
+    Volume,
+    Pan,
+    Mute,
+    Solo,
+}
+
+impl AutomationParameter {
+    pub(crate) const fn code(self) -> u8 {
+        match self {
+            Self::Volume => 0,
+            Self::Pan => 1,
+            Self::Mute => 2,
+            Self::Solo => 3,
+        }
+    }
+
+    pub(crate) const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Volume),
+            1 => Some(Self::Pan),
+            2 => Some(Self::Mute),
+            3 => Some(Self::Solo),
+            _ => None,
+        }
+    }
+}
+
+/// Shape used from one automation point to the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutomationCurve {
+    Step,
+    Linear,
+    Smooth,
+}
+
+impl AutomationCurve {
+    pub(crate) const fn code(self) -> u8 {
+        match self {
+            Self::Step => 0,
+            Self::Linear => 1,
+            Self::Smooth => 2,
+        }
+    }
+
+    pub(crate) const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Step),
+            1 => Some(Self::Linear),
+            2 => Some(Self::Smooth),
+            _ => None,
+        }
+    }
+}
+
+/// One value on an automation lane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AutomationPoint {
+    pub beat: f64,
+    pub value: f32,
+    pub curve: AutomationCurve,
+}
+
+/// Ordered automation for one mixer parameter.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutomationLane {
+    pub(crate) parameter: AutomationParameter,
+    pub(crate) points: Vec<AutomationPoint>,
+}
+
+impl AutomationLane {
+    pub fn parameter(&self) -> AutomationParameter {
+        self.parameter
+    }
+
+    pub fn points(&self) -> &[AutomationPoint] {
+        &self.points
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TrackId(pub(crate) u64);
@@ -203,6 +287,7 @@ pub struct Track {
     pub(crate) color_index: u8,
     pub(crate) latency_frames: u32,
     pub(crate) devices: Vec<Device>,
+    pub(crate) automation: Vec<AutomationLane>,
     pub(crate) session_slots: Vec<Option<ClipId>>,
     pub(crate) arrangement: Vec<ArrangementPlacement>,
 }
@@ -240,6 +325,9 @@ impl Track {
     }
     pub fn devices(&self) -> &[Device] {
         &self.devices
+    }
+    pub fn automation(&self) -> &[AutomationLane] {
+        &self.automation
     }
     pub fn arrangement(&self) -> &[ArrangementPlacement] {
         &self.arrangement
@@ -424,6 +512,15 @@ pub enum Command {
         id: DeviceId,
         kind: DeviceKind,
     },
+    SetAutomation {
+        track: TrackId,
+        parameter: AutomationParameter,
+        points: Vec<AutomationPoint>,
+    },
+    ClearAutomation {
+        track: TrackId,
+        parameter: AutomationParameter,
+    },
     CreateRoute {
         source: TrackId,
         destination: TrackId,
@@ -544,6 +641,9 @@ pub enum ProjectError {
     InvalidDevice,
     MissingDevice,
     DeviceCapacity,
+    InvalidAutomation,
+    AutomationCapacity,
+    MissingAutomation,
 }
 
 /// Control-thread state. Snapshots and history must never be destroyed in a
@@ -645,6 +745,7 @@ impl Project {
                         color_index: (snapshot.tracks.len() % 16) as u8,
                         latency_frames: 0,
                         devices: Vec::new(),
+                        automation: Vec::new(),
                         session_slots: vec![None; snapshot.scenes.len()],
                         arrangement: Vec::new(),
                     });
@@ -763,6 +864,31 @@ impl Project {
                         .find(|device| device.id == *id)
                         .ok_or(ProjectError::MissingDevice)?;
                     device.config.kind = *kind;
+                }
+                Command::SetAutomation {
+                    track,
+                    parameter,
+                    points,
+                } => {
+                    validate_automation(*parameter, points)?;
+                    let lanes = &mut snapshot.track_mut(*track)?.automation;
+                    if let Some(lane) = lanes.iter_mut().find(|lane| lane.parameter == *parameter) {
+                        lane.points.clone_from(points);
+                    } else {
+                        lanes.push(AutomationLane {
+                            parameter: *parameter,
+                            points: points.clone(),
+                        });
+                        lanes.sort_by_key(|lane| lane.parameter.code());
+                    }
+                }
+                Command::ClearAutomation { track, parameter } => {
+                    let lanes = &mut snapshot.track_mut(*track)?.automation;
+                    let index = lanes
+                        .iter()
+                        .position(|lane| lane.parameter == *parameter)
+                        .ok_or(ProjectError::MissingAutomation)?;
+                    lanes.remove(index);
                 }
                 Command::CreateRoute {
                     source,
@@ -1110,6 +1236,43 @@ pub(crate) fn validate_pan(pan: f64) -> Result<(), ProjectError> {
     } else {
         Err(ProjectError::InvalidPan)
     }
+}
+
+pub(crate) fn validate_automation(
+    parameter: AutomationParameter,
+    points: &[AutomationPoint],
+) -> Result<(), ProjectError> {
+    if points.len() > MAX_AUTOMATION_POINTS {
+        return Err(ProjectError::AutomationCapacity);
+    }
+    if points.is_empty() {
+        return Err(ProjectError::InvalidAutomation);
+    }
+    let mut previous = None;
+    for point in points {
+        if !point.beat.is_finite()
+            || point.beat < 0.0
+            || previous.is_some_and(|beat| point.beat <= beat)
+        {
+            return Err(ProjectError::InvalidAutomation);
+        }
+        let value_valid = match parameter {
+            AutomationParameter::Volume => {
+                point.value.is_finite() && (-120.0..=6.0).contains(&point.value)
+            }
+            AutomationParameter::Pan => {
+                point.value.is_finite() && (-1.0..=1.0).contains(&point.value)
+            }
+            AutomationParameter::Mute | AutomationParameter::Solo => {
+                (point.value == 0.0 || point.value == 1.0) && point.curve == AutomationCurve::Step
+            }
+        };
+        if !value_valid {
+            return Err(ProjectError::InvalidAutomation);
+        }
+        previous = Some(point.beat);
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_signature(numerator: u16, denominator: u16) -> Result<(), ProjectError> {

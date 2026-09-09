@@ -72,6 +72,14 @@ typedef struct NylonTrackDevice {
     float parameters[7];
 } NylonTrackDevice;
 
+/* Track automation parameters: 0 volume, 1 pan, 2 mute, 3 solo.
+ * Curves: 0 step, 1 linear, 2 smooth. */
+typedef struct NylonAutomationPoint {
+    double beat;
+    float value;
+    int curve;
+} NylonAutomationPoint;
+
 /* Allocates a new, empty project. Returns null on allocation failure. */
 void* nylon_project_new(void);
 
@@ -198,6 +206,15 @@ int nylon_track_device_delete(
     void* project, unsigned long long track, unsigned long long index);
 int nylon_track_device_move(void* project, unsigned long long track,
     unsigned long long from, unsigned long long to);
+
+unsigned long long nylon_track_automation_count(
+    const void* project, unsigned long long track, int parameter);
+int nylon_track_automation_get(const void* project, unsigned long long track,
+    int parameter, unsigned long long index, NylonAutomationPoint* out);
+int nylon_track_automation_set(void* project, unsigned long long track, int parameter,
+    const NylonAutomationPoint* points, unsigned long long count);
+int nylon_track_automation_clear(
+    void* project, unsigned long long track, int parameter);
 
 /* Project routes use track indexes at the interface and stable track IDs in
  * persisted state. Invalid route indexes return ULLONG_MAX, -1, or NaN. */

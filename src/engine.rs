@@ -1,5 +1,6 @@
 //! Fixed-capacity, sample-accurate stereo rendering.
 
+pub mod automation;
 pub mod device;
 pub mod graph;
 pub mod playback;

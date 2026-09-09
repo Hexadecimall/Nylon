@@ -93,6 +93,35 @@ bool routingKind(const QString& text, nylon::RoutingKind& kind)
     return true;
 }
 
+bool automationParameter(const QString& text, nylon::AutomationParameter& parameter)
+{
+    if (text == "volume") parameter = nylon::AutomationParameter::Volume;
+    else if (text == "pan") parameter = nylon::AutomationParameter::Pan;
+    else if (text == "mute") parameter = nylon::AutomationParameter::Mute;
+    else if (text == "solo") parameter = nylon::AutomationParameter::Solo;
+    else return false;
+    return true;
+}
+
+bool automationCurve(const QString& text, nylon::AutomationCurve& curve)
+{
+    if (text == "step") curve = nylon::AutomationCurve::Step;
+    else if (text == "linear") curve = nylon::AutomationCurve::Linear;
+    else if (text == "smooth") curve = nylon::AutomationCurve::Smooth;
+    else return false;
+    return true;
+}
+
+QString automationCurveName(nylon::AutomationCurve curve)
+{
+    switch (curve) {
+    case nylon::AutomationCurve::Step: return "step";
+    case nylon::AutomationCurve::Linear: return "linear";
+    case nylon::AutomationCurve::Smooth: return "smooth";
+    }
+    return "step";
+}
+
 QString routingKindName(nylon::RoutingKind kind)
 {
     switch (kind) {
@@ -385,6 +414,20 @@ int directCommand(const QString& bundle, const QStringList& positional)
         return writeJson({{"ok", true}, {"track", static_cast<double>(track)},
             {"devices", devices}});
     }
+    if (command == "automation" && positional.size() == 3) {
+        std::uint64_t track = 0;
+        nylon::AutomationParameter parameter = nylon::AutomationParameter::Volume;
+        if (!indexNumber(positional[1], track) || track >= project.trackCount()
+            || !automationParameter(positional[2], parameter))
+            return fail("Invalid automation lane");
+        QJsonArray points;
+        for (const auto& point : project.trackAutomation(track, parameter)) {
+            points.append(QJsonObject{{"beat", point.beat}, {"value", point.value},
+                {"curve", automationCurveName(point.curve)}});
+        }
+        return writeJson({{"ok", true}, {"track", static_cast<double>(track)},
+            {"points", points}});
+    }
     if (command == "clips" && (positional.size() == 1 || positional.size() == 2)) {
         std::uint64_t selectedTrack = 0;
         if (positional.size() == 2 && !indexNumber(positional[1], selectedTrack))
@@ -560,6 +603,32 @@ int directCommand(const QString& bundle, const QStringList& positional)
         if (!indexNumber(positional[1], track) || !indexNumber(positional[2], index))
             return fail("Invalid device index");
         changed = project.deleteTrackDevice(track, index);
+    } else if (command == "set-automation" && positional.size() >= 6
+        && (positional.size() - 3) % 3 == 0) {
+        std::uint64_t track = 0;
+        nylon::AutomationParameter parameter = nylon::AutomationParameter::Volume;
+        if (!indexNumber(positional[1], track)
+            || !automationParameter(positional[2], parameter))
+            return fail("Invalid automation lane");
+        std::vector<nylon::AutomationPoint> points;
+        points.reserve(static_cast<std::size_t>((positional.size() - 3) / 3));
+        for (qsizetype index = 3; index < positional.size(); index += 3) {
+            double beat = 0.0;
+            double value = 0.0;
+            nylon::AutomationCurve curve = nylon::AutomationCurve::Step;
+            if (!number(positional[index], beat) || !number(positional[index + 1], value)
+                || !automationCurve(positional[index + 2], curve))
+                return fail("Invalid automation point");
+            points.push_back({beat, static_cast<float>(value), curve});
+        }
+        changed = project.setTrackAutomation(track, parameter, points);
+    } else if (command == "clear-automation" && positional.size() == 3) {
+        std::uint64_t track = 0;
+        nylon::AutomationParameter parameter = nylon::AutomationParameter::Volume;
+        if (!indexNumber(positional[1], track)
+            || !automationParameter(positional[2], parameter))
+            return fail("Invalid automation lane");
+        changed = project.clearTrackAutomation(track, parameter);
     } else if (command == "bounce" && (positional.size() == 4 || positional.size() == 5)) {
         double start = 0.0;
         double end = 0.0;

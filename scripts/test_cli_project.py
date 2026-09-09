@@ -42,6 +42,17 @@ def main():
         tracks = call("tracks")["tracks"]
         assert tracks[0]["name"] == "Lead" and tracks[0]["kind"] == "midi", tracks
         assert tracks[1]["name"] == "Take" and tracks[1]["kind"] == "audio", tracks
+        call("set-automation", "0", "volume", "0", "-12", "linear", "4", "0", "smooth")
+        automation = call("automation", "0", "volume")["points"]
+        assert automation == [
+            {"beat": 0, "curve": "linear", "value": -12},
+            {"beat": 4, "curve": "smooth", "value": 0},
+        ], automation
+        call("set-automation", "0", "mute", "0", "0.5", "linear", succeeds=False)
+        call("clear-automation", "0", "volume")
+        assert call("automation", "0", "volume")["points"] == []
+        call("undo")
+        assert len(call("automation", "0", "volume")["points"]) == 2
         call("set-track-latency", "0", "256")
         call("add-route", "0", "1", "sidechain", "0.5")
         routes = call("routes")["routes"]

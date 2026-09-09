@@ -1,5 +1,8 @@
 use nylon::engine::device::{DeviceConfig, DeviceKind};
-use nylon::project::{Command, MidiNote, Project, ProjectError, TrackKind};
+use nylon::project::{
+    AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, Project,
+    ProjectError, TrackKind,
+};
 use nylon::routing::EdgeKind;
 
 #[test]
@@ -24,6 +27,110 @@ fn grouped_commands_undo_as_one_and_snapshots_stay_immutable() {
     assert_eq!(project.snapshot().tempo(), 120.0);
     assert!(project.redo());
     assert_eq!(*project.snapshot(), *changed);
+}
+
+#[test]
+fn automation_lanes_are_validated_replaced_and_undoable() {
+    let mut project = Project::new();
+    project
+        .apply(&[Command::CreateTrack {
+            name: "Automation".into(),
+            kind: TrackKind::Audio,
+        }])
+        .unwrap();
+    let track = project.snapshot().tracks()[0].id();
+    let points = vec![
+        AutomationPoint {
+            beat: 0.0,
+            value: -12.0,
+            curve: AutomationCurve::Linear,
+        },
+        AutomationPoint {
+            beat: 4.0,
+            value: 0.0,
+            curve: AutomationCurve::Smooth,
+        },
+    ];
+    project
+        .apply(&[Command::SetAutomation {
+            track,
+            parameter: AutomationParameter::Volume,
+            points: points.clone(),
+        }])
+        .unwrap();
+    let snapshot = project.snapshot();
+    assert_eq!(snapshot.tracks()[0].automation()[0].points(), points);
+
+    let replacement = vec![AutomationPoint {
+        beat: 2.0,
+        value: -3.0,
+        curve: AutomationCurve::Step,
+    }];
+    project
+        .apply(&[Command::SetAutomation {
+            track,
+            parameter: AutomationParameter::Volume,
+            points: replacement.clone(),
+        }])
+        .unwrap();
+    assert_eq!(
+        project.snapshot().tracks()[0].automation()[0].points(),
+        replacement
+    );
+    assert!(project.undo());
+    assert_eq!(
+        project.snapshot().tracks()[0].automation()[0].points(),
+        points
+    );
+
+    for invalid in [
+        vec![],
+        vec![AutomationPoint {
+            beat: -1.0,
+            value: 0.0,
+            curve: AutomationCurve::Linear,
+        }],
+        vec![
+            AutomationPoint {
+                beat: 1.0,
+                value: 0.0,
+                curve: AutomationCurve::Linear,
+            },
+            AutomationPoint {
+                beat: 1.0,
+                value: 1.0,
+                curve: AutomationCurve::Linear,
+            },
+        ],
+    ] {
+        assert_eq!(
+            project.apply(&[Command::SetAutomation {
+                track,
+                parameter: AutomationParameter::Pan,
+                points: invalid,
+            }]),
+            Err(ProjectError::InvalidAutomation)
+        );
+    }
+    assert_eq!(
+        project.apply(&[Command::SetAutomation {
+            track,
+            parameter: AutomationParameter::Mute,
+            points: vec![AutomationPoint {
+                beat: 0.0,
+                value: 1.0,
+                curve: AutomationCurve::Linear,
+            }],
+        }]),
+        Err(ProjectError::InvalidAutomation)
+    );
+    project
+        .apply(&[Command::ClearAutomation {
+            track,
+            parameter: AutomationParameter::Volume,
+        }])
+        .unwrap();
+    assert!(project.snapshot().tracks()[0].automation().is_empty());
 }
 
 #[test]

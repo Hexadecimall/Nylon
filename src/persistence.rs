@@ -10,8 +10,9 @@ use crate::dsp::saturator::{
 };
 use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
 use crate::project::{
-    self, ArrangementPlacement, AudioClip, ClipId, Device, DeviceId, MidiClip, MidiNote, Project,
-    Route, RouteId, Scene, SceneId, Snapshot, Track, TrackId, TrackKind,
+    self, ArrangementPlacement, AudioClip, AutomationCurve, AutomationLane, AutomationParameter,
+    AutomationPoint, ClipId, Device, DeviceId, MidiClip, MidiNote, Project, Route, RouteId, Scene,
+    SceneId, Snapshot, Track, TrackId, TrackKind,
 };
 use crate::routing::EdgeKind;
 use std::collections::HashSet;
@@ -24,7 +25,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 8;
+const VERSION: u32 = 9;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -169,6 +170,16 @@ impl Encoder {
                             self.bytes(&value.to_le_bytes())?;
                         }
                     }
+                }
+            }
+            self.count(track.automation.len())?;
+            for lane in &track.automation {
+                self.bytes(&[lane.parameter().code()])?;
+                self.count(lane.points().len())?;
+                for point in lane.points() {
+                    self.bytes(&point.beat.to_le_bytes())?;
+                    self.bytes(&point.value.to_le_bytes())?;
+                    self.bytes(&[point.curve.code()])?;
                 }
             }
         }
@@ -420,6 +431,40 @@ impl<'a> Decoder<'a> {
                     });
                 }
             }
+            let mut automation = Vec::new();
+            if version >= 9 {
+                let lane_count = self.count()?;
+                if lane_count > 4 {
+                    return Err(PersistenceError::InvalidFormat);
+                }
+                automation.reserve(lane_count);
+                for _ in 0..lane_count {
+                    let parameter = AutomationParameter::from_code(self.array::<1>()?[0])
+                        .ok_or(PersistenceError::InvalidFormat)?;
+                    if automation
+                        .iter()
+                        .any(|lane: &AutomationLane| lane.parameter() == parameter)
+                    {
+                        return Err(PersistenceError::InvalidFormat);
+                    }
+                    let point_count = self.count()?;
+                    if point_count > project::MAX_AUTOMATION_POINTS {
+                        return Err(PersistenceError::InvalidFormat);
+                    }
+                    let mut points = Vec::with_capacity(point_count);
+                    for _ in 0..point_count {
+                        points.push(AutomationPoint {
+                            beat: f64::from_le_bytes(self.array()?),
+                            value: f32::from_le_bytes(self.array()?),
+                            curve: AutomationCurve::from_code(self.array::<1>()?[0])
+                                .ok_or(PersistenceError::InvalidFormat)?,
+                        });
+                    }
+                    project::validate_automation(parameter, &points)
+                        .map_err(|_| PersistenceError::InvalidFormat)?;
+                    automation.push(AutomationLane { parameter, points });
+                }
+            }
             tracks.push(Track {
                 id: TrackId(id),
                 name: name.into(),
@@ -432,6 +477,7 @@ impl<'a> Decoder<'a> {
                 color_index,
                 latency_frames,
                 devices,
+                automation,
                 session_slots: Vec::new(),
                 arrangement: Vec::new(),
             });

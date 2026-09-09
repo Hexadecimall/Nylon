@@ -208,6 +208,14 @@ The project model publishes immutable snapshots through grouped commands. Undo
 and redo retain prior snapshots in memory. Track identifiers remain unique even
 after branching from an earlier undo state. Failed command groups publish nothing.
 
+Each track stores one ordered automation lane per mixer parameter. Points use
+beat positions and step, linear, or smooth segment shapes. Lane replacement and
+clearing are normal grouped commands, so both operations participate in undo and
+survive project persistence. The control thread publishes prepared lanes through
+a bounded state exchange. The callback schedules segment boundaries into fixed
+storage, applies mute and solo at the requested frame, and evaluates volume and
+pan for each sample. Live playback and offline bounce use the same path.
+
 Native clients use the C or C++ interfaces for project editing, device playback,
 recording, routing, persistence, and deterministic bounce. Plugin isolation and
 several workstation subsystems remain separate implementation areas.

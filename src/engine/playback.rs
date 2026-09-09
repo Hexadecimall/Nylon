@@ -11,6 +11,9 @@
 //! instrument output enter the same latency-compensated routing graph.
 
 use crate::audio::{BlockTiming, Renderer, StreamConfig};
+use crate::engine::automation::{
+    EMPTY_EVENT as EMPTY_AUTOMATION_EVENT, Timeline as AutomationTimeline,
+};
 use crate::engine::device::{DeviceChain, DeviceConfig, DeviceError, MAX_DELAY_STORAGE_FRAMES};
 use crate::engine::graph::{GraphRenderError, GraphRenderer, NodeInput};
 use crate::engine::schedule::{
@@ -20,7 +23,9 @@ use crate::engine::timeline::AudioTimeline;
 use crate::engine::voice::{Patch, VoiceBank};
 use crate::exchange::{AudioSlot, ControlSlot, exchange};
 use crate::latest::{Reader, Writer, latest};
-use crate::mixer::{Levels, MASTER, MAX_TRACKS, MixEvent, Mixer};
+use crate::mixer::{
+    AutomationEvent, Levels, MASTER, MAX_AUTOMATION_EVENTS, MAX_TRACKS, MixEvent, Mixer,
+};
 use crate::mixer::{MAX_FRAMES, TrackInput};
 use crate::routing::CompiledRouting;
 use crate::transport::{LoopRange, Transport};
@@ -369,6 +374,8 @@ pub struct PlaybackState {
     pub levels: [Levels; MAX_TRACKS + 1],
     /// Tracks the levels describe.
     pub track_count: usize,
+    /// Persistent automation events dropped at the fixed block limit.
+    pub automation_dropped: u64,
 }
 
 impl Default for PlaybackState {
@@ -379,6 +386,7 @@ impl Default for PlaybackState {
             playing: false,
             levels: [Levels::default(); MAX_TRACKS + 1],
             track_count: 0,
+            automation_dropped: 0,
         }
     }
 }
@@ -389,6 +397,7 @@ pub struct Publisher {
     settings: Writer<MixSettings>,
     score: ControlSlot<Box<Score>>,
     audio: ControlSlot<Box<AudioTimeline>>,
+    automation: ControlSlot<Box<AutomationTimeline>>,
     routing: ControlSlot<Option<Box<PublishedRouting>>>,
     state: Reader<PlaybackState>,
     sample_rate: f32,
@@ -432,6 +441,13 @@ impl Publisher {
     pub fn publish_audio(&mut self, timeline: AudioTimeline) -> bool {
         while self.audio.reclaim().is_some() {}
         self.audio.publish(Box::new(timeline)).is_ok()
+    }
+
+    /// Transfers prepared persistent automation to the engine.
+    #[must_use]
+    pub fn publish_automation(&mut self, timeline: AutomationTimeline) -> bool {
+        while self.automation.reclaim().is_some() {}
+        self.automation.publish(Box::new(timeline)).is_ok()
     }
 
     /// Builds and transfers a routing revision to the engine.
@@ -539,6 +555,7 @@ pub struct PlaybackEngine {
     settings: Reader<MixSettings>,
     score: AudioSlot<Box<Score>>,
     audio: AudioSlot<Box<AudioTimeline>>,
+    automation: AudioSlot<Box<AutomationTimeline>>,
     routing: AudioSlot<Option<Box<PublishedRouting>>>,
     state: Writer<PlaybackState>,
     // Settings currently in force, kept so they can be read back.
@@ -553,6 +570,7 @@ pub struct PlaybackEngine {
     // One buffer per instrument track, which the mixer then sums. Owned so
     // the render path borrows it rather than allocating.
     track_audio: Box<[[[f32; 2]; MAX_FRAMES]; MAX_TRACKS]>,
+    automation_dropped: u64,
 }
 
 impl PlaybackEngine {
@@ -570,6 +588,7 @@ impl PlaybackEngine {
         let (settings_control, settings_audio) = latest(MixSettings::new());
         let (score_control, score_audio) = exchange(Score::boxed());
         let (audio_control, audio_audio) = exchange(Box::new(AudioTimeline::new()));
+        let (automation_control, automation_audio) = exchange(Box::new(AutomationTimeline::new()));
         let (routing_control, routing_audio) = exchange(None);
         let (state_writer, state_reader) = latest(PlaybackState::default());
         let engine = Self {
@@ -578,6 +597,7 @@ impl PlaybackEngine {
             settings: settings_audio,
             score: score_audio,
             audio: audio_audio,
+            automation: automation_audio,
             routing: routing_audio,
             state: state_writer,
             applied: MixSettings::new(),
@@ -586,11 +606,13 @@ impl PlaybackEngine {
                 VoiceBank::new(Patch::default(), rate as f32)
             })),
             track_audio: zeroed_track_audio(),
+            automation_dropped: 0,
         };
         let publisher = Publisher {
             settings: settings_control,
             score: score_control,
             audio: audio_control,
+            automation: automation_control,
             routing: routing_control,
             state: state_reader,
             sample_rate: rate as f32,
@@ -643,6 +665,12 @@ impl PlaybackEngine {
         self.audio.apply_pending();
     }
 
+    fn take_automation(&mut self) {
+        if self.automation.apply_pending() {
+            self.mixer.clear_automation();
+        }
+    }
+
     /// Takes a prepared routing revision without releasing its predecessor
     /// on this thread.
     fn take_routing(&mut self) {
@@ -676,6 +704,7 @@ impl PlaybackEngine {
         self.transport.set_loop(settings.loop_range());
         if let Some(beats) = settings.locate_beats() {
             self.transport.locate_beats(beats);
+            self.mixer.clear_automation();
             // Moving the playhead abandons whatever was sounding, so no
             // note hangs on from where playback used to be.
             for bank in self.instruments.iter_mut() {
@@ -705,6 +734,7 @@ impl PlaybackEngine {
             playing: self.transport.is_playing(),
             levels: [Levels::default(); MAX_TRACKS + 1],
             track_count: self.mixer.track_count(),
+            automation_dropped: self.automation_dropped,
         };
         self.mixer.copy_levels(&mut state.levels);
         // The buffer always has room; an unread report is replaced rather
@@ -770,6 +800,7 @@ impl PlaybackEngine {
         self.take_settings();
         self.take_score();
         self.take_audio();
+        self.take_automation();
         self.take_routing();
         let frames = output.len().min(MAX_FRAMES);
 
@@ -781,6 +812,15 @@ impl PlaybackEngine {
             length_beats,
             frames,
         };
+        let mut automation_events = [EMPTY_AUTOMATION_EVENT; MAX_AUTOMATION_EVENTS];
+        let scheduled = self
+            .automation
+            .current()
+            .schedule(span, &mut automation_events);
+        self.automation_dropped = self
+            .automation_dropped
+            .saturating_add(scheduled.dropped as u64);
+        let automation_events = &automation_events[..scheduled.count];
 
         let track_count = self.mixer.track_count();
         for buffer in self.track_audio.iter_mut().take(track_count) {
@@ -797,9 +837,9 @@ impl PlaybackEngine {
         }
 
         if self.routing.current().is_some() {
-            self.render_routed(output, events, frames, track_count);
+            self.render_routed(output, events, automation_events, frames, track_count);
         } else {
-            self.render_direct(output, events, frames, track_count);
+            self.render_direct(output, events, automation_events, frames, track_count);
         }
         output[frames..].fill([0.0; 2]);
         self.transport.advance(frames);
@@ -810,6 +850,7 @@ impl PlaybackEngine {
         &mut self,
         output: &mut [[f32; 2]],
         events: &[MixEvent],
+        automation: &[AutomationEvent],
         frames: usize,
         track_count: usize,
     ) {
@@ -829,7 +870,7 @@ impl PlaybackEngine {
             };
         }
         if mixer
-            .render(&inputs[..track_count], output, events)
+            .render_automated(&inputs[..track_count], output, events, automation)
             .is_err()
         {
             // A block the mixer refuses must still be silent rather than
@@ -842,10 +883,13 @@ impl PlaybackEngine {
         &mut self,
         output: &mut [[f32; 2]],
         events: &[MixEvent],
+        automation: &[AutomationEvent],
         frames: usize,
         track_count: usize,
     ) {
-        if self.mixer.validate_events(frames, events).is_err() {
+        if self.mixer.validate_events(frames, events).is_err()
+            || self.mixer.validate_automation(frames, automation).is_err()
+        {
             output.fill([0.0; 2]);
             return;
         }
@@ -862,16 +906,29 @@ impl PlaybackEngine {
 
         let mut start = 0;
         let mut cursor = 0;
+        let mut automation_cursor = 0;
         loop {
             let event_start = cursor;
             while cursor < events.len() && events[cursor].offset <= start {
                 cursor += 1;
             }
             self.mixer.apply_events(&events[event_start..cursor]);
+            let automation_start = automation_cursor;
+            while automation_cursor < automation.len()
+                && automation[automation_cursor].offset <= start
+            {
+                automation_cursor += 1;
+            }
+            self.mixer
+                .apply_automation_events(&automation[automation_start..automation_cursor]);
             if start >= frames {
                 break;
             }
-            let end = events.get(cursor).map_or(frames, |event| event.offset);
+            let event_end = events.get(cursor).map_or(frames, |event| event.offset);
+            let automation_end = automation
+                .get(automation_cursor)
+                .map_or(frames, |event| event.offset);
+            let end = event_end.min(automation_end);
             let Self { mixer, routing, .. } = self;
             let Some(routing) = routing.current_mut().as_mut() else {
                 output[start..end].fill([0.0; 2]);
@@ -954,6 +1011,10 @@ mod tests {
     use super::*;
     use crate::audio::offline::{DEVICE, OfflineBackend};
     use crate::audio::{Backend, DeviceId, Stream, StreamConfig};
+    use crate::engine::automation::{
+        Lane as AutomationLane, Point as AutomationPoint, Timeline as AutomationTimeline,
+    };
+    use crate::mixer::AutomationCurve;
     use crate::mixer::Parameter;
 
     const RATE: f64 = 48_000.0;
@@ -1107,6 +1168,34 @@ mod tests {
         }];
         engine.render_block(&mut output, &events);
         assert!((engine.mixer().volume_db(1) + 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn published_persistent_automation_reaches_the_mixer() {
+        let (mut engine, mut publisher) = PlaybackEngine::new(RATE);
+        assert!(publisher.publish(&playing_settings(1)));
+        let mut automation = AutomationTimeline::new();
+        assert!(automation.add_lane(AutomationLane {
+            track: 0,
+            parameter: Parameter::Volume,
+            points: vec![
+                AutomationPoint {
+                    beat: 0.0,
+                    value: -12.0,
+                    curve: AutomationCurve::Linear,
+                },
+                AutomationPoint {
+                    beat: 0.002,
+                    value: 0.0,
+                    curve: AutomationCurve::Step,
+                },
+            ],
+        }));
+        assert!(publisher.publish_automation(automation));
+        let mut output = [[0.0_f32; 2]; 96];
+        engine.render_block(&mut output, &[]);
+        assert_eq!(engine.mixer().volume_db(0), 0.0);
+        assert_eq!(publisher.state().automation_dropped, 0);
     }
 
     #[test]

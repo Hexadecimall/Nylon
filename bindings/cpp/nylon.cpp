@@ -264,6 +264,39 @@ bool Project::moveTrackDevice(std::uint64_t track, std::uint64_t from, std::uint
     return nylon_track_device_move(m_handle, track, from, to) != 0;
 }
 
+std::vector<AutomationPoint> Project::trackAutomation(
+    std::uint64_t track, AutomationParameter parameter) const
+{
+    std::vector<AutomationPoint> result;
+    const auto count = nylon_track_automation_count(m_handle, track, static_cast<int>(parameter));
+    result.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t index = 0; index < count; ++index) {
+        NylonAutomationPoint point{};
+        if (!nylon_track_automation_get(
+                m_handle, track, static_cast<int>(parameter), index, &point))
+            return {};
+        result.push_back({point.beat, point.value, static_cast<AutomationCurve>(point.curve)});
+    }
+    return result;
+}
+
+bool Project::setTrackAutomation(std::uint64_t track, AutomationParameter parameter,
+    const std::vector<AutomationPoint>& points)
+{
+    std::vector<NylonAutomationPoint> native;
+    native.reserve(points.size());
+    for (const auto& point : points)
+        native.push_back({point.beat, point.value, static_cast<int>(point.curve)});
+    return nylon_track_automation_set(m_handle, track, static_cast<int>(parameter),
+               native.data(), static_cast<unsigned long long>(native.size()))
+        != 0;
+}
+
+bool Project::clearTrackAutomation(std::uint64_t track, AutomationParameter parameter)
+{
+    return nylon_track_automation_clear(m_handle, track, static_cast<int>(parameter)) != 0;
+}
+
 std::vector<ProjectRoute> Project::routes() const
 {
     std::vector<ProjectRoute> result;

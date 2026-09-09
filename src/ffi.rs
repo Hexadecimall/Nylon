@@ -14,7 +14,10 @@ use crate::dsp::saturator::{
 use crate::engine::device::DeviceKind as TrackDeviceKind;
 use crate::media::import_wave;
 use crate::mixer::Levels;
-use crate::project::{ClipId, Command, MidiNote, Project, SceneId, TrackId, TrackKind};
+use crate::project::{
+    AutomationCurve, AutomationParameter, AutomationPoint, ClipId, Command, MidiNote, Project,
+    SceneId, TrackId, TrackKind,
+};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingGraph};
 #[cfg(platform_audio)]
 use crate::runtime::ProjectRecording;
@@ -84,6 +87,15 @@ pub struct NylonTrackDevice {
     pub kind: i32,
     pub enabled: i32,
     pub parameters: [f32; 7],
+}
+
+/// One point in a native automation lane. Curve is 0 step, 1 linear, or 2 smooth.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NylonAutomationPoint {
+    pub beat: f64,
+    pub value: f32,
+    pub curve: i32,
 }
 
 impl From<Levels> for NylonLevels {
@@ -295,6 +307,155 @@ track_setter!(nylon_track_set_color_index, i32, |id, value| u8::try_from(
 track_setter!(nylon_track_set_latency_frames, u32, |id, frames| Some(
     Command::SetTrackLatency { id, frames }
 ));
+
+fn automation_parameter(code: i32) -> Option<AutomationParameter> {
+    match code {
+        0 => Some(AutomationParameter::Volume),
+        1 => Some(AutomationParameter::Pan),
+        2 => Some(AutomationParameter::Mute),
+        3 => Some(AutomationParameter::Solo),
+        _ => None,
+    }
+}
+
+fn automation_curve(code: i32) -> Option<AutomationCurve> {
+    match code {
+        0 => Some(AutomationCurve::Step),
+        1 => Some(AutomationCurve::Linear),
+        2 => Some(AutomationCurve::Smooth),
+        _ => None,
+    }
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_automation_count(
+    handle: *const Project,
+    track: u64,
+    parameter: i32,
+) -> u64 {
+    let (Ok(track), Some(parameter)) = (usize::try_from(track), automation_parameter(parameter))
+    else {
+        return 0;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    unsafe { handle.as_ref() }
+        .and_then(|project| project.current.tracks.get(track))
+        .and_then(|track| {
+            track
+                .automation()
+                .iter()
+                .find(|lane| lane.parameter() == parameter)
+        })
+        .map_or(0, |lane| lane.points().len() as u64)
+}
+
+/// # Safety
+/// A non-null handle must be live. `out` must point to one writable record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_automation_get(
+    handle: *const Project,
+    track: u64,
+    parameter: i32,
+    index: u64,
+    out: *mut NylonAutomationPoint,
+) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    let (Ok(track), Ok(index), Some(parameter)) = (
+        usize::try_from(track),
+        usize::try_from(index),
+        automation_parameter(parameter),
+    ) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let point = unsafe { handle.as_ref() }
+        .and_then(|project| project.current.tracks.get(track))
+        .and_then(|track| {
+            track
+                .automation()
+                .iter()
+                .find(|lane| lane.parameter() == parameter)
+        })
+        .and_then(|lane| lane.points().get(index));
+    let Some(point) = point else {
+        return 0;
+    };
+    // SAFETY: The caller supplies one writable record.
+    unsafe {
+        out.write(NylonAutomationPoint {
+            beat: point.beat,
+            value: point.value,
+            curve: point.curve.code().into(),
+        });
+    }
+    1
+}
+
+/// # Safety
+/// The project must be exclusively accessible. `points` must hold `count`
+/// readable records when count is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_automation_set(
+    handle: *mut Project,
+    track: u64,
+    parameter: i32,
+    points: *const NylonAutomationPoint,
+    count: u64,
+) -> i32 {
+    let (Some(parameter), Ok(count)) = (automation_parameter(parameter), usize::try_from(count))
+    else {
+        return 0;
+    };
+    if points.is_null() || count == 0 || count > crate::project::MAX_AUTOMATION_POINTS {
+        return 0;
+    }
+    // SAFETY: The native contract requires this many readable records.
+    let records = unsafe { std::slice::from_raw_parts(points, count) };
+    let mut converted = Vec::with_capacity(count);
+    for point in records {
+        let Some(curve) = automation_curve(point.curve) else {
+            return 0;
+        };
+        converted.push(AutomationPoint {
+            beat: point.beat,
+            value: point.value,
+            curve,
+        });
+    }
+    // SAFETY: This call retains the native interface's exclusive access contract.
+    unsafe {
+        edit_track(handle, track, |track| {
+            Some(Command::SetAutomation {
+                track,
+                parameter,
+                points: converted,
+            })
+        })
+    }
+}
+
+/// # Safety
+/// The project must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_automation_clear(
+    handle: *mut Project,
+    track: u64,
+    parameter: i32,
+) -> i32 {
+    let Some(parameter) = automation_parameter(parameter) else {
+        return 0;
+    };
+    // SAFETY: This call retains the native interface's exclusive access contract.
+    unsafe {
+        edit_track(handle, track, |track| {
+            Some(Command::ClearAutomation { track, parameter })
+        })
+    }
+}
 
 fn track_device_kind(record: NylonTrackDevice) -> Option<TrackDeviceKind> {
     let parameters = record.parameters;

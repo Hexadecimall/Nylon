@@ -97,6 +97,15 @@ struct TrackDevice {
     std::array<float, 7> parameters{};
 };
 
+enum class AutomationParameter : int { Volume = 0, Pan = 1, Mute = 2, Solo = 3 };
+enum class AutomationCurve : int { Step = 0, Linear = 1, Smooth = 2 };
+
+struct AutomationPoint {
+    double beat;
+    float value;
+    AutomationCurve curve;
+};
+
 class CompiledRouting {
 public:
     CompiledRouting();
@@ -207,6 +216,12 @@ public:
         std::uint64_t track, std::uint64_t index, const TrackDevice& device);
     bool deleteTrackDevice(std::uint64_t track, std::uint64_t index);
     bool moveTrackDevice(std::uint64_t track, std::uint64_t from, std::uint64_t to);
+
+    std::vector<AutomationPoint> trackAutomation(
+        std::uint64_t track, AutomationParameter parameter) const;
+    bool setTrackAutomation(std::uint64_t track, AutomationParameter parameter,
+        const std::vector<AutomationPoint>& points);
+    bool clearTrackAutomation(std::uint64_t track, AutomationParameter parameter);
 
     std::vector<ProjectRoute> routes() const;
     bool addRoute(std::uint64_t source, std::uint64_t destination, RoutingKind kind, float gain);

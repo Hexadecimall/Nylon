@@ -11,7 +11,9 @@ use crate::engine::playback::{MAX_INSTRUMENTS, PlaybackEngine, Score};
 use crate::engine::schedule::ScheduledNote;
 use crate::media::{MediaError, timeline_from_project};
 use crate::project::Project;
-use crate::runtime::{playback_devices, playback_routing, state_from_snapshot};
+use crate::runtime::{
+    automation_from_snapshot, playback_devices, playback_routing, state_from_snapshot,
+};
 use crate::wave::{Format, WaveError, WaveWriter};
 use std::io::{Seek, Write};
 
@@ -174,6 +176,11 @@ pub fn render_wave<W: Write + Seek>(
             "initial media could not be published",
         )));
     }
+    if !publisher.publish_automation(automation_from_snapshot(&snapshot)) {
+        return Err(BounceError::Audio(AudioError::Host(
+            "initial automation could not be published",
+        )));
+    }
     let (routing, output_node) = playback_routing(&snapshot, options.format.sample_rate as f32)
         .map_err(|_| {
             BounceError::Audio(AudioError::Host("project routing could not be compiled"))
@@ -241,7 +248,9 @@ fn prepare_score_range(score: &mut Score, start_beats: f64) {
 mod tests {
     use super::*;
     use crate::engine::device::DeviceKind;
-    use crate::project::{Command, MidiNote, TrackKind};
+    use crate::project::{
+        AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, TrackKind,
+    };
     use crate::wave;
     use std::io::Cursor;
 
@@ -403,6 +412,32 @@ mod tests {
         .1
         .peak_left;
         assert!((processed_peak / direct_peak - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn project_automation_changes_the_offline_mix() {
+        let mut project = project_with_note();
+        let track = project.snapshot().tracks()[0].id();
+        project
+            .apply(&[Command::SetAutomation {
+                track,
+                parameter: AutomationParameter::Mute,
+                points: vec![AutomationPoint {
+                    beat: 0.0,
+                    value: 1.0,
+                    curve: AutomationCurve::Step,
+                }],
+            }])
+            .unwrap();
+        let report = render_wave(
+            &project,
+            Cursor::new(Vec::new()),
+            Options::stereo(0.25, 48_000),
+        )
+        .unwrap()
+        .1;
+        assert_eq!(report.peak_left, 0.0);
+        assert_eq!(report.peak_right, 0.0);
     }
 
     #[test]

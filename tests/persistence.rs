@@ -6,7 +6,9 @@ use nylon::dsp::saturator::{
 };
 use nylon::engine::device::{DeviceConfig, DeviceKind};
 use nylon::persistence::PersistenceError;
-use nylon::project::{Command, MidiNote, Project, TrackKind};
+use nylon::project::{
+    AutomationCurve, AutomationParameter, AutomationPoint, Command, MidiNote, Project, TrackKind,
+};
 use nylon::routing::EdgeKind;
 
 fn session() -> Project {
@@ -29,6 +31,22 @@ fn session() -> Project {
             Command::SetTrackVolume { id, db: -8.0 },
             Command::SetTrackPan { id, pan: 0.25 },
             Command::SetTrackArm { id, enabled: true },
+            Command::SetAutomation {
+                track: id,
+                parameter: AutomationParameter::Volume,
+                points: vec![
+                    AutomationPoint {
+                        beat: 0.0,
+                        value: -12.0,
+                        curve: AutomationCurve::Linear,
+                    },
+                    AutomationPoint {
+                        beat: 8.0,
+                        value: -3.0,
+                        curve: AutomationCurve::Smooth,
+                    },
+                ],
+            },
             Command::AddDevice {
                 track: id,
                 config: DeviceConfig {
@@ -207,7 +225,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 9;
+    future[4] = 10;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

@@ -7,6 +7,10 @@
 #[cfg(platform_audio)]
 use crate::audio::recording::{RecordingError, RecordingSession};
 use crate::audio::{AudioError, Backend, DeviceId, DeviceInfo, InputBackend, Stream, StreamConfig};
+use crate::engine::automation::{
+    Lane as PlaybackAutomationLane, Point as PlaybackAutomationPoint,
+    Timeline as AutomationTimeline,
+};
 use crate::engine::device::DeviceConfig;
 use crate::engine::playback::{
     MixSettings, PlaybackEngine, PlaybackState, Publisher, Score, TrackSettings,
@@ -15,7 +19,8 @@ use crate::engine::schedule::ScheduledNote;
 use crate::media::timeline_from_project;
 #[cfg(platform_audio)]
 use crate::media::{ImportReport, MediaError, PendingRecording, prepare_recording};
-use crate::project::{Project, Snapshot, TrackKind};
+use crate::mixer::{AutomationCurve as PlaybackAutomationCurve, Parameter};
+use crate::project::{AutomationCurve, AutomationParameter, Project, Snapshot, TrackKind};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
 
 #[cfg(target_os = "linux")]
@@ -266,6 +271,7 @@ impl AudioRuntime {
         let (routing, output_node) = playback_routing(&snapshot, sample_rate as f32)
             .map_err(|_| AudioError::Host("project routing could not be compiled"))?;
         let devices = playback_devices(&snapshot);
+        let automation = automation_from_snapshot(&snapshot);
         let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
         let (engine, mut publisher) = PlaybackEngine::new(f64::from(sample_rate));
         let playing = false;
@@ -273,6 +279,7 @@ impl AudioRuntime {
         if !publisher.publish(&self.settings)
             || !publisher.publish_score(&self.score)
             || !publisher.publish_audio(timeline)
+            || !publisher.publish_automation(automation)
             || !publisher
                 .publish_routing_with_devices(&routing, output_node, &device_slices)
                 .map_err(|_| AudioError::Host("project routing could not be prepared"))?
@@ -385,6 +392,7 @@ impl AudioRuntime {
             return false;
         };
         let devices = playback_devices(&snapshot);
+        let automation = automation_from_snapshot(&snapshot);
         let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
         let playing = self.settings.is_playing();
         (self.settings, self.score) = state_from_snapshot(&snapshot, playing);
@@ -395,12 +403,16 @@ impl AudioRuntime {
             .publisher
             .as_mut()
             .is_some_and(|publisher| publisher.publish_audio(timeline));
+        let automation_sent = self
+            .publisher
+            .as_mut()
+            .is_some_and(|publisher| publisher.publish_automation(automation));
         let routing_sent = self.publisher.as_mut().is_some_and(|publisher| {
             publisher
                 .publish_routing_with_devices(&routing, output_node, &device_slices)
                 .unwrap_or(false)
         });
-        state_sent && audio_sent && routing_sent
+        state_sent && audio_sent && automation_sent && routing_sent
     }
 
     /// Starts the musical transport.
@@ -555,6 +567,40 @@ pub(crate) fn playback_devices(snapshot: &Snapshot) -> Vec<Vec<DeviceConfig>> {
         .collect();
     result.push(Vec::new());
     result
+}
+
+pub(crate) fn automation_from_snapshot(snapshot: &Snapshot) -> AutomationTimeline {
+    let mut timeline = AutomationTimeline::new();
+    for (track_index, track) in snapshot.tracks().iter().enumerate() {
+        for lane in track.automation() {
+            let parameter = match lane.parameter() {
+                AutomationParameter::Volume => Parameter::Volume,
+                AutomationParameter::Pan => Parameter::Pan,
+                AutomationParameter::Mute => Parameter::Mute,
+                AutomationParameter::Solo => Parameter::Solo,
+            };
+            let points = lane
+                .points()
+                .iter()
+                .map(|point| PlaybackAutomationPoint {
+                    beat: point.beat,
+                    value: point.value,
+                    curve: match point.curve {
+                        AutomationCurve::Step => PlaybackAutomationCurve::Step,
+                        AutomationCurve::Linear => PlaybackAutomationCurve::Linear,
+                        AutomationCurve::Smooth => PlaybackAutomationCurve::Smooth,
+                    },
+                })
+                .collect();
+            let added = timeline.add_lane(PlaybackAutomationLane {
+                track: track_index as u16,
+                parameter,
+                points,
+            });
+            debug_assert!(added);
+        }
+    }
+    timeline
 }
 
 /// Lists output devices available from the platform backend.
@@ -740,7 +786,7 @@ mod tests {
     use super::*;
     use crate::dsp::limiter::Parameters as LimiterParameters;
     use crate::engine::device::{DeviceConfig, DeviceKind};
-    use crate::project::{Command, MidiNote};
+    use crate::project::{AutomationPoint, Command, MidiNote};
 
     fn midi_project() -> Project {
         let mut project = Project::new();
@@ -778,6 +824,32 @@ mod tests {
         assert_eq!(settings.track(1).volume_db, -6.0);
         assert!(score.track(1).unwrap().is_enabled());
         assert!(!score.track(0).unwrap().is_enabled());
+    }
+
+    #[test]
+    fn project_automation_maps_to_the_playback_timeline() {
+        let mut project = midi_project();
+        let track = project.snapshot().tracks()[1].id();
+        project
+            .apply(&[Command::SetAutomation {
+                track,
+                parameter: AutomationParameter::Pan,
+                points: vec![AutomationPoint {
+                    beat: 2.0,
+                    value: 0.5,
+                    curve: AutomationCurve::Smooth,
+                }],
+            }])
+            .unwrap();
+        let timeline = automation_from_snapshot(&project.snapshot());
+        assert_eq!(timeline.lanes().len(), 1);
+        assert_eq!(timeline.lanes()[0].track, 1);
+        assert_eq!(timeline.lanes()[0].parameter, Parameter::Pan);
+        assert_eq!(timeline.lanes()[0].points[0].value, 0.5);
+        assert_eq!(
+            timeline.lanes()[0].points[0].curve,
+            PlaybackAutomationCurve::Smooth
+        );
     }
 
     #[test]
