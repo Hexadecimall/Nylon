@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QLocalSocket>
 #include <QStringList>
+#include <QThread>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -356,6 +357,40 @@ int directCommand(const QString& bundle, const QStringList& positional)
             }
         }
         return writeJson({{"ok", true}, {"clips", clips}});
+    }
+    if (command == "record" && positional.size() >= 4 && positional.size() <= 7) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        std::uint64_t device = 0;
+        std::uint32_t rate = project.sampleRate();
+        std::uint32_t block = 256;
+        double seconds = 0.0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !number(positional[3], seconds) || seconds <= 0.0 || seconds > 86400.0)
+            return fail("Invalid recording track, scene, or duration");
+        if (positional.size() >= 5) {
+            if (!indexNumber(positional[4], device)) return fail("Invalid input device");
+        } else if (!nylon::AudioEngine::defaultInput(device)) {
+            return fail("No default input device is available");
+        }
+        if (positional.size() >= 6 && !unsignedNumber(positional[5], rate))
+            return fail("Invalid recording sample rate");
+        if (positional.size() == 7 && !unsignedNumber(positional[6], block))
+            return fail("Invalid recording block size");
+        nylon::Recording recording;
+        if (!recording.open(project, track, scene, device, rate, block))
+            return fail("Could not open the recording input or project slot");
+        if (!recording.start()) return fail("Could not start recording");
+        QThread::msleep(static_cast<unsigned long>(std::ceil(seconds * 1000.0)));
+        if (!recording.stop()) return fail("Could not stop recording");
+        nylon::RecordingReport report{};
+        if (!recording.finish(project, report)) return fail("Could not finish recording");
+        if (!project.save(bundle.toStdString())) return fail("Could not save the project bundle");
+        return writeJson({{"ok", true}, {"frames", static_cast<double>(report.frames)},
+            {"sampleRate", static_cast<double>(report.sampleRate)},
+            {"lengthBeats", report.lengthBeats},
+            {"lostBlocks", static_cast<double>(report.lostBlocks)},
+            {"lostFrames", static_cast<double>(report.lostFrames)}});
     }
 
     bool changed = false;

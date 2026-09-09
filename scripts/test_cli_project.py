@@ -83,6 +83,7 @@ def main():
         assert rendered["frames"] > 0 and output.stat().st_size > 44, rendered
         assert rendered["peakLeft"] > 0 and rendered["peakRight"] > 0, rendered
         call("set-tempo", "invalid", succeeds=False)
+        call("record", "1", "1", "0", succeeds=False)
         call("unsupported", succeeds=False)
 
         devices = subprocess.run(

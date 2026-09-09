@@ -39,6 +39,10 @@ fn null_handles_are_rejected() {
         assert_eq!(nylon_transport_position_beats(std::ptr::null_mut()), 0.0);
         assert_eq!(nylon_audio_default_output(std::ptr::null_mut()), 0);
         assert_eq!(nylon_audio_default_input(std::ptr::null_mut()), 0);
+        assert_eq!(nylon_recording_start(std::ptr::null_mut()), 0);
+        assert_eq!(nylon_recording_stop(std::ptr::null_mut()), 0);
+        assert_eq!(nylon_recording_is_running(std::ptr::null()), 0);
+        nylon_recording_free(std::ptr::null_mut());
         let mut device = NylonTrackDevice::default();
         assert_eq!(nylon_track_device_count(std::ptr::null(), 0), 0);
         assert_eq!(

@@ -590,4 +590,56 @@ bool AudioEngine::masterLevels(Levels& levels)
     return true;
 }
 
+Recording::~Recording()
+{
+    nylon_recording_free(m_handle);
+}
+
+Recording::Recording(Recording&& other) noexcept
+    : m_handle(std::exchange(other.m_handle, nullptr))
+{
+}
+
+Recording& Recording::operator=(Recording&& other) noexcept
+{
+    if (this != &other) {
+        nylon_recording_free(m_handle);
+        m_handle = std::exchange(other.m_handle, nullptr);
+    }
+    return *this;
+}
+
+bool Recording::open(const Project& project, std::uint64_t track, std::uint64_t scene,
+    std::uint64_t deviceId, std::uint32_t sampleRate, std::uint32_t blockFrames)
+{
+    nylon_recording_free(m_handle);
+    m_handle = nylon_recording_open(
+        project.raw(), track, scene, deviceId, sampleRate, blockFrames);
+    return m_handle != nullptr;
+}
+
+bool Recording::start()
+{
+    return nylon_recording_start(m_handle) != 0;
+}
+
+bool Recording::stop()
+{
+    return nylon_recording_stop(m_handle) != 0;
+}
+
+bool Recording::isRunning() const
+{
+    return nylon_recording_is_running(m_handle) != 0;
+}
+
+bool Recording::finish(Project& project, RecordingReport& report)
+{
+    NylonRecordingReport native{};
+    if (nylon_recording_finish(m_handle, project.raw(), &native) == 0) return false;
+    report = {native.frames, native.sample_rate, native.length_beats,
+        native.lost_blocks, native.lost_frames};
+    return true;
+}
+
 } // namespace nylon

@@ -46,6 +46,14 @@ typedef struct NylonBounceReport {
     float peak_right;
 } NylonBounceReport;
 
+typedef struct NylonRecordingReport {
+    unsigned long long frames;
+    unsigned int sample_rate;
+    double length_beats;
+    unsigned long long lost_blocks;
+    unsigned long long lost_frames;
+} NylonRecordingReport;
+
 /* Track device kinds: 0 utility, 1 equalizer, 2 compressor, 3 stereo delay,
  * 4 limiter.
  * Parameter layouts:
@@ -296,6 +304,19 @@ unsigned long long nylon_audio_input_device_list(
     NylonAudioDevice* out, unsigned long long capacity);
 int nylon_audio_default_output(unsigned long long* device_id);
 int nylon_audio_default_input(unsigned long long* device_id);
+
+/* A recording reserves an empty audio clip slot in a saved project, opens
+ * stopped, and writes through a bounded queue. Finishing creates one undoable
+ * clip edit. Freeing before finish removes the reserved media file. */
+void* nylon_recording_open(const void* project, unsigned long long track,
+    unsigned long long scene, unsigned long long device_id,
+    unsigned int sample_rate, unsigned int block_frames);
+void nylon_recording_free(void* recording);
+int nylon_recording_start(void* recording);
+int nylon_recording_stop(void* recording);
+int nylon_recording_is_running(const void* recording);
+int nylon_recording_finish(
+    void* recording, void* project, NylonRecordingReport* out);
 
 /* Opens and starts an output callback with the musical transport stopped.
  * Device zero selects the current system default where the backend supports

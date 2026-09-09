@@ -4,6 +4,7 @@
 //! thread drains that queue and performs every allocation and system call.
 
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -144,11 +145,37 @@ impl<S: Stream> RecordingSession<S> {
     where
         B: InputBackend<Capture = S>,
     {
-        if queue_blocks == 0 || queue_blocks > MAX_QUEUE_BLOCKS {
-            return Err(RecordingError::Audio(AudioError::Unsupported(
-                "recording queue size",
-            )));
+        validate_queue_size(queue_blocks)?;
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .map_err(WaveError::Io)?;
+        match Self::open_file(backend, config, file, destination, queue_blocks) {
+            Ok(session) => Ok(session),
+            Err(error) => {
+                let _ = std::fs::remove_file(destination);
+                Err(error)
+            }
         }
+    }
+
+    /// Opens a stopped input stream using an already reserved file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an audio, file, or thread error when setup fails.
+    pub fn open_file<B>(
+        backend: &B,
+        config: StreamConfig,
+        file: File,
+        destination: &Path,
+        queue_blocks: usize,
+    ) -> Result<Self, RecordingError>
+    where
+        B: InputBackend<Capture = S>,
+    {
+        validate_queue_size(queue_blocks)?;
         let (producer, consumer) = SpscQueue::with_capacity(queue_blocks);
         let loss = Arc::new(Loss::default());
         let capturer = RecordingCapturer {
@@ -168,7 +195,7 @@ impl<S: Stream> RecordingSession<S> {
             bits: 32,
             sample_format: SampleFormat::Float,
         };
-        let writer = WaveWriter::new(File::create(destination).map_err(WaveError::Io)?, format)?;
+        let writer = WaveWriter::new(file, format)?;
         let thread = std::thread::Builder::new()
             .name("nylon-recording".to_owned())
             .spawn(move || write_blocks(consumer, writer));
@@ -223,6 +250,12 @@ impl<S: Stream> RecordingSession<S> {
         self.stream.as_mut()
     }
 
+    /// Accesses the input stream for device status.
+    #[must_use]
+    pub fn stream(&self) -> Option<&S> {
+        self.stream.as_ref()
+    }
+
     /// Stops capture, drains queued blocks, and finalizes the file.
     pub fn finish(mut self) -> Result<RecordingReport, RecordingError> {
         if self.stream.as_ref().is_some_and(Stream::is_running) {
@@ -242,6 +275,16 @@ impl<S: Stream> RecordingSession<S> {
             lost_blocks: self.loss.blocks.load(Ordering::Relaxed),
             lost_frames: self.loss.frames.load(Ordering::Relaxed),
         })
+    }
+}
+
+fn validate_queue_size(queue_blocks: usize) -> Result<(), RecordingError> {
+    if queue_blocks == 0 || queue_blocks > MAX_QUEUE_BLOCKS {
+        Err(RecordingError::Audio(AudioError::Unsupported(
+            "recording queue size",
+        )))
+    } else {
+        Ok(())
     }
 }
 
@@ -345,5 +388,30 @@ mod tests {
             ),
             Err(RecordingError::Audio(AudioError::Unsupported(_)))
         ));
+    }
+
+    #[test]
+    fn opening_never_replaces_an_existing_file() {
+        let path = destination("existing");
+        std::fs::write(&path, b"keep").unwrap();
+        assert!(
+            RecordingSession::<OfflineCapture>::open(&OfflineBackend::new(), config(), &path, 4)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_refused_input_leaves_no_new_file() {
+        let path = destination("refused");
+        let _ = std::fs::remove_file(&path);
+        let mut invalid = config();
+        invalid.device = super::super::DeviceId(99);
+        assert!(
+            RecordingSession::<OfflineCapture>::open(&OfflineBackend::new(), invalid, &path, 4)
+                .is_err()
+        );
+        assert!(!path.exists());
     }
 }

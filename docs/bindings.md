@@ -37,6 +37,7 @@ Groups of functions:
 | `nylon_clip_*` | slot state, MIDI creation, WAVE import, clip settings, notes |
 | `nylon_arrangement_*` | clips placed on the timeline |
 | `nylon_audio_*` | input/output devices, stream lifecycle, granted configuration, dropouts, project publication |
+| `nylon_recording_*` | input capture, file finalization, and project clip registration |
 | `nylon_transport_*` | play, stop, locate, position |
 | `nylon_track_levels`, `nylon_master_levels` | live linear peak and RMS readings |
 | `nylon_render_*` | deterministic offline file rendering |
@@ -65,6 +66,8 @@ stream and provides device enumeration, transport control, synchronization,
 configuration, dropout, and meter access. Consumers include the directory with
 `add_subdirectory(bindings/cpp)` and link the `nyloncpp` target, which
 carries the core library and the C header directory.
+`nylon::Recording` is a move-only input handle. It reserves media in a saved
+project, opens stopped, and creates one undoable audio clip when finished.
 
 `bindings/cmake/NylonCore.cmake` defines the imported `nylon_core` target;
 `NYLON_CORE_LIBRARY` selects a static or shared core.
@@ -93,6 +96,8 @@ nylon-control --project Session.nylon move-device 0 1 0
 nylon-control --project Session.nylon delete-device 0 1
 nylon-control --project Session.nylon set-tempo 128
 nylon-control --project Session.nylon bounce mix.wav 0 64 48000
+nylon-control --project Session.nylon record 1 0 8.0
+nylon-control --project Session.nylon record 1 0 8.0 DEVICE RATE BLOCK
 nylon-control --project Session.nylon recovery-status
 nylon-control --project Session.nylon recover
 nylon-control devices
@@ -100,7 +105,9 @@ nylon-control input-devices
 ```
 
 Every reply is one JSON object. Direct edit commands save the bundle only
-after the core accepts the change.
+after the core accepts the change. Recording duration is in seconds. Its
+optional device, sample rate, and block size fields default to the system
+input, project rate, and 256 frames.
 
 ## Rust
 

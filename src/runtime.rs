@@ -4,6 +4,8 @@
 //! values before publication. The platform stream owns the renderer; this
 //! type retains the control endpoint used by transport, meters, and edits.
 
+#[cfg(platform_audio)]
+use crate::audio::recording::{RecordingError, RecordingSession};
 use crate::audio::{AudioError, Backend, DeviceId, DeviceInfo, InputBackend, Stream, StreamConfig};
 use crate::engine::device::DeviceConfig;
 use crate::engine::playback::{
@@ -11,15 +13,17 @@ use crate::engine::playback::{
 };
 use crate::engine::schedule::ScheduledNote;
 use crate::media::timeline_from_project;
+#[cfg(platform_audio)]
+use crate::media::{ImportReport, MediaError, PendingRecording, prepare_recording};
 use crate::project::{Project, Snapshot, TrackKind};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingError, RoutingGraph};
 
 #[cfg(target_os = "linux")]
-use crate::audio::alsa::{AlsaBackend, AlsaStream};
+use crate::audio::alsa::{AlsaBackend, AlsaCapture, AlsaStream};
 #[cfg(target_os = "macos")]
-use crate::audio::coreaudio::{CoreAudioBackend, CoreAudioStream};
+use crate::audio::coreaudio::{CoreAudioBackend, CoreAudioCapture, CoreAudioStream};
 #[cfg(target_os = "windows")]
-use crate::audio::wasapi::{WasapiBackend, WasapiStream};
+use crate::audio::wasapi::{WasapiBackend, WasapiCapture, WasapiStream};
 
 /// Maximum number of devices returned through the native interface.
 pub const MAX_DEVICES: usize = 64;
@@ -30,6 +34,155 @@ type PlatformStream = CoreAudioStream;
 type PlatformStream = AlsaStream;
 #[cfg(target_os = "windows")]
 type PlatformStream = WasapiStream;
+
+#[cfg(target_os = "macos")]
+type PlatformCapture = CoreAudioCapture;
+#[cfg(target_os = "linux")]
+type PlatformCapture = AlsaCapture;
+#[cfg(target_os = "windows")]
+type PlatformCapture = WasapiCapture;
+
+#[cfg(platform_audio)]
+fn open_platform_recording(
+    config: StreamConfig,
+    file: std::fs::File,
+    destination: &std::path::Path,
+) -> Result<RecordingSession<PlatformCapture>, RecordingRuntimeError> {
+    #[cfg(target_os = "macos")]
+    let backend = CoreAudioBackend::new();
+    #[cfg(target_os = "linux")]
+    let backend = AlsaBackend::new()?;
+    #[cfg(target_os = "windows")]
+    let backend = WasapiBackend::new();
+    RecordingSession::open_file(
+        &backend,
+        config,
+        file,
+        destination,
+        crate::audio::recording::DEFAULT_QUEUE_BLOCKS,
+    )
+    .map_err(Into::into)
+}
+
+/// Why a project recording could not start or finish.
+#[cfg(platform_audio)]
+#[derive(Debug)]
+pub enum RecordingRuntimeError {
+    Audio(AudioError),
+    Recording(RecordingError),
+    Media(MediaError),
+    WrongState,
+}
+
+#[cfg(platform_audio)]
+impl From<AudioError> for RecordingRuntimeError {
+    fn from(error: AudioError) -> Self {
+        Self::Audio(error)
+    }
+}
+
+#[cfg(platform_audio)]
+impl From<RecordingError> for RecordingRuntimeError {
+    fn from(error: RecordingError) -> Self {
+        Self::Recording(error)
+    }
+}
+
+#[cfg(platform_audio)]
+impl From<MediaError> for RecordingRuntimeError {
+    fn from(error: MediaError) -> Self {
+        Self::Media(error)
+    }
+}
+
+/// Result of registering one recorded file in the project.
+#[cfg(platform_audio)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectRecordingReport {
+    pub media: ImportReport,
+    pub lost_blocks: u64,
+    pub lost_frames: u64,
+}
+
+/// Control-thread owner for one platform input and project media reservation.
+#[cfg(platform_audio)]
+pub struct ProjectRecording {
+    session: Option<RecordingSession<PlatformCapture>>,
+    target: Option<PendingRecording>,
+}
+
+#[cfg(platform_audio)]
+impl ProjectRecording {
+    /// Reserves the project slot and opens a stopped platform input.
+    pub fn open(
+        project: &Project,
+        track: usize,
+        scene: usize,
+        device: DeviceId,
+        sample_rate: u32,
+        block_frames: usize,
+    ) -> Result<Self, RecordingRuntimeError> {
+        let mut target = prepare_recording(project, track, scene)?;
+        let destination = target.destination().to_path_buf();
+        let file = target.take_file()?;
+        let config = StreamConfig {
+            device,
+            sample_rate,
+            block_frames,
+            channels: 2,
+        };
+        let session = open_platform_recording(config, file, &destination)?;
+        Ok(Self {
+            session: Some(session),
+            target: Some(target),
+        })
+    }
+
+    pub fn start(&mut self) -> Result<(), RecordingRuntimeError> {
+        self.session
+            .as_mut()
+            .ok_or(RecordingRuntimeError::WrongState)?
+            .start()
+            .map_err(Into::into)
+    }
+
+    pub fn stop(&mut self) -> Result<(), RecordingRuntimeError> {
+        self.session
+            .as_mut()
+            .ok_or(RecordingRuntimeError::WrongState)?
+            .stop()
+            .map_err(Into::into)
+    }
+
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.session
+            .as_ref()
+            .and_then(|session| session.stream())
+            .is_some_and(Stream::is_running)
+    }
+
+    pub fn finish(
+        &mut self,
+        project: &mut Project,
+    ) -> Result<ProjectRecordingReport, RecordingRuntimeError> {
+        let session = self
+            .session
+            .take()
+            .ok_or(RecordingRuntimeError::WrongState)?;
+        let target = self
+            .target
+            .take()
+            .ok_or(RecordingRuntimeError::WrongState)?;
+        let captured = session.finish()?;
+        let media = target.commit(project, &captured)?;
+        Ok(ProjectRecordingReport {
+            media,
+            lost_blocks: captured.lost_blocks,
+            lost_frames: captured.lost_frames,
+        })
+    }
+}
 
 /// Opens the host's output and starts it.
 ///

@@ -53,6 +53,14 @@ struct BounceReport {
     float peakRight;
 };
 
+struct RecordingReport {
+    std::uint64_t frames;
+    std::uint32_t sampleRate;
+    double lengthBeats;
+    std::uint64_t lostBlocks;
+    std::uint64_t lostFrames;
+};
+
 enum class RoutingKind : int { Main = 0, SendPreFader = 1, SendPostFader = 2, Sidechain = 3 };
 
 struct ProjectRoute {
@@ -283,6 +291,30 @@ public:
 
 private:
     void* m_handle;
+};
+
+// Owning control-thread handle for one input recording.
+class Recording {
+public:
+    Recording() = default;
+    ~Recording();
+    Recording(const Recording&) = delete;
+    Recording& operator=(const Recording&) = delete;
+    Recording(Recording&& other) noexcept;
+    Recording& operator=(Recording&& other) noexcept;
+
+    bool valid() const { return m_handle != nullptr; }
+    explicit operator bool() const { return valid(); }
+
+    bool open(const Project& project, std::uint64_t track, std::uint64_t scene,
+        std::uint64_t deviceId, std::uint32_t sampleRate, std::uint32_t blockFrames);
+    bool start();
+    bool stop();
+    bool isRunning() const;
+    bool finish(Project& project, RecordingReport& report);
+
+private:
+    void* m_handle{};
 };
 
 } // namespace nylon

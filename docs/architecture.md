@@ -182,6 +182,13 @@ Nothing in the core opens an input on its own. A recording begins when a
 caller opens a capture stream, which is what keeps a microphone from
 being read by a program that was only asked to play.
 
+`src/audio/recording` copies fixed-capacity blocks into a bounded SPSC queue.
+The device callback performs no file access or allocation. A separate thread
+drains blocks into a 32-bit floating-point WAVE file and reports any frames
+rejected by a full queue. Project recording reserves a unique file in `Media/`;
+finishing creates one normal undoable clip command, while abandoning the handle
+removes the reserved file.
+
 Tests that need a real device are marked ignored and run deliberately.
 
 ## Benchmarks
@@ -199,7 +206,6 @@ The project model publishes immutable snapshots through grouped commands. Undo
 and redo retain prior snapshots in memory. Track identifiers remain unique even
 after branching from an earlier undo state. Failed command groups publish nothing.
 
-The C++ Qt frontend uses the native project interface for tempo, track creation,
-and undo/redo. Device backends, routing, plugin isolation, and project persistence
-are not implemented yet. These require separate integration checks
-before playback can be described as production-ready.
+Native clients use the C or C++ interfaces for project editing, device playback,
+recording, routing, persistence, and deterministic bounce. Plugin isolation and
+several workstation subsystems remain separate implementation areas.

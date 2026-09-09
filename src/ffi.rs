@@ -11,6 +11,8 @@ use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::project::{ClipId, Command, MidiNote, Project, SceneId, TrackId, TrackKind};
 use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingGraph};
+#[cfg(platform_audio)]
+use crate::runtime::ProjectRecording;
 use crate::runtime::{
     AudioRuntime, MAX_DEVICES, default_input, default_output, input_devices, output_devices,
 };
@@ -57,6 +59,17 @@ pub struct NylonBounceReport {
     pub frames: u64,
     pub peak_left: f32,
     pub peak_right: f32,
+}
+
+/// Measurements from a completed input recording.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NylonRecordingReport {
+    pub frames: u64,
+    pub sample_rate: u32,
+    pub length_beats: f64,
+    pub lost_blocks: u64,
+    pub lost_frames: u64,
 }
 
 /// Fixed-size native device description. Parameter meanings depend on kind.
@@ -2235,6 +2248,112 @@ pub unsafe extern "C" fn nylon_audio_default_input(device_id: *mut u64) -> i32 {
     };
     // SAFETY: The caller provides one writable integer.
     unsafe { device_id.write(device.0) };
+    1
+}
+
+/// Opens a stopped recording for one project clip slot.
+///
+/// # Safety
+/// The project must be live with no concurrent mutation.
+#[cfg(platform_audio)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_recording_open(
+    project: *const Project,
+    track: u64,
+    scene: u64,
+    device_id: u64,
+    sample_rate: u32,
+    block_frames: u32,
+) -> *mut ProjectRecording {
+    // SAFETY: The caller keeps the project live and immutable for this call.
+    let Some(project) = (unsafe { project.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
+    let (Ok(track), Ok(scene)) = (usize::try_from(track), usize::try_from(scene)) else {
+        return std::ptr::null_mut();
+    };
+    ProjectRecording::open(
+        project,
+        track,
+        scene,
+        DeviceId(device_id),
+        sample_rate,
+        block_frames as usize,
+    )
+    .map(|recording| Box::into_raw(Box::new(recording)))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+/// # Safety
+/// A non-null handle must originate from `nylon_recording_open`, remain live,
+/// and be released exactly once.
+#[cfg(platform_audio)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_recording_free(recording: *mut ProjectRecording) {
+    if !recording.is_null() {
+        // SAFETY: Ownership of the original allocation is transferred back.
+        drop(unsafe { Box::from_raw(recording) });
+    }
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[cfg(platform_audio)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_recording_start(recording: *mut ProjectRecording) -> i32 {
+    // SAFETY: The caller grants exclusive access to the live handle.
+    unsafe { recording.as_mut() }.map_or(0, |recording| i32::from(recording.start().is_ok()))
+}
+
+/// # Safety
+/// The handle must be live and exclusively accessible to this call.
+#[cfg(platform_audio)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_recording_stop(recording: *mut ProjectRecording) -> i32 {
+    // SAFETY: The caller grants exclusive access to the live handle.
+    unsafe { recording.as_mut() }.map_or(0, |recording| i32::from(recording.stop().is_ok()))
+}
+
+/// # Safety
+/// The handle must be live with no concurrent access.
+#[cfg(platform_audio)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_recording_is_running(recording: *const ProjectRecording) -> i32 {
+    // SAFETY: The caller keeps the handle live and immutable for this call.
+    unsafe { recording.as_ref() }.map_or(0, |recording| i32::from(recording.is_running()))
+}
+
+/// Finalizes the file and creates one undoable audio clip.
+///
+/// # Safety
+/// Both handles must be live and exclusive. `out` must point to one writable
+/// report. The recording remains valid but finished after a successful call.
+#[cfg(platform_audio)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_recording_finish(
+    recording: *mut ProjectRecording,
+    project: *mut Project,
+    out: *mut NylonRecordingReport,
+) -> i32 {
+    // SAFETY: The caller grants exclusive access to both live handles.
+    let recording = unsafe { recording.as_mut() };
+    // SAFETY: The caller grants exclusive access to both live handles.
+    let project = unsafe { project.as_mut() };
+    // SAFETY: The caller supplies one writable report.
+    let out = unsafe { out.as_mut() };
+    let (Some(recording), Some(project), Some(out)) = (recording, project, out) else {
+        return 0;
+    };
+    let Ok(report) = recording.finish(project) else {
+        return 0;
+    };
+    *out = NylonRecordingReport {
+        frames: report.media.frames as u64,
+        sample_rate: report.media.sample_rate,
+        length_beats: report.media.length_beats,
+        lost_blocks: report.lost_blocks,
+        lost_frames: report.lost_frames,
+    };
     1
 }
 

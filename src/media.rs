@@ -1,5 +1,6 @@
 //! Project media import and control-thread timeline construction.
 
+use crate::audio::recording::RecordingReport;
 use crate::dsp::db;
 use crate::engine::sample::{Sample, SampleError};
 use crate::engine::timeline::{AudioRegion, AudioTimeline};
@@ -14,6 +15,7 @@ use std::path::{Path, PathBuf};
 pub enum MediaError {
     MissingBundle,
     InvalidSlot,
+    InvalidRecording,
     Capacity,
     Io(io::Error),
     Wave(WaveError),
@@ -26,6 +28,7 @@ impl core::fmt::Display for MediaError {
         match self {
             Self::MissingBundle => formatter.write_str("the project has no bundle directory"),
             Self::InvalidSlot => formatter.write_str("the audio clip slot is invalid"),
+            Self::InvalidRecording => formatter.write_str("the recording result is invalid"),
             Self::Capacity => formatter.write_str("the audio timeline is full"),
             Self::Io(error) => write!(formatter, "media I/O: {error}"),
             Self::Wave(error) => write!(formatter, "media file: {error}"),
@@ -76,6 +79,128 @@ pub struct ImportReport {
     pub frames: usize,
     pub sample_rate: u32,
     pub length_beats: f64,
+}
+
+/// Reserved project media and stable clip destination for one recording.
+pub struct PendingRecording {
+    track: crate::project::TrackId,
+    scene: crate::project::SceneId,
+    relative_path: String,
+    destination: PathBuf,
+    file: Option<File>,
+    name: String,
+    source_tempo: f64,
+    committed: bool,
+}
+
+impl PendingRecording {
+    /// Hands the reserved file to the recording writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MediaError::InvalidRecording`] after it has already been taken.
+    pub fn take_file(&mut self) -> Result<File, MediaError> {
+        self.file.take().ok_or(MediaError::InvalidRecording)
+    }
+
+    /// Absolute runtime destination of the reserved media file.
+    #[must_use]
+    pub fn destination(&self) -> &Path {
+        &self.destination
+    }
+
+    /// Creates the audio clip after capture has fully finalized its file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the result does not belong to this reservation,
+    /// contains no audio, or the selected project slot changed during capture.
+    pub fn commit(
+        mut self,
+        project: &mut Project,
+        report: &RecordingReport,
+    ) -> Result<ImportReport, MediaError> {
+        if self.file.is_some()
+            || report.path != self.destination
+            || report.frames == 0
+            || report.sample_rate == 0
+        {
+            return Err(MediaError::InvalidRecording);
+        }
+        let length_beats =
+            report.frames as f64 / f64::from(report.sample_rate) * self.source_tempo / 60.0;
+        project.apply(&[Command::CreateAudioClip {
+            track: self.track,
+            scene: self.scene,
+            name: self.name.clone(),
+            media_path: self.relative_path.clone(),
+            length_beats,
+            source_tempo: self.source_tempo,
+        }])?;
+        self.committed = true;
+        Ok(ImportReport {
+            media_path: self.relative_path.clone(),
+            frames: usize::try_from(report.frames).unwrap_or(usize::MAX),
+            sample_rate: report.sample_rate,
+            length_beats,
+        })
+    }
+}
+
+impl Drop for PendingRecording {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.file.take();
+            let _ = fs::remove_file(&self.destination);
+        }
+    }
+}
+
+/// Reserves a unique media file for an audio clip slot.
+///
+/// # Errors
+///
+/// Returns an error for an unsaved project, a non-audio or occupied slot,
+/// or a destination that cannot be created.
+pub fn prepare_recording(
+    project: &Project,
+    track_index: usize,
+    scene_index: usize,
+) -> Result<PendingRecording, MediaError> {
+    let bundle = project
+        .bundle_directory()
+        .ok_or(MediaError::MissingBundle)?;
+    let track = project
+        .current
+        .tracks
+        .get(track_index)
+        .filter(|track| track.kind() == TrackKind::Audio)
+        .ok_or(MediaError::InvalidSlot)?;
+    let scene = project
+        .current
+        .scenes
+        .get(scene_index)
+        .ok_or(MediaError::InvalidSlot)?;
+    if track
+        .session_slots
+        .get(scene_index)
+        .is_some_and(Option::is_some)
+    {
+        return Err(MediaError::InvalidSlot);
+    }
+    let media_directory = bundle.join("Media");
+    fs::create_dir_all(&media_directory)?;
+    let (relative_path, destination, file) = create_destination(&media_directory, project.next_id)?;
+    Ok(PendingRecording {
+        track: track.id(),
+        scene: scene.id(),
+        relative_path,
+        destination,
+        file: Some(file),
+        name: format!("Recording {}", project.next_id),
+        source_tempo: project.current.tempo(),
+        committed: false,
+    })
 }
 
 /// Validates and copies a WAVE file into the current project bundle, then

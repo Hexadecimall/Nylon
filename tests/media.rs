@@ -1,5 +1,8 @@
+use nylon::audio::StreamConfig;
+use nylon::audio::offline::{INPUT_DEVICE, OfflineBackend, OfflineCapture};
+use nylon::audio::recording::RecordingSession;
 use nylon::bounce::{Options, render_wave};
-use nylon::media::{MediaError, import_wave, timeline_from_project};
+use nylon::media::{MediaError, import_wave, prepare_recording, timeline_from_project};
 use nylon::project::{Command, Project, TrackKind};
 use nylon::wave::{Format, WaveWriter};
 
@@ -106,5 +109,75 @@ fn invalid_media_does_not_change_the_project() {
     ));
     assert_eq!(*project.snapshot(), *before);
     assert!(!bundle.join("Media").exists());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_finished_recording_becomes_one_undoable_project_clip() {
+    let directory = test_directory("media-recording");
+    let bundle = directory.join("Session.nylonproject");
+    let mut project = Project::new();
+    project.save_bundle(&bundle).unwrap();
+    project
+        .apply(&[Command::CreateTrack {
+            name: "Audio".into(),
+            kind: TrackKind::Audio,
+        }])
+        .unwrap();
+    let mut target = prepare_recording(&project, 0, 0).unwrap();
+    let destination = target.destination().to_path_buf();
+    let file = target.take_file().unwrap();
+    let config = StreamConfig {
+        device: INPUT_DEVICE,
+        sample_rate: 48_000,
+        block_frames: 16,
+        channels: 2,
+    };
+    let mut session = RecordingSession::<OfflineCapture>::open_file(
+        &OfflineBackend::new(),
+        config,
+        file,
+        &destination,
+        4,
+    )
+    .unwrap();
+    session.start().unwrap();
+    session
+        .stream_mut()
+        .unwrap()
+        .capture_from(&[[0.4, -0.4]; 16])
+        .unwrap();
+    let captured = session.finish().unwrap();
+    let imported = target.commit(&mut project, &captured).unwrap();
+    assert_eq!(imported.frames, 16);
+    assert_eq!(
+        project.snapshot().audio_clip_at(0, 0).unwrap().media_path(),
+        imported.media_path
+    );
+    assert!(project.undo());
+    assert!(project.snapshot().audio_clip_at(0, 0).is_none());
+    assert!(destination.is_file());
+    assert!(project.redo());
+    assert!(project.snapshot().audio_clip_at(0, 0).is_some());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn an_abandoned_recording_removes_its_reserved_file() {
+    let directory = test_directory("media-abandoned-recording");
+    let bundle = directory.join("Session.nylonproject");
+    let mut project = Project::new();
+    project.save_bundle(&bundle).unwrap();
+    project
+        .apply(&[Command::CreateTrack {
+            name: "Audio".into(),
+            kind: TrackKind::Audio,
+        }])
+        .unwrap();
+    let target = prepare_recording(&project, 0, 0).unwrap();
+    let destination = target.destination().to_path_buf();
+    assert!(destination.is_file());
+    drop(target);
+    assert!(!destination.exists());
     std::fs::remove_dir_all(directory).unwrap();
 }
