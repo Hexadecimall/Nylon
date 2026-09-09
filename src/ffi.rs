@@ -2784,6 +2784,14 @@ pub unsafe extern "C" fn nylon_audio_dropouts(audio: *const AudioRuntime) -> u64
 }
 
 /// # Safety
+/// The handle must be live with no concurrent access.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_audio_frames_rendered(audio: *const AudioRuntime) -> u64 {
+    // SAFETY: The interface contract keeps the handle live and immutable.
+    unsafe { audio.as_ref() }.map_or(0, AudioRuntime::frames_rendered)
+}
+
+/// # Safety
 /// The handle must be live and exclusively accessible to this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nylon_transport_play(audio: *mut AudioRuntime) -> i32 {

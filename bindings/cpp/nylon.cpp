@@ -593,6 +593,10 @@ bool AudioEngine::sync(const Project& project)
 }
 
 std::uint64_t AudioEngine::dropouts() const { return nylon_audio_dropouts(m_handle); }
+std::uint64_t AudioEngine::framesRendered() const
+{
+    return nylon_audio_frames_rendered(m_handle);
+}
 bool AudioEngine::launchClip(const Project& project, std::uint64_t track, std::uint64_t scene,
     double quantizationBeats)
 {

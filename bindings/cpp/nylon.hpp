@@ -297,6 +297,7 @@ public:
     bool config(AudioConfig& config) const;
     bool sync(const Project& project);
     std::uint64_t dropouts() const;
+    std::uint64_t framesRendered() const;
 
     bool launchClip(const Project& project, std::uint64_t track, std::uint64_t scene,
         double quantizationBeats);

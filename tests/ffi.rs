@@ -33,6 +33,7 @@ fn null_handles_are_rejected() {
         nylon_project_free(std::ptr::null_mut());
         assert_eq!(nylon_audio_close(std::ptr::null_mut()), 0);
         assert_eq!(nylon_audio_is_open(std::ptr::null()), 0);
+        assert_eq!(nylon_audio_frames_rendered(std::ptr::null()), 0);
         assert_eq!(nylon_transport_play(std::ptr::null_mut()), 0);
         assert_eq!(nylon_transport_stop(std::ptr::null_mut()), 0);
         assert_eq!(nylon_transport_locate(std::ptr::null_mut(), 1.0), 0);
@@ -133,6 +134,7 @@ fn native_audio_handle_reports_closed_state() {
         assert_eq!(nylon_transport_position_beats(audio), 0.0);
         assert_eq!(nylon_transport_is_playing(audio), 0);
         assert_eq!(nylon_audio_dropouts(audio), 0);
+        assert_eq!(nylon_audio_frames_rendered(audio), 0);
         let mut config = NylonAudioConfig::default();
         assert_eq!(nylon_audio_config(audio, &mut config), 0);
         let mut master = NylonLevels::default();

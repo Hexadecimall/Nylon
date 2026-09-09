@@ -385,6 +385,19 @@ impl AudioRuntime {
         }
     }
 
+    /// Frames handed to the platform output callback.
+    #[must_use]
+    pub fn frames_rendered(&self) -> u64 {
+        #[cfg(platform_audio)]
+        {
+            self.stream.as_ref().map_or(0, Stream::frames_rendered)
+        }
+        #[cfg(not(platform_audio))]
+        {
+            0
+        }
+    }
+
     /// Rebuilds mixer and note state from the current project snapshot.
     /// The transport's play state is preserved.
     pub fn sync_project(&mut self, project: &Project) -> bool {
@@ -1238,6 +1251,7 @@ mod tests {
         assert_eq!(runtime.active_session_scene(0), None);
         assert_eq!(runtime.state(), PlaybackState::default());
         assert_eq!(runtime.dropouts(), 0);
+        assert_eq!(runtime.frames_rendered(), 0);
         assert_eq!(runtime.config(), None);
     }
 

@@ -25,7 +25,7 @@ endif()
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Network)
 add_subdirectory("${NYLON_REPO_ROOT}/bindings/cpp" bindings_cpp)
 
-add_executable(nylon_control main.cpp)
+add_executable(nylon_control main.cpp control_server.cpp control_server.hpp)
 target_link_libraries(nylon_control PRIVATE Qt6::Core Qt6::Network nyloncpp)
 set_target_properties(nylon_control PROPERTIES OUTPUT_NAME "nylon-control")
 
@@ -36,3 +36,6 @@ enable_testing()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME cli_project COMMAND "${Python3_EXECUTABLE}"
     "${NYLON_REPO_ROOT}/scripts/test_cli_project.py" "$<TARGET_FILE:nylon_control>")
+add_test(NAME cli_server COMMAND "${Python3_EXECUTABLE}"
+    "${NYLON_REPO_ROOT}/scripts/test_cli_server.py" "$<TARGET_FILE:nylon_control>")
+set_tests_properties(cli_server PROPERTIES TIMEOUT 20)

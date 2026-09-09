@@ -1,4 +1,5 @@
 #include "nylon.hpp"
+#include "control_server.hpp"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
@@ -655,11 +656,17 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     app.setApplicationName("nylon-control");
     QCommandLineParser parser;
-    parser.setApplicationDescription("Control a live Nylon window or edit a project bundle.");
+    parser.setApplicationDescription("Control a live Nylon process or edit a project bundle.");
     parser.addHelpOption();
-    const QCommandLineOption endpoint("endpoint", "Endpoint supplied to the GUI with --control.", "name");
+    const QCommandLineOption endpoint("endpoint", "Local control endpoint name.", "name");
     const QCommandLineOption project("project", "Project bundle for direct commands.", "directory");
-    parser.addOptions({endpoint, project});
+    const QCommandLineOption noAudio("no-audio", "Run the server without opening an output.");
+    const QCommandLineOption device("device", "Output device identifier for serve.", "id");
+    const QCommandLineOption sampleRate(
+        "sample-rate", "Output sample rate for serve.", "rate", "48000");
+    const QCommandLineOption blockFrames(
+        "block-frames", "Output block size for serve.", "frames", "256");
+    parser.addOptions({endpoint, project, noAudio, device, sampleRate, blockFrames});
     parser.addPositionalArgument("command", "Command to execute.");
     parser.addPositionalArgument("args", "Command arguments.", "[args...]");
     parser.setOptionsAfterPositionalArgumentsMode(
@@ -667,6 +674,23 @@ int main(int argc, char** argv)
     parser.process(app);
     const QStringList positional = parser.positionalArguments();
     if (positional.isEmpty()) parser.showHelp(2);
+    if (positional[0] == "serve") {
+        if (positional.size() != 1) return fail("serve takes no arguments");
+        if (parser.value(endpoint).isEmpty()) return fail("serve requires --endpoint");
+        if (parser.value(project).isEmpty()) return fail("serve requires --project");
+        ServerOptions options;
+        options.endpoint = parser.value(endpoint);
+        options.project = parser.value(project);
+        options.audioEnabled = !parser.isSet(noAudio);
+        options.useDefaultDevice = parser.value(device).isEmpty();
+        if (!options.useDefaultDevice && !indexNumber(parser.value(device), options.device))
+            return fail("Invalid output device");
+        if (!unsignedNumber(parser.value(sampleRate), options.sampleRate))
+            return fail("Invalid output sample rate");
+        if (!unsignedNumber(parser.value(blockFrames), options.blockFrames))
+            return fail("Invalid output block size");
+        return runControlServer(app, options);
+    }
     if (!parser.value(endpoint).isEmpty()) return remoteCommand(parser.value(endpoint), positional);
     return directCommand(parser.value(project), positional);
 }

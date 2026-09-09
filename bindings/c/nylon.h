@@ -349,6 +349,7 @@ int nylon_audio_is_open(const void* audio);
 int nylon_audio_config(const void* audio, NylonAudioConfig* out);
 int nylon_audio_sync(void* audio, const void* project);
 unsigned long long nylon_audio_dropouts(const void* audio);
+unsigned long long nylon_audio_frames_rendered(const void* audio);
 
 /* Session launches replace Arrangement playback on affected tracks. A zero
  * quantization starts at the earliest callback boundary. */

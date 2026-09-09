@@ -31,8 +31,8 @@ cargo deny check
 
 `cli/` holds a headless tool that drives the core: it creates and opens
 project bundles, edits tracks and clips, imports audio, bounces, and lists
-output devices. It needs Qt 6 Core for its argument and reply handling, a
-C++17 compiler, and CMake.
+output devices. It also runs a persistent local endpoint that owns the live
+audio stream. It needs Qt 6 Core and Network, a C++17 compiler, and CMake.
 
 ```sh
 cargo build --locked --release
@@ -40,6 +40,22 @@ cmake -S cli -B target/cli -DCMAKE_BUILD_TYPE=Release
 cmake --build target/cli --parallel 2
 ctest --test-dir target/cli --output-on-failure
 ```
+
+Start a headless live engine, then control it from another terminal:
+
+```sh
+nylon-control --project Session.nylon --endpoint nylon-live serve
+nylon-control --endpoint nylon-live status
+nylon-control --endpoint nylon-live play
+nylon-control --endpoint nylon-live locate 16
+nylon-control --endpoint nylon-live launch-clip 0 0 1
+nylon-control --endpoint nylon-live stop-clip 0
+nylon-control --endpoint nylon-live quit
+```
+
+The endpoint also accepts `launch-scene`, `set-tempo`, track volume, pan,
+mute, solo and arm edits, `undo`, `redo`, `save`, `sync`, and `reload`.
+`--no-audio` starts the endpoint for project editing without a device.
 
 `cargo-deny` is a separate development prerequisite. CI installs version 0.20.2.
 The native compiler wrapper maps build and toolchain locations to relative
