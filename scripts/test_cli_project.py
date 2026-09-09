@@ -66,8 +66,21 @@ def main():
         limiter = call("track-devices", "0")["devices"][1]
         assert limiter["kind"] == "limiter", limiter
         assert abs(limiter["parameters"]["lookaheadSeconds"] - 0.005) < 1e-7, limiter
+
+        call("add-device", "0", "saturator", "9", "-4", "0.75", "diode", "4x", "on")
+        saturator = call("track-devices", "0")["devices"][2]
+        assert saturator["kind"] == "saturator", saturator
+        assert saturator["parameters"] == {
+            "curve": "diode",
+            "dcFilter": True,
+            "driveDb": 9,
+            "mix": 0.75,
+            "outputDb": -4,
+            "oversampling": "4x",
+        }, saturator
         call("add-device", "0", "delay", "0.2", "1", "0.5", succeeds=False)
         call("add-device", "0", "limiter", "-0.3", "0.1", "0.1", succeeds=False)
+        call("add-device", "0", "saturator", "9", "-4", "0.75", "bad", "4x", "on", succeeds=False)
         call("import-wave", "1", "0", str(source), "120")
         clips = call("clips", "1")["clips"]
         assert clips[0]["kind"] == "audio" and clips[0]["mediaPath"].startswith("Media/"), clips

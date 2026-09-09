@@ -5,6 +5,7 @@ use crate::dsp::compressor::{Compressor, Parameters as CompressorParameters};
 use crate::dsp::db;
 use crate::dsp::delay::DelayLine;
 use crate::dsp::limiter::{Limiter, Parameters as LimiterParameters};
+use crate::dsp::saturator::{Parameters as SaturatorParameters, Saturator};
 
 pub const MAX_DEVICES: usize = 16;
 pub const MAX_DELAY_STORAGE_FRAMES: usize = 3_840_004;
@@ -59,6 +60,9 @@ pub enum DeviceKind {
     Limiter {
         parameters: LimiterParameters,
     },
+    Saturator {
+        parameters: SaturatorParameters,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +100,9 @@ enum Processor {
     Limiter {
         processor: Limiter,
         storage: Vec<[f32; 2]>,
+    },
+    Saturator {
+        processor: Saturator,
     },
 }
 
@@ -188,6 +195,9 @@ impl DeviceChain {
                         storage: zeroed_stereo(frames)?,
                     }
                 }
+                DeviceKind::Saturator { parameters } => Processor::Saturator {
+                    processor: Saturator::new(sample_rate, parameters),
+                },
             };
             devices.push(Device {
                 enabled: config.enabled,
@@ -295,6 +305,13 @@ fn validate_kind(kind: DeviceKind, sample_rate: f32) -> Result<usize, DeviceErro
         DeviceKind::Limiter { parameters } => Limiter::new(sample_rate, parameters)
             .map(|limiter| limiter.required_storage_frames())
             .map_err(|_| DeviceError::InvalidParameter),
+        DeviceKind::Saturator { parameters }
+            if finite_range(parameters.drive_db, -24.0, 48.0)
+                && finite_range(parameters.output_db, -48.0, 24.0)
+                && finite_range(parameters.mix, 0.0, 1.0) =>
+        {
+            Ok(0)
+        }
         _ => Err(DeviceError::InvalidParameter),
     }
 }
@@ -361,6 +378,11 @@ impl Processor {
             Self::Limiter { processor, storage } => {
                 let _ = processor.process_in_place(storage, audio);
             }
+            Self::Saturator { processor } => {
+                for frame in audio {
+                    (frame[0], frame[1]) = processor.process_stereo(frame[0], frame[1]);
+                }
+            }
         }
     }
 
@@ -385,6 +407,7 @@ impl Processor {
                 storage.fill([0.0; 2]);
                 processor.reset();
             }
+            Self::Saturator { processor } => processor.reset(),
             Self::Utility { .. } => {}
         }
     }
@@ -558,6 +581,26 @@ mod tests {
         chain.reset();
         chain.process(&[[0.0; 2]; 16], &[], &mut output).unwrap();
         assert_eq!(output, [[0.0; 2]; 16]);
+    }
+
+    #[test]
+    fn saturator_runs_in_a_chain_and_reset_clears_history() {
+        let config = DeviceConfig {
+            enabled: true,
+            kind: DeviceKind::Saturator {
+                parameters: SaturatorParameters::default(),
+            },
+        };
+        let mut chain = DeviceChain::new(&[config], RATE).unwrap();
+        let input = [[0.75, -0.75]; 16];
+        let mut first = [[0.0; 2]; 16];
+        chain.process(&input, &[], &mut first).unwrap();
+        assert!(first.iter().flatten().all(|sample| sample.is_finite()));
+        assert_ne!(first, input);
+        chain.reset();
+        let mut second = [[0.0; 2]; 16];
+        chain.process(&input, &[], &mut second).unwrap();
+        assert_eq!(first, second);
     }
 
     #[test]

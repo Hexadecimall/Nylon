@@ -3,6 +3,10 @@
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::compressor::Parameters as CompressorParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
+use crate::dsp::saturator::{
+    Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
+    Parameters as SaturatorParameters,
+};
 use crate::engine::device::{DeviceConfig, DeviceKind, MAX_DEVICES};
 use crate::project::{
     self, ArrangementPlacement, AudioClip, ClipId, Device, DeviceId, MidiClip, MidiNote, Project,
@@ -19,7 +23,7 @@ use std::sync::{
 };
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
-const VERSION: u32 = 6;
+const VERSION: u32 = 7;
 const DOCUMENT_NAME: &str = "project.nylon";
 const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -129,6 +133,26 @@ impl Encoder {
                             parameters.release_seconds,
                             parameters.lookahead_seconds,
                         ] {
+                            self.bytes(&value.to_le_bytes())?;
+                        }
+                    }
+                    DeviceKind::Saturator { parameters } => {
+                        self.bytes(&[
+                            5,
+                            match parameters.curve {
+                                SaturatorCurve::SoftClip => 0,
+                                SaturatorCurve::Tanh => 1,
+                                SaturatorCurve::HardClip => 2,
+                                SaturatorCurve::Diode => 3,
+                            },
+                            match parameters.oversampling {
+                                SaturatorOversampling::One => 0,
+                                SaturatorOversampling::Two => 1,
+                                SaturatorOversampling::Four => 2,
+                            },
+                            u8::from(parameters.dc_filter),
+                        ])?;
+                        for value in [parameters.drive_db, parameters.output_db, parameters.mix] {
                             self.bytes(&value.to_le_bytes())?;
                         }
                     }
@@ -324,6 +348,36 @@ impl<'a> Decoder<'a> {
                                 lookahead_seconds: f32::from_le_bytes(self.array()?),
                             },
                         },
+                        5 if version >= 7 => {
+                            let curve = match self.array::<1>()?[0] {
+                                0 => SaturatorCurve::SoftClip,
+                                1 => SaturatorCurve::Tanh,
+                                2 => SaturatorCurve::HardClip,
+                                3 => SaturatorCurve::Diode,
+                                _ => return Err(PersistenceError::InvalidFormat),
+                            };
+                            let oversampling = match self.array::<1>()?[0] {
+                                0 => SaturatorOversampling::One,
+                                1 => SaturatorOversampling::Two,
+                                2 => SaturatorOversampling::Four,
+                                _ => return Err(PersistenceError::InvalidFormat),
+                            };
+                            let dc_filter = match self.array::<1>()?[0] {
+                                0 => false,
+                                1 => true,
+                                _ => return Err(PersistenceError::InvalidFormat),
+                            };
+                            DeviceKind::Saturator {
+                                parameters: SaturatorParameters {
+                                    drive_db: f32::from_le_bytes(self.array()?),
+                                    output_db: f32::from_le_bytes(self.array()?),
+                                    mix: f32::from_le_bytes(self.array()?),
+                                    curve,
+                                    oversampling,
+                                    dc_filter,
+                                },
+                            }
+                        }
                         _ => return Err(PersistenceError::InvalidFormat),
                     };
                     let config = DeviceConfig { enabled, kind };

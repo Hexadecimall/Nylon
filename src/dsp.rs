@@ -18,6 +18,7 @@ pub mod limiter;
 pub mod meter;
 pub mod osc;
 pub mod pan;
+pub mod saturator;
 pub mod smooth;
 
 /// Smallest level treated as silence, about -300 dB. Values below this are

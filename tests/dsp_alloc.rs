@@ -11,6 +11,7 @@ use nylon::dsp::env::{Envelope, Settings};
 use nylon::dsp::limiter::{Limiter, Parameters as LimiterParameters};
 use nylon::dsp::meter::Meter;
 use nylon::dsp::osc::{Oscillator, Shape};
+use nylon::dsp::saturator::{Parameters as SaturatorParameters, Saturator};
 use nylon::dsp::smooth::{OnePole, Ramp};
 use nylon::dsp::{db, pan};
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -61,6 +62,16 @@ fn measure(body: impl FnOnce()) -> usize {
 
 const RATE: f32 = 48_000.0;
 const BLOCK: usize = 512;
+
+#[test]
+fn saturating_a_block_performs_no_allocator_operations() {
+    let mut saturator = Saturator::new(RATE, SaturatorParameters::default());
+    let mut left = vec![0.75_f32; BLOCK];
+    let mut right = vec![-0.5_f32; BLOCK];
+    let operations = measure(|| saturator.process_block(&mut left, &mut right));
+    assert_eq!(operations, 0, "{operations} allocator operations");
+    assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
+}
 
 #[test]
 fn limiting_a_block_performs_no_allocator_operations() {

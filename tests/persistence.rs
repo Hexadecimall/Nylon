@@ -1,4 +1,8 @@
 use nylon::dsp::limiter::Parameters as LimiterParameters;
+use nylon::dsp::saturator::{
+    Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
+    Parameters as SaturatorParameters,
+};
 use nylon::engine::device::{DeviceConfig, DeviceKind};
 use nylon::persistence::PersistenceError;
 use nylon::project::{Command, MidiNote, Project, TrackKind};
@@ -32,6 +36,22 @@ fn session() -> Project {
                         delay_seconds: 0.375,
                         feedback: 0.45,
                         mix: 0.2,
+                    },
+                },
+            },
+            Command::AddDevice {
+                track: id,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Saturator {
+                        parameters: SaturatorParameters {
+                            drive_db: 9.0,
+                            output_db: -4.0,
+                            mix: 0.75,
+                            curve: SaturatorCurve::Diode,
+                            oversampling: SaturatorOversampling::Four,
+                            dc_filter: true,
+                        },
                     },
                 },
             },
@@ -170,7 +190,7 @@ fn every_truncation_and_single_bit_corruption_is_rejected() {
         }
     }
     let mut future = bytes.clone();
-    future[4] = 7;
+    future[4] = 8;
     assert!(matches!(
         Project::from_bytes(&future),
         Err(PersistenceError::UnsupportedVersion)

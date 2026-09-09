@@ -6,6 +6,10 @@ use crate::bounce::{Options as BounceOptions, render_wave};
 use crate::dsp::biquad::Kind as FilterKind;
 use crate::dsp::compressor::Parameters as CompressorParameters;
 use crate::dsp::limiter::Parameters as LimiterParameters;
+use crate::dsp::saturator::{
+    Curve as SaturatorCurve, Oversampling as SaturatorOversampling,
+    Parameters as SaturatorParameters,
+};
 use crate::engine::device::DeviceKind as TrackDeviceKind;
 use crate::media::import_wave;
 use crate::mixer::Levels;
@@ -345,6 +349,31 @@ fn track_device_kind(record: NylonTrackDevice) -> Option<TrackDeviceKind> {
                 lookahead_seconds: parameters[2],
             },
         }),
+        5 => Some(TrackDeviceKind::Saturator {
+            parameters: SaturatorParameters {
+                drive_db: parameters[0],
+                output_db: parameters[1],
+                mix: parameters[2],
+                curve: match parameters[3] {
+                    0.0 => SaturatorCurve::SoftClip,
+                    1.0 => SaturatorCurve::Tanh,
+                    2.0 => SaturatorCurve::HardClip,
+                    3.0 => SaturatorCurve::Diode,
+                    _ => return None,
+                },
+                oversampling: match parameters[4] {
+                    0.0 => SaturatorOversampling::One,
+                    1.0 => SaturatorOversampling::Two,
+                    2.0 => SaturatorOversampling::Four,
+                    _ => return None,
+                },
+                dc_filter: match parameters[5] {
+                    0.0 => false,
+                    1.0 => true,
+                    _ => return None,
+                },
+            },
+        }),
         _ => None,
     }
 }
@@ -415,6 +444,26 @@ fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice
                 parameters.ceiling_db,
                 parameters.release_seconds,
                 parameters.lookahead_seconds,
+            ]);
+        }
+        TrackDeviceKind::Saturator { parameters } => {
+            record.kind = 5;
+            record.parameters[..6].copy_from_slice(&[
+                parameters.drive_db,
+                parameters.output_db,
+                parameters.mix,
+                match parameters.curve {
+                    SaturatorCurve::SoftClip => 0.0,
+                    SaturatorCurve::Tanh => 1.0,
+                    SaturatorCurve::HardClip => 2.0,
+                    SaturatorCurve::Diode => 3.0,
+                },
+                match parameters.oversampling {
+                    SaturatorOversampling::One => 0.0,
+                    SaturatorOversampling::Two => 1.0,
+                    SaturatorOversampling::Four => 2.0,
+                },
+                f32::from(u8::from(parameters.dc_filter)),
             ]);
         }
     }

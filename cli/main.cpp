@@ -112,6 +112,7 @@ QString deviceKindName(nylon::DeviceKind kind)
     case nylon::DeviceKind::Compressor: return "compressor";
     case nylon::DeviceKind::StereoDelay: return "delay";
     case nylon::DeviceKind::Limiter: return "limiter";
+    case nylon::DeviceKind::Saturator: return "saturator";
     }
     return "utility";
 }
@@ -184,6 +185,24 @@ bool parseTrackDevice(
             && parameter(positional[kindIndex + 2], device.parameters[1])
             && parameter(positional[kindIndex + 3], device.parameters[2]);
     }
+    if (kind == "saturator" && positional.size() == kindIndex + 7) {
+        device.kind = nylon::DeviceKind::Saturator;
+        bool dcFilter = false;
+        if (!parameter(positional[kindIndex + 1], device.parameters[0])
+            || !parameter(positional[kindIndex + 2], device.parameters[1])
+            || !parameter(positional[kindIndex + 3], device.parameters[2])
+            || !flag(positional[kindIndex + 6], dcFilter))
+            return false;
+        static const QStringList curves{"soft-clip", "tanh", "hard-clip", "diode"};
+        static const QStringList oversampling{"1x", "2x", "4x"};
+        const qsizetype curve = curves.indexOf(positional[kindIndex + 4]);
+        const qsizetype rate = oversampling.indexOf(positional[kindIndex + 5]);
+        if (curve < 0 || rate < 0) return false;
+        device.parameters[3] = static_cast<float>(curve);
+        device.parameters[4] = static_cast<float>(rate);
+        device.parameters[5] = dcFilter ? 1.0F : 0.0F;
+        return true;
+    }
     return false;
 }
 
@@ -215,6 +234,16 @@ QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
             {"releaseSeconds", device.parameters[1]},
             {"lookaheadSeconds", device.parameters[2]}};
         break;
+    case nylon::DeviceKind::Saturator: {
+        static const QStringList curves{"soft-clip", "tanh", "hard-clip", "diode"};
+        static const QStringList oversampling{"1x", "2x", "4x"};
+        parameters = {{"driveDb", device.parameters[0]},
+            {"outputDb", device.parameters[1]}, {"mix", device.parameters[2]},
+            {"curve", curves.value(static_cast<int>(device.parameters[3]))},
+            {"oversampling", oversampling.value(static_cast<int>(device.parameters[4]))},
+            {"dcFilter", device.parameters[5] == 1.0F}};
+        break;
+    }
     }
     return {{"index", static_cast<double>(index)}, {"kind", deviceKindName(device.kind)},
         {"enabled", device.enabled}, {"parameters", parameters}};
