@@ -6,6 +6,78 @@
 
 namespace nylon {
 
+CompiledRouting::CompiledRouting() = default;
+CompiledRouting::CompiledRouting(void* handle)
+    : m_handle(handle)
+{
+}
+CompiledRouting::~CompiledRouting() { nylon_compiled_routing_free(m_handle); }
+CompiledRouting::CompiledRouting(CompiledRouting&& other) noexcept
+    : m_handle(std::exchange(other.m_handle, nullptr))
+{
+}
+CompiledRouting& CompiledRouting::operator=(CompiledRouting&& other) noexcept
+{
+    if (this != &other) {
+        nylon_compiled_routing_free(m_handle);
+        m_handle = std::exchange(other.m_handle, nullptr);
+    }
+    return *this;
+}
+std::vector<std::uint32_t> CompiledRouting::order() const
+{
+    std::vector<std::uint32_t> result;
+    const auto count = nylon_compiled_routing_node_count(m_handle);
+    result.reserve(count);
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const int node = nylon_compiled_routing_order_at(m_handle, index);
+        if (node < 0) return {};
+        result.push_back(static_cast<std::uint32_t>(node));
+    }
+    return result;
+}
+bool CompiledRouting::edgeDelay(std::uint32_t index, std::uint32_t& frames) const
+{
+    return nylon_compiled_routing_edge_delay(m_handle, index, &frames) != 0;
+}
+bool CompiledRouting::outputLatency(std::uint32_t node, std::uint32_t& frames) const
+{
+    return nylon_compiled_routing_output_latency(m_handle, node, &frames) != 0;
+}
+
+RoutingGraph::RoutingGraph(std::uint32_t nodeCount)
+    : m_handle(nylon_routing_new(nodeCount))
+{
+}
+RoutingGraph::~RoutingGraph() { nylon_routing_free(m_handle); }
+RoutingGraph::RoutingGraph(RoutingGraph&& other) noexcept
+    : m_handle(std::exchange(other.m_handle, nullptr))
+{
+}
+RoutingGraph& RoutingGraph::operator=(RoutingGraph&& other) noexcept
+{
+    if (this != &other) {
+        nylon_routing_free(m_handle);
+        m_handle = std::exchange(other.m_handle, nullptr);
+    }
+    return *this;
+}
+bool RoutingGraph::setNodeLatency(std::uint32_t node, std::uint32_t frames)
+{
+    return nylon_routing_set_node_latency(m_handle, node, frames) != 0;
+}
+bool RoutingGraph::addEdge(std::uint32_t source, std::uint32_t destination, RoutingKind kind,
+    float gain, std::uint32_t& index)
+{
+    return nylon_routing_add_edge(
+               m_handle, source, destination, static_cast<int>(kind), gain, &index)
+        != 0;
+}
+CompiledRouting RoutingGraph::compile() const
+{
+    return CompiledRouting(nylon_routing_compile(m_handle));
+}
+
 Project::Project()
     : m_handle(nylon_project_new())
 {

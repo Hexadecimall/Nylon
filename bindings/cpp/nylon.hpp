@@ -52,6 +52,47 @@ struct BounceReport {
     float peakRight;
 };
 
+enum class RoutingKind : int { Main = 0, SendPreFader = 1, SendPostFader = 2, Sidechain = 3 };
+
+class CompiledRouting {
+public:
+    CompiledRouting();
+    ~CompiledRouting();
+    CompiledRouting(const CompiledRouting&) = delete;
+    CompiledRouting& operator=(const CompiledRouting&) = delete;
+    CompiledRouting(CompiledRouting&& other) noexcept;
+    CompiledRouting& operator=(CompiledRouting&& other) noexcept;
+
+    explicit operator bool() const { return m_handle != nullptr; }
+    std::vector<std::uint32_t> order() const;
+    bool edgeDelay(std::uint32_t index, std::uint32_t& frames) const;
+    bool outputLatency(std::uint32_t node, std::uint32_t& frames) const;
+
+private:
+    friend class RoutingGraph;
+    explicit CompiledRouting(void* handle);
+    void* m_handle{};
+};
+
+class RoutingGraph {
+public:
+    explicit RoutingGraph(std::uint32_t nodeCount);
+    ~RoutingGraph();
+    RoutingGraph(const RoutingGraph&) = delete;
+    RoutingGraph& operator=(const RoutingGraph&) = delete;
+    RoutingGraph(RoutingGraph&& other) noexcept;
+    RoutingGraph& operator=(RoutingGraph&& other) noexcept;
+
+    explicit operator bool() const { return m_handle != nullptr; }
+    bool setNodeLatency(std::uint32_t node, std::uint32_t frames);
+    bool addEdge(std::uint32_t source, std::uint32_t destination, RoutingKind kind,
+        float gain, std::uint32_t& index);
+    CompiledRouting compile() const;
+
+private:
+    void* m_handle{};
+};
+
 // Owning handle to a core project. Move-only.
 class Project {
 public:

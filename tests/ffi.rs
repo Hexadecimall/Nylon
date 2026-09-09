@@ -252,6 +252,56 @@ fn native_recovery_keeps_the_primary_document_separate() {
 }
 
 #[test]
+fn native_routing_reports_order_and_compensation() {
+    let routing = nylon_routing_new(4);
+    assert!(!routing.is_null());
+    // SAFETY: This thread owns both routing handles and output values.
+    unsafe {
+        assert_eq!(nylon_routing_set_node_latency(routing, 0, 128), 1);
+        assert_eq!(nylon_routing_set_node_latency(routing, 1, 32), 1);
+        assert_eq!(nylon_routing_set_node_latency(routing, 2, 64), 1);
+        let mut slow = 99;
+        let mut medium = 99;
+        assert_eq!(nylon_routing_add_edge(routing, 0, 3, 0, 1.0, &mut slow), 1);
+        assert_eq!(
+            nylon_routing_add_edge(routing, 1, 2, 3, 1.0, &mut medium),
+            1
+        );
+        assert_eq!(
+            nylon_routing_add_edge(routing, 2, 3, 2, 0.5, &mut medium),
+            1
+        );
+        assert_eq!(
+            nylon_routing_add_edge(routing, 2, 3, 2, 0.5, &mut medium),
+            0
+        );
+        let compiled = nylon_routing_compile(routing);
+        assert!(!compiled.is_null());
+        assert_eq!(nylon_compiled_routing_node_count(compiled), 4);
+        assert_eq!(nylon_compiled_routing_order_at(compiled, 0), 0);
+        assert_eq!(nylon_compiled_routing_order_at(compiled, 4), -1);
+        let mut frames = 0;
+        assert_eq!(
+            nylon_compiled_routing_edge_delay(compiled, slow, &mut frames),
+            1
+        );
+        assert_eq!(frames, 0);
+        assert_eq!(
+            nylon_compiled_routing_edge_delay(compiled, medium, &mut frames),
+            1
+        );
+        assert_eq!(frames, 32);
+        assert_eq!(
+            nylon_compiled_routing_output_latency(compiled, 3, &mut frames),
+            1
+        );
+        assert_eq!(frames, 128);
+        nylon_compiled_routing_free(compiled);
+        nylon_routing_free(routing);
+    }
+}
+
+#[test]
 fn native_session_notes_and_arrangement_are_editable() {
     let handle = nylon_project_new();
     // SAFETY: This thread owns the handle and every output buffer until release.

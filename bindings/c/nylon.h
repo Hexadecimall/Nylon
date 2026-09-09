@@ -95,6 +95,23 @@ int nylon_project_recovery_available(const char* bundle_directory);
 int nylon_project_recover(void* project, const char* bundle_directory);
 int nylon_project_discard_recovery(const char* bundle_directory);
 
+/* Fixed-capacity routing graph. Edge kinds: 0 main, 1 pre-fader send,
+ * 2 post-fader send, 3 sidechain. Compilation rejects cycles and calculates
+ * a processing order plus plugin delay compensation for each edge. */
+void* nylon_routing_new(unsigned int node_count);
+void nylon_routing_free(void* routing);
+int nylon_routing_set_node_latency(void* routing, unsigned int node, unsigned int frames);
+int nylon_routing_add_edge(void* routing, unsigned int source, unsigned int destination,
+    int kind, float gain, unsigned int* out_index);
+void* nylon_routing_compile(const void* routing);
+void nylon_compiled_routing_free(void* routing);
+unsigned int nylon_compiled_routing_node_count(const void* routing);
+int nylon_compiled_routing_order_at(const void* routing, unsigned int index);
+int nylon_compiled_routing_edge_delay(
+    const void* routing, unsigned int index, unsigned int* out_frames);
+int nylon_compiled_routing_output_latency(
+    const void* routing, unsigned int node, unsigned int* out_frames);
+
 /* Renders a beat range to a stereo 24-bit WAVE file at the selected sample
  * rate. The report is written only after the file is complete. */
 int nylon_render_bounce_wave(const void* project, const char* path, double start_beats,

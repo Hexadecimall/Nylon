@@ -6,6 +6,7 @@ use crate::bounce::{Options as BounceOptions, render_wave};
 use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::project::{ClipId, Command, MidiNote, Project, SceneId, TrackId, TrackKind};
+use crate::routing::{CompiledRouting, Edge, EdgeKind, RoutingGraph};
 use crate::runtime::{AudioRuntime, MAX_DEVICES, default_output, output_devices};
 use crate::wave::Format;
 use std::ffi::{CStr, c_char};
@@ -531,6 +532,181 @@ pub unsafe extern "C" fn nylon_project_discard_recovery(directory: *const c_char
     unsafe { recovery_directory(directory) }.map_or(0, |path| {
         i32::from(Project::discard_recovery(&path).is_ok())
     })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nylon_routing_new(node_count: u32) -> *mut RoutingGraph {
+    let Ok(node_count) = usize::try_from(node_count) else {
+        return std::ptr::null_mut();
+    };
+    RoutingGraph::new(node_count)
+        .map(|graph| Box::into_raw(Box::new(graph)))
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// # Safety
+/// A non-null handle must originate from `nylon_routing_new` and be released once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_routing_free(handle: *mut RoutingGraph) {
+    if !handle.is_null() {
+        // SAFETY: Ownership of the original allocation is transferred back.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+/// # Safety
+/// A non-null handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_routing_set_node_latency(
+    handle: *mut RoutingGraph,
+    node: u32,
+    frames: u32,
+) -> i32 {
+    let Ok(node) = u16::try_from(node) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and exclusive access are required by the interface.
+    unsafe { handle.as_mut() }.map_or(0, |graph| {
+        i32::from(graph.set_node_latency(node, frames).is_ok())
+    })
+}
+
+/// # Safety
+/// The graph and output index must each point to live, disjoint storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_routing_add_edge(
+    handle: *mut RoutingGraph,
+    source: u32,
+    destination: u32,
+    kind: i32,
+    gain: f32,
+    out_index: *mut u32,
+) -> i32 {
+    let (Ok(source), Ok(destination)) = (u16::try_from(source), u16::try_from(destination)) else {
+        return 0;
+    };
+    let kind = match kind {
+        0 => EdgeKind::Main,
+        1 => EdgeKind::SendPreFader,
+        2 => EdgeKind::SendPostFader,
+        3 => EdgeKind::Sidechain,
+        _ => return 0,
+    };
+    // SAFETY: The caller supplies one writable output index.
+    let Some(out_index) = (unsafe { out_index.as_mut() }) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and exclusive access are required by the interface.
+    let Some(graph) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let Ok(index) = graph.add_edge(Edge {
+        source,
+        destination,
+        kind,
+        gain,
+    }) else {
+        return 0;
+    };
+    let Ok(index) = u32::try_from(index) else {
+        return 0;
+    };
+    *out_index = index;
+    1
+}
+
+/// # Safety
+/// A non-null graph must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_routing_compile(
+    handle: *const RoutingGraph,
+) -> *mut CompiledRouting {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(graph) = (unsafe { handle.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
+    graph
+        .compile()
+        .map(|compiled| Box::into_raw(Box::new(compiled)))
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// # Safety
+/// A non-null handle must originate from `nylon_routing_compile` and be released once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_compiled_routing_free(handle: *mut CompiledRouting) {
+    if !handle.is_null() {
+        // SAFETY: Ownership of the original allocation is transferred back.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_compiled_routing_node_count(handle: *const CompiledRouting) -> u32 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    unsafe { handle.as_ref() }.map_or(0, |routing| routing.order().len() as u32)
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_compiled_routing_order_at(
+    handle: *const CompiledRouting,
+    index: u32,
+) -> i32 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    unsafe { handle.as_ref() }
+        .and_then(|routing| routing.order().get(index as usize))
+        .map_or(-1, |node| i32::from(*node))
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_compiled_routing_edge_delay(
+    handle: *const CompiledRouting,
+    index: u32,
+    out_frames: *mut u32,
+) -> i32 {
+    // SAFETY: The caller supplies one writable frame count.
+    let Some(out_frames) = (unsafe { out_frames.as_mut() }) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(frames) =
+        (unsafe { handle.as_ref() }).and_then(|routing| routing.edge_delay(index as usize))
+    else {
+        return 0;
+    };
+    *out_frames = frames;
+    1
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_compiled_routing_output_latency(
+    handle: *const CompiledRouting,
+    node: u32,
+    out_frames: *mut u32,
+) -> i32 {
+    let Ok(node) = u16::try_from(node) else {
+        return 0;
+    };
+    // SAFETY: The caller supplies one writable frame count.
+    let Some(out_frames) = (unsafe { out_frames.as_mut() }) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(frames) =
+        (unsafe { handle.as_ref() }).and_then(|routing| routing.output_latency(node))
+    else {
+        return 0;
+    };
+    *out_frames = frames;
+    1
 }
 
 /// # Safety
