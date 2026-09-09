@@ -1,13 +1,38 @@
 use nylon::plugin::clap::Instance;
+use nylon::wave::{Format, SampleFormat, WaveWriter, read};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const HEADER: [u8; 8] = *b"NYWORK1\0";
 const MAX_BLOCK_FRAMES: usize = 8_192;
 
 fn main() {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    if arguments.len() != 5 || arguments[0] != "clap" {
+    if arguments
+        .first()
+        .is_some_and(|value| value == "render-clap")
+    {
+        if arguments.len() != 6 {
+            fail(
+                "Usage: nylon-plugin-worker render-clap <plugin> <id> <input> <output> <block-frames>",
+            );
+        }
+        let Some(identifier) = arguments[2].to_str() else {
+            fail("Plugin identifier is invalid");
+        };
+        let block_frames = block_frames(&arguments[5]);
+        render_file(
+            Path::new(&arguments[1]),
+            identifier,
+            Path::new(&arguments[3]),
+            Path::new(&arguments[4]),
+            block_frames,
+        )
+        .unwrap_or_else(|error| fail(&error));
+        return;
+    }
+    if arguments.len() != 5 || arguments.first().is_none_or(|value| value != "clap") {
         fail("Usage: nylon-plugin-worker clap <plugin> <id> <sample-rate> <max-frames>");
     }
     let Some(identifier) = arguments[2].to_str() else {
@@ -18,17 +43,120 @@ fn main() {
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or_else(|| fail("Sample rate is invalid"));
-    let max_frames = arguments[4]
-        .to_str()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| (1..=MAX_BLOCK_FRAMES).contains(value))
-        .unwrap_or_else(|| fail("Block limit is invalid"));
+    let max_frames = block_frames(&arguments[4]);
     let mut instance = Instance::open(Path::new(&arguments[1]), identifier)
         .unwrap_or_else(|error| fail(&error.to_string()));
     instance
         .activate(sample_rate, 1, max_frames as u32)
         .unwrap_or_else(|error| fail(&error.to_string()));
     run(&mut instance, max_frames).unwrap_or_else(|error| fail(error));
+}
+
+fn block_frames(value: &std::ffi::OsStr) -> usize {
+    value
+        .to_str()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| (1..=MAX_BLOCK_FRAMES).contains(value))
+        .unwrap_or_else(|| fail("Block limit is invalid"))
+}
+
+fn render_file(
+    package: &Path,
+    identifier: &str,
+    input_path: &Path,
+    output_path: &Path,
+    block_frames: usize,
+) -> Result<(), String> {
+    if output_path.exists() {
+        return Err("Output file already exists".into());
+    }
+    let source = read(File::open(input_path).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    let mut instance = Instance::open(package, identifier).map_err(|error| error.to_string())?;
+    instance
+        .activate(source.format.sample_rate as f64, 1, block_frames as u32)
+        .map_err(|error| error.to_string())?;
+
+    let temporary_path = partial_path(output_path);
+    let destination = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary_path)
+        .map_err(|error| error.to_string())?;
+    let mut cleanup = PartialOutput::new(temporary_path);
+    let format = Format {
+        sample_rate: source.format.sample_rate,
+        channels: 2,
+        bits: 32,
+        sample_format: SampleFormat::Float,
+    };
+    let mut writer = WaveWriter::new(destination, format).map_err(|error| error.to_string())?;
+    let mut input_left = vec![0.0; block_frames];
+    let mut input_right = vec![0.0; block_frames];
+    let mut output_left = vec![0.0; block_frames];
+    let mut output_right = vec![0.0; block_frames];
+    let mut output = vec![[0.0; 2]; block_frames];
+    let mut position = 0;
+    while position < source.frames() {
+        let frames = block_frames.min(source.frames() - position);
+        for frame in 0..frames {
+            [input_left[frame], input_right[frame]] = source.stereo_frame(position + frame);
+        }
+        instance
+            .process_stereo(
+                Some((&input_left[..frames], &input_right[..frames])),
+                &mut output_left[..frames],
+                &mut output_right[..frames],
+            )
+            .map_err(|error| error.to_string())?;
+        for frame in 0..frames {
+            output[frame] = [output_left[frame], output_right[frame]];
+        }
+        writer
+            .write_stereo(&output[..frames])
+            .map_err(|error| error.to_string())?;
+        position += frames;
+    }
+    writer.finish().map_err(|error| error.to_string())?;
+    fs::rename(cleanup.path(), output_path).map_err(|error| error.to_string())?;
+    cleanup.commit();
+    Ok(())
+}
+
+fn partial_path(output: &Path) -> PathBuf {
+    let mut path = output.as_os_str().to_owned();
+    path.push(".partial");
+    path.into()
+}
+
+struct PartialOutput {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl PartialOutput {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for PartialOutput {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {

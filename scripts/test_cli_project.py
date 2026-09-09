@@ -13,6 +13,7 @@ def main():
     clap_fixture = sys.argv[2]
     plugin_probe = sys.argv[3]
     crash_fixture = sys.argv[4]
+    plugin_worker = sys.argv[5]
     with tempfile.TemporaryDirectory() as directory:
         root = pathlib.Path(directory)
         project = root / "Session.nylon"
@@ -212,6 +213,27 @@ def main():
         crashed_entry = json.loads(crashed.stdout)["plugins"][0]
         assert crashed_entry["state"] == "quarantined", crashed_entry
         assert crashed_entry["quarantineReason"] == "Probe process crashed", crashed_entry
+        processed = root / "processed.wav"
+        plugin_render = subprocess.run(
+            [binary, "--plugin-worker", plugin_worker, "process-plugin", clap_fixture,
+             "app.nylon.fixture", str(source), str(processed), "64"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert plugin_render.returncode == 0, (plugin_render.stdout, plugin_render.stderr)
+        processed_bytes = processed.read_bytes()
+        left, right = struct.unpack_from("<ff", processed_bytes, 44)
+        expected = 8192 / 32767 * 0.5
+        assert abs(left - expected) < 1e-6 and abs(right + expected) < 1e-6
+        crashed_output = root / "crashed.wav"
+        crash_render = subprocess.run(
+            [binary, "--plugin-worker", plugin_worker, "process-plugin", crash_fixture,
+             "app.nylon.fixture", str(source), str(crashed_output)],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert crash_render.returncode != 0
+        assert json.loads(crash_render.stdout)["error"] == "Plugin worker crashed"
+        assert not crashed_output.exists()
+        assert not pathlib.Path(str(crashed_output) + ".partial").exists()
         print("Direct project CLI: pass")
 
 

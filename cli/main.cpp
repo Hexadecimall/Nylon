@@ -552,8 +552,34 @@ int scanPlugins(const QStringList& roots, const QString& probeExecutable, bool p
     return writeJson({{"ok", true}, {"plugins", entries}, {"issues", issues}});
 }
 
+int processClapFile(const QString& worker, const QStringList& positional)
+{
+    if (worker.isEmpty()) return fail("Plugin worker executable is required");
+    std::uint32_t blockFrames = 512;
+    if (positional.size() == 6 && !unsignedNumber(positional[5], blockFrames))
+        return fail("Invalid plugin block size");
+    QProcess process;
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start(worker,
+        {"render-clap", positional[1], positional[2], positional[3], positional[4],
+            QString::number(blockFrames)});
+    if (!process.waitForStarted(5'000)) return fail("Could not start the plugin worker");
+    if (!process.waitForFinished(600'000)) {
+        process.kill();
+        process.waitForFinished(5'000);
+        return fail("Plugin processing timed out");
+    }
+    if (process.exitStatus() == QProcess::CrashExit) return fail("Plugin worker crashed");
+    if (process.exitCode() != 0) {
+        const QString detail = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        return fail(detail.isEmpty() ? QStringLiteral("Plugin processing failed") : detail);
+    }
+    return writeJson({{"ok", true}, {"output", positional[4]}});
+}
+
 int directCommand(
-    const QString& bundle, const QStringList& positional, const QString& probeExecutable)
+    const QString& bundle, const QStringList& positional, const QString& probeExecutable,
+    const QString& workerExecutable)
 {
     const QString command = positional[0];
     if (command == "devices" && positional.size() == 1) return listDevices(false);
@@ -562,6 +588,8 @@ int directCommand(
         return scanPlugins(positional.sliced(1), probeExecutable, false);
     if (command == "probe-plugins" && positional.size() > 1)
         return scanPlugins(positional.sliced(1), probeExecutable, true);
+    if (command == "process-plugin" && (positional.size() == 5 || positional.size() == 6))
+        return processClapFile(workerExecutable, positional);
     if (bundle.isEmpty()) return fail("A project bundle is required with --project");
     if (command == "recovery-status" && positional.size() == 1) {
         return writeJson({{"ok", true},
@@ -987,7 +1015,10 @@ int main(int argc, char** argv)
         "block-frames", "Output block size for serve.", "frames", "256");
     const QCommandLineOption pluginProbe(
         "plugin-probe", "Plugin probe executable.", "path");
-    parser.addOptions({endpoint, project, noAudio, device, sampleRate, blockFrames, pluginProbe});
+    const QCommandLineOption pluginWorker(
+        "plugin-worker", "Plugin worker executable.", "path");
+    parser.addOptions(
+        {endpoint, project, noAudio, device, sampleRate, blockFrames, pluginProbe, pluginWorker});
     parser.addPositionalArgument("command", "Command to execute.");
     parser.addPositionalArgument("args", "Command arguments.", "[args...]");
     parser.setOptionsAfterPositionalArgumentsMode(
@@ -1013,5 +1044,6 @@ int main(int argc, char** argv)
         return runControlServer(app, options);
     }
     if (!parser.value(endpoint).isEmpty()) return remoteCommand(parser.value(endpoint), positional);
-    return directCommand(parser.value(project), positional, parser.value(pluginProbe));
+    return directCommand(parser.value(project), positional, parser.value(pluginProbe),
+        parser.value(pluginWorker));
 }

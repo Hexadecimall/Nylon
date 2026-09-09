@@ -55,7 +55,7 @@ install(PROGRAMS "${NYLON_PLUGIN_PROBE}" "${NYLON_PLUGIN_WORKER}"
 add_test(NAME cli_project COMMAND "${Python3_EXECUTABLE}"
     "${NYLON_REPO_ROOT}/scripts/test_cli_project.py" "$<TARGET_FILE:nylon_control>"
     "$<TARGET_FILE:nylon_clap_fixture>" "${NYLON_PLUGIN_PROBE}"
-    "$<TARGET_FILE:nylon_clap_crash_fixture>")
+    "$<TARGET_FILE:nylon_clap_crash_fixture>" "${NYLON_PLUGIN_WORKER}")
 add_test(NAME cli_server COMMAND "${Python3_EXECUTABLE}"
     "${NYLON_REPO_ROOT}/scripts/test_cli_server.py" "$<TARGET_FILE:nylon_control>")
 add_test(NAME plugin_worker COMMAND "${Python3_EXECUTABLE}"
