@@ -295,6 +295,14 @@ int nylon_clip_note_remove(void* project, unsigned long long track, unsigned lon
 int nylon_clip_note_move(void* project, unsigned long long track, unsigned long long scene,
     unsigned long long index, unsigned char pitch, unsigned char velocity, double start_beats,
     double length_beats);
+int nylon_clip_notes_quantize(void* project, unsigned long long track, unsigned long long scene,
+    double grid_beats, double strength);
+int nylon_clip_notes_transpose(
+    void* project, unsigned long long track, unsigned long long scene, int semitones);
+int nylon_clip_notes_set_velocity(void* project, unsigned long long track,
+    unsigned long long scene, unsigned char velocity);
+int nylon_clip_notes_humanize(void* project, unsigned long long track, unsigned long long scene,
+    double timing_beats, unsigned char velocity_range, unsigned long long seed);
 
 /* Arrangement placements reference a session clip and have an independent
  * start and length. */

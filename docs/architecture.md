@@ -125,9 +125,9 @@ bounded ownership exchange as other engine state; replaced media returns to
 the control thread for destruction.
 
 The engine publishes these together as a score: per instrument track, the
-notes, the patch, and whether the track sounds. Notes sit at absolute
-beats on the timeline, which is how an arrangement reads; session clip
-looping is not represented yet.
+notes, the patch, and whether the track sounds. Arrangement notes use absolute
+beats. A launched Session clip replaces arrangement notes on that track and
+repeats inside a bounded loop until stopped or replaced.
 
 ## Audio devices
 

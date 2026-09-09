@@ -46,6 +46,24 @@ bool flagValue(const QJsonValue& value, bool& result)
     return true;
 }
 
+bool signedValue(const QJsonValue& value, int& result)
+{
+    if (!value.isString()) return false;
+    bool parsed = false;
+    result = value.toString().toInt(&parsed);
+    return parsed;
+}
+
+bool byteValue(const QJsonValue& value, std::uint8_t& result)
+{
+    if (!value.isString()) return false;
+    bool parsed = false;
+    const uint parsedValue = value.toString().toUInt(&parsed);
+    if (!parsed || parsedValue > 255) return false;
+    result = static_cast<std::uint8_t>(parsedValue);
+    return true;
+}
+
 class ControlHost {
 public:
     bool open(const ServerOptions& options, QString& message)
@@ -74,6 +92,7 @@ public:
         const QJsonArray args = request.value("args").toArray();
         if (command.isEmpty()) return error("The command is missing");
         if (command == "status" && args.isEmpty()) return status();
+        if (command == "notes" && args.size() == 2) return notes(args);
         if (command == "quit" && args.isEmpty()) {
             quit = true;
             return {{"ok", true}};
@@ -134,6 +153,74 @@ public:
                 return error("Invalid tempo");
             return commitEdit();
         }
+        if (command == "create-midi-clip" && args.size() == 3) {
+            std::uint64_t track = 0;
+            std::uint64_t scene = 0;
+            double length = 0.0;
+            if (!indexValue(args[0], track) || !indexValue(args[1], scene)
+                || !numberValue(args[2], length)
+                || !m_project.createMidiClip(track, scene, length))
+                return error("Invalid MIDI clip");
+            return commitEdit();
+        }
+        if (command == "add-note" && args.size() == 6) {
+            std::uint64_t track = 0;
+            std::uint64_t scene = 0;
+            std::uint8_t pitch = 0;
+            std::uint8_t velocity = 0;
+            double start = 0.0;
+            double length = 0.0;
+            if (!indexValue(args[0], track) || !indexValue(args[1], scene)
+                || !byteValue(args[2], pitch) || !byteValue(args[3], velocity)
+                || !numberValue(args[4], start) || !numberValue(args[5], length)
+                || !m_project.addClipNote(track, scene, {pitch, velocity, start, length}))
+                return error("Invalid MIDI note");
+            return commitEdit();
+        }
+        if (command == "quantize-notes" && args.size() == 4) {
+            std::uint64_t track = 0;
+            std::uint64_t scene = 0;
+            double grid = 0.0;
+            double strength = 0.0;
+            if (!indexValue(args[0], track) || !indexValue(args[1], scene)
+                || !numberValue(args[2], grid) || !numberValue(args[3], strength)
+                || !m_project.quantizeClipNotes(track, scene, grid, strength))
+                return error("Invalid quantize settings");
+            return commitEdit();
+        }
+        if (command == "transpose-notes" && args.size() == 3) {
+            std::uint64_t track = 0;
+            std::uint64_t scene = 0;
+            int semitones = 0;
+            if (!indexValue(args[0], track) || !indexValue(args[1], scene)
+                || !signedValue(args[2], semitones)
+                || !m_project.transposeClipNotes(track, scene, semitones))
+                return error("Invalid transpose settings");
+            return commitEdit();
+        }
+        if (command == "set-note-velocity" && args.size() == 3) {
+            std::uint64_t track = 0;
+            std::uint64_t scene = 0;
+            std::uint8_t velocity = 0;
+            if (!indexValue(args[0], track) || !indexValue(args[1], scene)
+                || !byteValue(args[2], velocity)
+                || !m_project.setClipNoteVelocity(track, scene, velocity))
+                return error("Invalid velocity");
+            return commitEdit();
+        }
+        if (command == "humanize-notes" && args.size() == 5) {
+            std::uint64_t track = 0;
+            std::uint64_t scene = 0;
+            std::uint8_t velocityRange = 0;
+            std::uint64_t seed = 0;
+            double timing = 0.0;
+            if (!indexValue(args[0], track) || !indexValue(args[1], scene)
+                || !numberValue(args[2], timing) || !byteValue(args[3], velocityRange)
+                || !indexValue(args[4], seed)
+                || !m_project.humanizeClipNotes(track, scene, timing, velocityRange, seed))
+                return error("Invalid humanize settings");
+            return commitEdit();
+        }
         if (command == "set-track-volume" && args.size() == 2) {
             std::uint64_t track = 0;
             double value = 0.0;
@@ -186,6 +273,25 @@ private:
             {"tracks", static_cast<double>(m_project.trackCount())},
             {"scenes", static_cast<double>(m_project.sceneCount())},
             {"activeSessions", active}};
+    }
+
+    QJsonObject notes(const QJsonArray& args)
+    {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        if (!indexValue(args[0], track) || !indexValue(args[1], scene))
+            return error("Invalid track or scene index");
+        QJsonArray notes;
+        const auto count = m_project.clipNoteCount(track, scene);
+        for (std::uint64_t index = 0; index < count; ++index) {
+            nylon::MidiNote note{};
+            if (!m_project.clipNote(track, scene, index, note))
+                return error("Could not read the MIDI note");
+            notes.append(QJsonObject{{"index", static_cast<double>(index)},
+                {"pitch", note.pitch}, {"velocity", note.velocity},
+                {"startBeats", note.startBeats}, {"lengthBeats", note.lengthBeats}});
+        }
+        return {{"ok", true}, {"notes", notes}};
     }
 
     QJsonObject audioResult(bool accepted, const QString& operation)

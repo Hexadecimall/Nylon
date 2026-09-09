@@ -81,6 +81,13 @@ nylon-control --project Session.nylon new
 nylon-control --project Session.nylon info
 nylon-control --project Session.nylon add-track midi Lead
 nylon-control --project Session.nylon tracks
+nylon-control --project Session.nylon create-midi-clip 0 0 4
+nylon-control --project Session.nylon add-note 0 0 60 100 0.25 0.5
+nylon-control --project Session.nylon quantize-notes 0 0 0.25 1
+nylon-control --project Session.nylon transpose-notes 0 0 12
+nylon-control --project Session.nylon set-note-velocity 0 0 96
+nylon-control --project Session.nylon humanize-notes 0 0 0.02 4 42
+nylon-control --project Session.nylon notes 0 0
 nylon-control --project Session.nylon import-wave 1 0 take.wav 120
 nylon-control --project Session.nylon clips 1
 nylon-control --project Session.nylon place-clip 1 0 0 16

@@ -465,6 +465,155 @@ fn scenes_slots_notes_and_placements_share_one_undoable_model() {
 }
 
 #[test]
+fn midi_transforms_are_atomic_deterministic_and_undoable() {
+    fn populated_project() -> (Project, nylon::project::ClipId) {
+        let mut project = Project::new();
+        project
+            .apply(&[Command::CreateTrack {
+                name: "Notes".into(),
+                kind: TrackKind::Midi,
+            }])
+            .unwrap();
+        let snapshot = project.snapshot();
+        let track = snapshot.tracks()[0].id();
+        let scene = snapshot.scenes()[0].id();
+        project
+            .apply(&[Command::CreateMidiClip {
+                track,
+                scene,
+                name: "Phrase".into(),
+                length_beats: 4.0,
+            }])
+            .unwrap();
+        let clip = project.snapshot().clip_at(0, 0).unwrap().id();
+        project
+            .apply(&[
+                Command::AddNote {
+                    id: clip,
+                    note: MidiNote {
+                        pitch: 60,
+                        velocity: 80,
+                        start_beats: 0.22,
+                        length_beats: 0.5,
+                    },
+                },
+                Command::AddNote {
+                    id: clip,
+                    note: MidiNote {
+                        pitch: 124,
+                        velocity: 100,
+                        start_beats: 0.81,
+                        length_beats: 0.5,
+                    },
+                },
+            ])
+            .unwrap();
+        (project, clip)
+    }
+
+    let (mut project, clip) = populated_project();
+    let original = project.snapshot();
+    project
+        .apply(&[
+            Command::QuantizeNotes {
+                id: clip,
+                grid_beats: 0.25,
+                strength: 1.0,
+            },
+            Command::TransposeNotes {
+                id: clip,
+                semitones: 3,
+            },
+            Command::SetNoteVelocity {
+                id: clip,
+                velocity: 96,
+            },
+            Command::HumanizeNotes {
+                id: clip,
+                timing_beats: 0.02,
+                velocity_range: 4,
+                seed: 42,
+            },
+        ])
+        .unwrap();
+    let transformed = project.snapshot();
+    assert_ne!(
+        transformed.clip_at(0, 0).unwrap().notes(),
+        original.clip_at(0, 0).unwrap().notes()
+    );
+    assert!(
+        transformed
+            .clip_at(0, 0)
+            .unwrap()
+            .notes()
+            .iter()
+            .all(|note| { (1..=127).contains(&note.velocity) && note.start_beats >= 0.0 })
+    );
+    assert!(project.undo());
+    assert_eq!(*project.snapshot(), *original);
+
+    let (mut repeated, repeated_clip) = populated_project();
+    repeated
+        .apply(&[
+            Command::QuantizeNotes {
+                id: repeated_clip,
+                grid_beats: 0.25,
+                strength: 1.0,
+            },
+            Command::TransposeNotes {
+                id: repeated_clip,
+                semitones: 3,
+            },
+            Command::SetNoteVelocity {
+                id: repeated_clip,
+                velocity: 96,
+            },
+            Command::HumanizeNotes {
+                id: repeated_clip,
+                timing_beats: 0.02,
+                velocity_range: 4,
+                seed: 42,
+            },
+        ])
+        .unwrap();
+    assert_eq!(
+        transformed.clip_at(0, 0).unwrap().notes(),
+        repeated.snapshot().clip_at(0, 0).unwrap().notes()
+    );
+
+    let before = repeated.snapshot();
+    for command in [
+        Command::QuantizeNotes {
+            id: repeated_clip,
+            grid_beats: 0.0,
+            strength: 1.0,
+        },
+        Command::QuantizeNotes {
+            id: repeated_clip,
+            grid_beats: f64::from_bits(1),
+            strength: 1.0,
+        },
+        Command::TransposeNotes {
+            id: repeated_clip,
+            semitones: 12,
+        },
+        Command::SetNoteVelocity {
+            id: repeated_clip,
+            velocity: 0,
+        },
+        Command::HumanizeNotes {
+            id: repeated_clip,
+            timing_beats: -0.1,
+            velocity_range: 4,
+            seed: 1,
+        },
+    ] {
+        assert_eq!(repeated.apply(&[command]), Err(ProjectError::InvalidNote));
+        assert_eq!(*repeated.snapshot(), *before);
+    }
+}
+
+#[test]
 fn invalid_clip_edits_leave_the_snapshot_unchanged() {
     let mut project = Project::new();
     project

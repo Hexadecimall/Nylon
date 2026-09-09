@@ -598,6 +598,25 @@ pub enum Command {
         index: usize,
         note: MidiNote,
     },
+    QuantizeNotes {
+        id: ClipId,
+        grid_beats: f64,
+        strength: f64,
+    },
+    TransposeNotes {
+        id: ClipId,
+        semitones: i16,
+    },
+    SetNoteVelocity {
+        id: ClipId,
+        velocity: u8,
+    },
+    HumanizeNotes {
+        id: ClipId,
+        timing_beats: f64,
+        velocity_range: u8,
+        seed: u64,
+    },
     PlaceClip {
         track: TrackId,
         clip: ClipId,
@@ -1113,6 +1132,75 @@ impl Project {
                             .then(a.pitch.cmp(&b.pitch))
                     });
                 }
+                Command::QuantizeNotes {
+                    id,
+                    grid_beats,
+                    strength,
+                } => {
+                    if !grid_beats.is_finite()
+                        || *grid_beats <= 0.0
+                        || !strength.is_finite()
+                        || !(0.0..=1.0).contains(strength)
+                    {
+                        return Err(ProjectError::InvalidNote);
+                    }
+                    let clip = midi_clip_mut(&mut snapshot, *id)?;
+                    for note in &mut clip.notes {
+                        let target = (note.start_beats / grid_beats).round() * grid_beats;
+                        let start = note.start_beats + (target - note.start_beats) * strength;
+                        if !start.is_finite() {
+                            return Err(ProjectError::InvalidNote);
+                        }
+                        note.start_beats = start.max(0.0);
+                    }
+                    sort_midi_notes(&mut clip.notes);
+                }
+                Command::TransposeNotes { id, semitones } => {
+                    let clip = midi_clip_mut(&mut snapshot, *id)?;
+                    if clip
+                        .notes
+                        .iter()
+                        .any(|note| !(0..=127).contains(&(i16::from(note.pitch) + semitones)))
+                    {
+                        return Err(ProjectError::InvalidNote);
+                    }
+                    for note in &mut clip.notes {
+                        note.pitch = (i16::from(note.pitch) + semitones) as u8;
+                    }
+                    sort_midi_notes(&mut clip.notes);
+                }
+                Command::SetNoteVelocity { id, velocity } => {
+                    if !(1..=127).contains(velocity) {
+                        return Err(ProjectError::InvalidNote);
+                    }
+                    for note in &mut midi_clip_mut(&mut snapshot, *id)?.notes {
+                        note.velocity = *velocity;
+                    }
+                }
+                Command::HumanizeNotes {
+                    id,
+                    timing_beats,
+                    velocity_range,
+                    seed,
+                } => {
+                    if !timing_beats.is_finite() || *timing_beats < 0.0 || *velocity_range > 127 {
+                        return Err(ProjectError::InvalidNote);
+                    }
+                    let clip = midi_clip_mut(&mut snapshot, *id)?;
+                    let mut state = *seed;
+                    for note in &mut clip.notes {
+                        let timing = unit_noise(&mut state) * 2.0 - 1.0;
+                        let start = note.start_beats + timing * timing_beats;
+                        if !start.is_finite() {
+                            return Err(ProjectError::InvalidNote);
+                        }
+                        note.start_beats = start.max(0.0);
+                        let velocity = unit_noise(&mut state) * 2.0 - 1.0;
+                        let offset = (velocity * f64::from(*velocity_range)).round() as i16;
+                        note.velocity = (i16::from(note.velocity) + offset).clamp(1, 127) as u8;
+                    }
+                    sort_midi_notes(&mut clip.notes);
+                }
                 Command::PlaceClip {
                     track,
                     clip,
@@ -1396,6 +1484,23 @@ fn validate_note(note: MidiNote) -> Result<(), ProjectError> {
     }
     validate_nonnegative_beats(note.start_beats).map_err(|_| ProjectError::InvalidNote)?;
     validate_positive_beats(note.length_beats).map_err(|_| ProjectError::InvalidNote)
+}
+
+fn sort_midi_notes(notes: &mut [MidiNote]) {
+    notes.sort_by(|a, b| {
+        a.start_beats
+            .total_cmp(&b.start_beats)
+            .then(a.pitch.cmp(&b.pitch))
+    });
+}
+
+fn unit_noise(state: &mut u64) -> f64 {
+    *state = state.wrapping_add(0x9e3779b97f4a7c15);
+    let mut value = *state;
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+    value ^= value >> 31;
+    (value >> 11) as f64 * (1.0 / ((1_u64 << 53) as f64))
 }
 
 fn remove_unreferenced_clips(snapshot: &mut Snapshot) {

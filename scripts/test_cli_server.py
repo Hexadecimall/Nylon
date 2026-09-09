@@ -58,6 +58,15 @@ def main():
             assert call("status")["tempo"] == 141
             call("set-track-volume", "0", "-9")
             call("set-track-mute", "0", "on")
+            call("create-midi-clip", "0", "0", "4")
+            call("add-note", "0", "0", "60", "80", "0.22", "0.5")
+            call("quantize-notes", "0", "0", "0.25", "1")
+            call("transpose-notes", "0", "0", "3")
+            call("set-note-velocity", "0", "0", "96")
+            call("humanize-notes", "0", "0", "0.02", "4", "42")
+            notes = call("notes", "0", "0")["notes"]
+            assert len(notes) == 1 and notes[0]["pitch"] == 63, notes
+            call("transpose-notes", "0", "0", "100", succeeds=False)
             call("undo")
             call("redo")
             call("play", succeeds=False)

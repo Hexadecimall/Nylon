@@ -450,6 +450,27 @@ bool Project::moveClipNote(
                note.startBeats, note.lengthBeats)
         != 0;
 }
+bool Project::quantizeClipNotes(
+    std::uint64_t track, std::uint64_t scene, double gridBeats, double strength)
+{
+    return nylon_clip_notes_quantize(m_handle, track, scene, gridBeats, strength) != 0;
+}
+bool Project::transposeClipNotes(std::uint64_t track, std::uint64_t scene, int semitones)
+{
+    return nylon_clip_notes_transpose(m_handle, track, scene, semitones) != 0;
+}
+bool Project::setClipNoteVelocity(
+    std::uint64_t track, std::uint64_t scene, std::uint8_t velocity)
+{
+    return nylon_clip_notes_set_velocity(m_handle, track, scene, velocity) != 0;
+}
+bool Project::humanizeClipNotes(std::uint64_t track, std::uint64_t scene, double timingBeats,
+    std::uint8_t velocityRange, std::uint64_t seed)
+{
+    return nylon_clip_notes_humanize(
+               m_handle, track, scene, timingBeats, velocityRange, seed)
+        != 0;
+}
 
 std::uint64_t Project::arrangementClipCount(std::uint64_t track) const
 {

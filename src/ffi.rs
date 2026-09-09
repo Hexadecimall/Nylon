@@ -2180,6 +2180,89 @@ pub unsafe extern "C" fn nylon_clip_note_move(
 }
 
 /// # Safety
+/// The handle must be live and obey the access contract in the C header.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_notes_quantize(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    grid_beats: f64,
+    strength: f64,
+) -> i32 {
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::QuantizeNotes {
+                id,
+                grid_beats,
+                strength,
+            })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_notes_transpose(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    semitones: i32,
+) -> i32 {
+    let Ok(semitones) = i16::try_from(semitones) else {
+        return 0;
+    };
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::TransposeNotes { id, semitones })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_notes_set_velocity(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    velocity: u8,
+) -> i32 {
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::SetNoteVelocity { id, velocity })
+        })
+    }
+}
+
+/// # Safety
+/// The handle must be live and obey the access contract in the C header.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clip_notes_humanize(
+    handle: *mut Project,
+    track: u64,
+    scene: u64,
+    timing_beats: f64,
+    velocity_range: u8,
+    seed: u64,
+) -> i32 {
+    // SAFETY: The handle is exclusive for this call.
+    unsafe {
+        edit_slot_clip(handle, track, scene, |id| {
+            Some(Command::HumanizeNotes {
+                id,
+                timing_beats,
+                velocity_range,
+                seed,
+            })
+        })
+    }
+}
+
+/// # Safety
 /// The handle must be live and obey the access contract in the C header. Pointer
 /// arguments must reference readable or writable storage for the documented span.
 #[unsafe(no_mangle)]

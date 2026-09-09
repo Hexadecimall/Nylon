@@ -42,6 +42,17 @@ def main():
         tracks = call("tracks")["tracks"]
         assert tracks[0]["name"] == "Lead" and tracks[0]["kind"] == "midi", tracks
         assert tracks[1]["name"] == "Take" and tracks[1]["kind"] == "audio", tracks
+        call("create-midi-clip", "0", "0", "4")
+        call("add-note", "0", "0", "60", "80", "0.22", "0.5")
+        call("add-note", "0", "0", "64", "100", "0.81", "0.5")
+        call("quantize-notes", "0", "0", "0.25", "1")
+        call("transpose-notes", "0", "0", "3")
+        call("set-note-velocity", "0", "0", "96")
+        call("humanize-notes", "0", "0", "0.02", "4", "42")
+        notes = call("notes", "0", "0")["notes"]
+        assert [note["pitch"] for note in notes] == [63, 67], notes
+        assert all(1 <= note["velocity"] <= 127 for note in notes), notes
+        assert call("transpose-notes", "0", "0", "100", succeeds=False)["ok"] is False
         call("set-automation", "0", "volume", "0", "-12", "linear", "4", "0", "smooth")
         automation = call("automation", "0", "volume")["points"]
         assert automation == [

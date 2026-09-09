@@ -51,6 +51,22 @@ bool indexNumber(const QString& text, std::uint64_t& value)
     return parsed;
 }
 
+bool signedNumber(const QString& text, int& value)
+{
+    bool parsed = false;
+    value = text.toInt(&parsed);
+    return parsed;
+}
+
+bool byteNumber(const QString& text, std::uint8_t& value)
+{
+    bool parsed = false;
+    const uint parsedValue = text.toUInt(&parsed);
+    if (!parsed || parsedValue > 255) return false;
+    value = static_cast<std::uint8_t>(parsedValue);
+    return true;
+}
+
 bool flag(const QString& text, bool& value)
 {
     if (text == "on" || text == "true" || text == "1") value = true;
@@ -451,6 +467,23 @@ int directCommand(const QString& bundle, const QStringList& positional)
         }
         return writeJson({{"ok", true}, {"clips", clips}});
     }
+    if (command == "notes" && positional.size() == 3) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene))
+            return fail("Invalid track or scene index");
+        QJsonArray notes;
+        const auto count = project.clipNoteCount(track, scene);
+        for (std::uint64_t index = 0; index < count; ++index) {
+            nylon::MidiNote note{};
+            if (!project.clipNote(track, scene, index, note))
+                return fail("Could not read the MIDI note");
+            notes.append(QJsonObject{{"index", static_cast<double>(index)},
+                {"pitch", note.pitch}, {"velocity", note.velocity},
+                {"startBeats", note.startBeats}, {"lengthBeats", note.lengthBeats}});
+        }
+        return writeJson({{"ok", true}, {"notes", notes}});
+    }
     if (command == "record" && positional.size() >= 4 && positional.size() <= 7) {
         std::uint64_t track = 0;
         std::uint64_t scene = 0;
@@ -508,6 +541,63 @@ int directCommand(const QString& bundle, const QStringList& positional)
             return fail("Invalid track, scene, or source tempo");
         changed = project.importWave(
             track, scene, positional[3].toStdString(), sourceTempo);
+    } else if (command == "create-midi-clip" && positional.size() == 4) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        double length = 0.0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !number(positional[3], length))
+            return fail("Invalid MIDI clip");
+        changed = project.createMidiClip(track, scene, length);
+    } else if (command == "add-note" && positional.size() == 7) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        std::uint8_t pitch = 0;
+        std::uint8_t velocity = 0;
+        double start = 0.0;
+        double length = 0.0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !byteNumber(positional[3], pitch) || !byteNumber(positional[4], velocity)
+            || !number(positional[5], start) || !number(positional[6], length))
+            return fail("Invalid MIDI note");
+        changed = project.addClipNote(track, scene, {pitch, velocity, start, length});
+    } else if (command == "quantize-notes" && positional.size() == 5) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        double grid = 0.0;
+        double strength = 0.0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !number(positional[3], grid) || !number(positional[4], strength))
+            return fail("Invalid quantize settings");
+        changed = project.quantizeClipNotes(track, scene, grid, strength);
+    } else if (command == "transpose-notes" && positional.size() == 4) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        int semitones = 0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !signedNumber(positional[3], semitones))
+            return fail("Invalid transpose settings");
+        changed = project.transposeClipNotes(track, scene, semitones);
+    } else if (command == "set-note-velocity" && positional.size() == 4) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        std::uint8_t velocity = 0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !byteNumber(positional[3], velocity))
+            return fail("Invalid velocity");
+        changed = project.setClipNoteVelocity(track, scene, velocity);
+    } else if (command == "humanize-notes" && positional.size() == 6) {
+        std::uint64_t track = 0;
+        std::uint64_t scene = 0;
+        std::uint8_t velocityRange = 0;
+        std::uint64_t seed = 0;
+        double timing = 0.0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], scene)
+            || !number(positional[3], timing)
+            || !byteNumber(positional[4], velocityRange)
+            || !indexNumber(positional[5], seed))
+            return fail("Invalid humanize settings");
+        changed = project.humanizeClipNotes(track, scene, timing, velocityRange, seed);
     } else if (command == "place-clip" && positional.size() == 5) {
         std::uint64_t track = 0;
         std::uint64_t scene = 0;

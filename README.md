@@ -48,13 +48,17 @@ nylon-control --project Session.nylon --endpoint nylon-live serve
 nylon-control --endpoint nylon-live status
 nylon-control --endpoint nylon-live play
 nylon-control --endpoint nylon-live locate 16
+nylon-control --endpoint nylon-live create-midi-clip 0 0 4
+nylon-control --endpoint nylon-live add-note 0 0 60 100 0 1
+nylon-control --endpoint nylon-live quantize-notes 0 0 0.25 1
 nylon-control --endpoint nylon-live launch-clip 0 0 1
 nylon-control --endpoint nylon-live stop-clip 0
 nylon-control --endpoint nylon-live quit
 ```
 
-The endpoint also accepts `launch-scene`, `set-tempo`, track volume, pan,
-mute, solo and arm edits, `undo`, `redo`, `save`, `sync`, and `reload`.
+The endpoint also accepts `launch-scene`, `set-tempo`, MIDI note listing and
+transforms, track volume, pan, mute, solo and arm edits, `undo`, `redo`, `save`,
+`sync`, and `reload`.
 `--no-audio` starts the endpoint for project editing without a device.
 
 `cargo-deny` is a separate development prerequisite. CI installs version 0.20.2.

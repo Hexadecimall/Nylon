@@ -258,6 +258,12 @@ public:
     bool addClipNote(std::uint64_t track, std::uint64_t scene, MidiNote note);
     bool removeClipNote(std::uint64_t track, std::uint64_t scene, std::uint64_t index);
     bool moveClipNote(std::uint64_t track, std::uint64_t scene, std::uint64_t index, MidiNote note);
+    bool quantizeClipNotes(
+        std::uint64_t track, std::uint64_t scene, double gridBeats, double strength = 1.0);
+    bool transposeClipNotes(std::uint64_t track, std::uint64_t scene, int semitones);
+    bool setClipNoteVelocity(std::uint64_t track, std::uint64_t scene, std::uint8_t velocity);
+    bool humanizeClipNotes(std::uint64_t track, std::uint64_t scene, double timingBeats,
+        std::uint8_t velocityRange, std::uint64_t seed);
 
     std::uint64_t arrangementClipCount(std::uint64_t track) const;
     bool addArrangementClipFromSlot(
