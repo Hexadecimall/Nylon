@@ -162,6 +162,38 @@ bool ClapInstance::processStereo(const float* inputLeft, const float* inputRight
                m_handle, inputLeft, inputRight, outputLeft, outputRight, frames)
         != 0;
 }
+bool ClapInstance::processStereo(const float* inputLeft, const float* inputRight,
+    float* outputLeft, float* outputRight, std::uint32_t frames,
+    const ParameterEvent* events, std::uint32_t eventCount)
+{
+    static_assert(sizeof(ParameterEvent) == sizeof(NylonClapParameterEvent));
+    static_assert(alignof(ParameterEvent) == alignof(NylonClapParameterEvent));
+    return nylon_clap_instance_process_stereo_events(m_handle, inputLeft, inputRight,
+               outputLeft, outputRight, frames,
+               reinterpret_cast<const NylonClapParameterEvent*>(events), eventCount)
+        != 0;
+}
+std::vector<ClapInstance::ParameterInfo> ClapInstance::parameters() const
+{
+    std::vector<ParameterInfo> result;
+    const auto count = nylon_clap_instance_parameter_count(m_handle);
+    result.reserve(static_cast<std::size_t>(count));
+    for (unsigned long long index = 0; index < count; ++index) {
+        NylonClapParameterInfo info{};
+        if (nylon_clap_instance_parameter_info(m_handle, index, &info) == 0) break;
+        result.push_back({info.identifier, info.flags, info.name, info.module,
+            info.minimum, info.maximum, info.default_value});
+    }
+    return result;
+}
+bool ClapInstance::parameterValue(std::uint32_t identifier, double& value) const
+{
+    return nylon_clap_instance_parameter_value(m_handle, identifier, &value) != 0;
+}
+bool ClapInstance::latency(std::uint32_t& frames) const
+{
+    return nylon_clap_instance_latency(m_handle, &frames) != 0;
+}
 bool ClapInstance::reset() { return nylon_clap_instance_reset(m_handle) != 0; }
 std::uint32_t ClapInstance::takeRequests()
 {

@@ -74,6 +74,22 @@ typedef struct NylonTrackDevice {
     float parameters[7];
 } NylonTrackDevice;
 
+typedef struct NylonClapParameterEvent {
+    unsigned int sample_offset;
+    unsigned int identifier;
+    double value;
+} NylonClapParameterEvent;
+
+typedef struct NylonClapParameterInfo {
+    unsigned int identifier;
+    unsigned int flags;
+    char name[256];
+    char module[1024];
+    double minimum;
+    double maximum;
+    double default_value;
+} NylonClapParameterInfo;
+
 /* Track automation parameters: 0 volume, 1 pan, 2 mute, 3 solo.
  * Curves: 0 step, 1 linear, 2 smooth. */
 typedef struct NylonAutomationPoint {
@@ -402,6 +418,16 @@ int nylon_clap_instance_activate(void* instance, double sample_rate,
 int nylon_clap_instance_process_stereo(void* instance,
     const float* input_left, const float* input_right,
     float* output_left, float* output_right, unsigned int frames);
+int nylon_clap_instance_process_stereo_events(void* instance,
+    const float* input_left, const float* input_right,
+    float* output_left, float* output_right, unsigned int frames,
+    const NylonClapParameterEvent* events, unsigned int event_count);
+unsigned long long nylon_clap_instance_parameter_count(const void* instance);
+int nylon_clap_instance_parameter_info(const void* instance,
+    unsigned long long index, NylonClapParameterInfo* info);
+int nylon_clap_instance_parameter_value(const void* instance,
+    unsigned int identifier, double* value);
+int nylon_clap_instance_latency(const void* instance, unsigned int* frames);
 int nylon_clap_instance_reset(void* instance);
 unsigned int nylon_clap_instance_take_requests(const void* instance);
 

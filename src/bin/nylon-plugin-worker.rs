@@ -1,10 +1,10 @@
-use nylon::plugin::clap::Instance;
+use nylon::plugin::clap::{Instance, MAX_PARAMETER_EVENTS, ParameterEvent};
 use nylon::wave::{Format, SampleFormat, WaveWriter, read};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-const HEADER: [u8; 8] = *b"NYWORK1\0";
+const HEADER: [u8; 8] = *b"NYWORK2\0";
 const MAX_BLOCK_FRAMES: usize = 8_192;
 
 fn main() {
@@ -172,6 +172,38 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
     output
         .write_all(&HEADER)
         .map_err(|_| "Worker output failed")?;
+    output
+        .write_all(
+            &instance
+                .latency_frames()
+                .map_err(|_| "Plugin latency is unavailable")?
+                .to_le_bytes(),
+        )
+        .map_err(|_| "Worker output failed")?;
+    let parameters = instance
+        .parameters()
+        .map_err(|_| "Plugin parameters are unavailable")?;
+    output
+        .write_all(&(parameters.len() as u32).to_le_bytes())
+        .map_err(|_| "Worker output failed")?;
+    for parameter in parameters {
+        let name = parameter.name.as_bytes();
+        let module = parameter.module.as_bytes();
+        let name_length = u16::try_from(name.len()).map_err(|_| "Parameter name is too long")?;
+        let module_length =
+            u16::try_from(module.len()).map_err(|_| "Parameter module is too long")?;
+        output
+            .write_all(&parameter.identifier.to_le_bytes())
+            .and_then(|()| output.write_all(&parameter.flags.to_le_bytes()))
+            .and_then(|()| output.write_all(&parameter.minimum.to_le_bytes()))
+            .and_then(|()| output.write_all(&parameter.maximum.to_le_bytes()))
+            .and_then(|()| output.write_all(&parameter.default_value.to_le_bytes()))
+            .and_then(|()| output.write_all(&name_length.to_le_bytes()))
+            .and_then(|()| output.write_all(name))
+            .and_then(|()| output.write_all(&module_length.to_le_bytes()))
+            .and_then(|()| output.write_all(module))
+            .map_err(|_| "Worker output failed")?;
+    }
     output.flush().map_err(|_| "Worker output failed")?;
 
     let mut bytes = vec![0; max_frames * 8];
@@ -179,6 +211,7 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
     let mut input_right = vec![0.0; max_frames];
     let mut output_left = vec![0.0; max_frames];
     let mut output_right = vec![0.0; max_frames];
+    let mut parameter_events = Vec::with_capacity(MAX_PARAMETER_EVENTS);
     loop {
         let mut count = [0; 4];
         input
@@ -191,6 +224,26 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
         if frames > max_frames {
             return Err("Audio block exceeds the configured limit");
         }
+        let mut event_count = [0; 4];
+        input
+            .read_exact(&mut event_count)
+            .map_err(|_| "Parameter event count is missing")?;
+        let event_count = u32::from_le_bytes(event_count) as usize;
+        if event_count > MAX_PARAMETER_EVENTS {
+            return Err("Parameter event count exceeds the configured limit");
+        }
+        parameter_events.clear();
+        for _ in 0..event_count {
+            let mut event = [0; 16];
+            input
+                .read_exact(&mut event)
+                .map_err(|_| "Parameter event is truncated")?;
+            parameter_events.push(ParameterEvent {
+                sample_offset: u32::from_le_bytes(event[0..4].try_into().unwrap()),
+                identifier: u32::from_le_bytes(event[4..8].try_into().unwrap()),
+                value: f64::from_le_bytes(event[8..16].try_into().unwrap()),
+            });
+        }
         let byte_count = frames.checked_mul(8).ok_or("Audio block is too large")?;
         input
             .read_exact(&mut bytes[..byte_count])
@@ -202,10 +255,11 @@ fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
                 f32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap());
         }
         instance
-            .process_stereo(
+            .process_stereo_with_events(
                 Some((&input_left[..frames], &input_right[..frames])),
                 &mut output_left[..frames],
                 &mut output_right[..frames],
+                &parameter_events,
             )
             .map_err(|_| "Plugin processing failed")?;
         for frame in 0..frames {

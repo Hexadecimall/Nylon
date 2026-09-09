@@ -193,6 +193,26 @@ public:
     bool activate(double sampleRate, std::uint32_t minFrames, std::uint32_t maxFrames);
     bool processStereo(const float* inputLeft, const float* inputRight,
         float* outputLeft, float* outputRight, std::uint32_t frames);
+    struct ParameterEvent {
+        std::uint32_t sampleOffset;
+        std::uint32_t identifier;
+        double value;
+    };
+    struct ParameterInfo {
+        std::uint32_t identifier;
+        std::uint32_t flags;
+        std::string name;
+        std::string module;
+        double minimum;
+        double maximum;
+        double defaultValue;
+    };
+    bool processStereo(const float* inputLeft, const float* inputRight,
+        float* outputLeft, float* outputRight, std::uint32_t frames,
+        const ParameterEvent* events, std::uint32_t eventCount);
+    std::vector<ParameterInfo> parameters() const;
+    bool parameterValue(std::uint32_t identifier, double& value) const;
+    bool latency(std::uint32_t& frames) const;
     bool reset();
     std::uint32_t takeRequests();
 

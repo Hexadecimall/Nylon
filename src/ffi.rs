@@ -20,7 +20,7 @@ use crate::engine::voice::Patch;
 use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::plugin::Catalog as PluginCatalog;
-use crate::plugin::clap::Instance as ClapInstance;
+use crate::plugin::clap::{Instance as ClapInstance, ParameterEvent as ClapParameterEvent};
 use crate::project::{
     AutomationCurve, AutomationParameter, AutomationPoint, ClipId, Command, MidiNote, Project,
     SceneId, TrackId, TrackKind,
@@ -95,6 +95,33 @@ pub struct NylonTrackDevice {
     pub kind: i32,
     pub enabled: i32,
     pub parameters: [f32; 7],
+}
+
+/// Fixed-size CLAP parameter description for native clients.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct NylonClapParameterInfo {
+    pub identifier: u32,
+    pub flags: u32,
+    pub name: [c_char; 256],
+    pub module: [c_char; 1024],
+    pub minimum: f64,
+    pub maximum: f64,
+    pub default_value: f64,
+}
+
+impl Default for NylonClapParameterInfo {
+    fn default() -> Self {
+        Self {
+            identifier: 0,
+            flags: 0,
+            name: [0; 256],
+            module: [0; 1024],
+            minimum: 0.0,
+            maximum: 0.0,
+            default_value: 0.0,
+        }
+    }
 }
 
 /// One point in a native automation lane. Curve is 0 step, 1 linear, or 2 smooth.
@@ -1732,6 +1759,14 @@ fn copy_text(text: &str, buffer: *mut c_char, capacity: u64) -> u64 {
         }
     }
     text.len() as u64
+}
+
+fn write_fixed_text<const N: usize>(text: &str, output: &mut [c_char; N]) {
+    output.fill(0);
+    let count = text.len().min(N.saturating_sub(1));
+    for (destination, source) in output.iter_mut().zip(text.as_bytes()).take(count) {
+        *destination = *source as c_char;
+    }
 }
 
 unsafe fn input_text(value: *const c_char) -> Option<String> {
@@ -3658,6 +3693,145 @@ pub unsafe extern "C" fn nylon_clap_instance_process_stereo(
     };
     instance
         .process_stereo(input, output_left, output_right)
+        .is_ok()
+        .into()
+}
+
+/// # Safety
+/// The handle and audio buffers follow `nylon_clap_instance_process_stereo`.
+/// `events` must be null when event_count is zero or point to event_count records.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_process_stereo_events(
+    instance: *mut ClapInstance,
+    input_left: *const f32,
+    input_right: *const f32,
+    output_left: *mut f32,
+    output_right: *mut f32,
+    frames: u32,
+    events: *const ClapParameterEvent,
+    event_count: u32,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    let Some(instance) = (unsafe { instance.as_mut() }) else {
+        return 0;
+    };
+    if output_left.is_null()
+        || output_right.is_null()
+        || frames == 0
+        || (events.is_null() && event_count != 0)
+    {
+        return 0;
+    }
+    let frames = frames as usize;
+    let input = if input_left.is_null() && input_right.is_null() {
+        None
+    } else if input_left.is_null() || input_right.is_null() {
+        return 0;
+    } else {
+        // SAFETY: The caller supplies two readable regions containing frames samples.
+        Some(unsafe {
+            (
+                std::slice::from_raw_parts(input_left, frames),
+                std::slice::from_raw_parts(input_right, frames),
+            )
+        })
+    };
+    // SAFETY: Null is accepted only for an empty event slice.
+    let events = if event_count == 0 {
+        &[]
+    } else {
+        // SAFETY: The caller supplies event_count readable records.
+        unsafe { std::slice::from_raw_parts(events, event_count as usize) }
+    };
+    // SAFETY: The caller supplies two writable regions containing frames samples.
+    let (output_left, output_right) = unsafe {
+        (
+            std::slice::from_raw_parts_mut(output_left, frames),
+            std::slice::from_raw_parts_mut(output_right, frames),
+        )
+    };
+    instance
+        .process_stereo_with_events(input, output_left, output_right, events)
+        .is_ok()
+        .into()
+}
+
+/// # Safety
+/// The handle must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_parameter_count(instance: *const ClapInstance) -> u64 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { instance.as_ref() }
+        .and_then(|instance| instance.parameters().ok())
+        .map_or(0, |parameters| parameters.len() as u64)
+}
+
+/// # Safety
+/// The handle must remain live and info must point to one writable record.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_parameter_info(
+    instance: *const ClapInstance,
+    index: u64,
+    info: *mut NylonClapParameterInfo,
+) -> i32 {
+    // SAFETY: Handle and output validity are required by the interface.
+    let (Some(instance), Some(info)) = (unsafe { instance.as_ref() }, unsafe { info.as_mut() })
+    else {
+        return 0;
+    };
+    let Some(parameter) = instance.parameters().ok().and_then(|parameters| {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| parameters.get(index).cloned())
+    }) else {
+        return 0;
+    };
+    *info = NylonClapParameterInfo::default();
+    info.identifier = parameter.identifier;
+    info.flags = parameter.flags;
+    info.minimum = parameter.minimum;
+    info.maximum = parameter.maximum;
+    info.default_value = parameter.default_value;
+    write_fixed_text(&parameter.name, &mut info.name);
+    write_fixed_text(&parameter.module, &mut info.module);
+    1
+}
+
+/// # Safety
+/// The handle must remain live and value must point to writable storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_parameter_value(
+    instance: *const ClapInstance,
+    identifier: u32,
+    value: *mut f64,
+) -> i32 {
+    // SAFETY: Handle and output validity are required by the interface.
+    let (Some(instance), Some(value)) = (unsafe { instance.as_ref() }, unsafe { value.as_mut() })
+    else {
+        return 0;
+    };
+    instance
+        .parameter_value(identifier)
+        .map(|current| *value = current)
+        .is_ok()
+        .into()
+}
+
+/// # Safety
+/// The handle must remain live and frames must point to writable storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_latency(
+    instance: *const ClapInstance,
+    frames: *mut u32,
+) -> i32 {
+    // SAFETY: Handle and output validity are required by the interface.
+    let (Some(instance), Some(frames)) = (unsafe { instance.as_ref() }, unsafe { frames.as_mut() })
+    else {
+        return 0;
+    };
+    instance
+        .latency_frames()
+        .map(|latency| *frames = latency)
         .is_ok()
         .into()
 }

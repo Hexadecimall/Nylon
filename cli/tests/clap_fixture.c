@@ -32,6 +32,7 @@ typedef struct ClapFactory ClapFactory;
 typedef struct ClapPlugin ClapPlugin;
 typedef struct ClapProcess ClapProcess;
 typedef struct ClapAudioPortInfo ClapAudioPortInfo;
+typedef struct ClapInputEvents ClapInputEvents;
 struct ClapFactory {
     uint32_t (*count)(const ClapFactory* factory);
     const ClapDescriptor* (*descriptor)(const ClapFactory* factory, uint32_t index);
@@ -54,8 +55,33 @@ struct ClapProcess {
     ClapAudioBuffer* audio_outputs;
     uint32_t audio_inputs_count;
     uint32_t audio_outputs_count;
-    const void* in_events;
+    const ClapInputEvents* in_events;
     const void* out_events;
+};
+
+typedef struct ClapEventHeader {
+    uint32_t size;
+    uint32_t time;
+    uint16_t space_id;
+    uint16_t type;
+    uint32_t flags;
+} ClapEventHeader;
+
+typedef struct ClapEventParamValue {
+    ClapEventHeader header;
+    uint32_t param_id;
+    void* cookie;
+    int32_t note_id;
+    int16_t port_index;
+    int16_t channel;
+    int16_t key;
+    double value;
+} ClapEventParamValue;
+
+struct ClapInputEvents {
+    void* context;
+    uint32_t (*size)(const ClapInputEvents* list);
+    const ClapEventHeader* (*get)(const ClapInputEvents* list, uint32_t index);
 };
 
 struct ClapPlugin {
@@ -89,6 +115,30 @@ typedef struct ClapAudioPorts {
         ClapAudioPortInfo* info);
 } ClapAudioPorts;
 
+typedef struct ClapParamInfo {
+    uint32_t id;
+    uint32_t flags;
+    void* cookie;
+    char name[256];
+    char module[1024];
+    double min_value;
+    double max_value;
+    double default_value;
+} ClapParamInfo;
+
+typedef struct ClapParams {
+    uint32_t (*count)(const ClapPlugin* plugin);
+    bool (*get_info)(const ClapPlugin* plugin, uint32_t index, ClapParamInfo* info);
+    bool (*get_value)(const ClapPlugin* plugin, uint32_t id, double* value);
+    bool (*value_to_text)(const ClapPlugin*, uint32_t, double, char*, uint32_t);
+    bool (*text_to_value)(const ClapPlugin*, uint32_t, const char*, double*);
+    void (*flush)(const ClapPlugin*, const ClapInputEvents*, const void*);
+} ClapParams;
+
+typedef struct ClapLatency {
+    uint32_t (*get)(const ClapPlugin* plugin);
+} ClapLatency;
+
 typedef struct ClapEntry {
     ClapVersion version_abi;
     bool (*init)(const char* path);
@@ -115,11 +165,13 @@ static const ClapDescriptor* fixture_get_descriptor(const ClapFactory* factory, 
 
 static bool fixture_plugin_active;
 static bool fixture_plugin_processing;
+static double fixture_gain;
 
 static bool fixture_plugin_init(const ClapPlugin* plugin)
 {
     fixture_plugin_active = false;
     fixture_plugin_processing = false;
+    fixture_gain = 0.5;
     return plugin != 0;
 }
 
@@ -157,7 +209,11 @@ static void fixture_plugin_stop(const ClapPlugin* plugin)
     fixture_plugin_processing = false;
 }
 
-static void fixture_plugin_reset(const ClapPlugin* plugin) { (void)plugin; }
+static void fixture_plugin_reset(const ClapPlugin* plugin)
+{
+    (void)plugin;
+    fixture_gain = 0.5;
+}
 
 static uint32_t fixture_port_count(const ClapPlugin* plugin, bool input)
 {
@@ -183,10 +239,53 @@ static bool fixture_port_get(const ClapPlugin* plugin, uint32_t index, bool inpu
 
 static const ClapAudioPorts fixture_audio_ports = {fixture_port_count, fixture_port_get};
 
+static uint32_t fixture_parameter_count(const ClapPlugin* plugin)
+{
+    (void)plugin;
+    return 1;
+}
+
+static bool fixture_parameter_info(const ClapPlugin* plugin, uint32_t index, ClapParamInfo* info)
+{
+    (void)plugin;
+    if (index != 0 || info == 0) return false;
+    memset(info, 0, sizeof(*info));
+    info->id = 7;
+    info->flags = 1U << 5;
+    memcpy(info->name, "Gain", 5);
+    memcpy(info->module, "Output", 7);
+    info->min_value = 0.0;
+    info->max_value = 1.0;
+    info->default_value = 0.5;
+    return true;
+}
+
+static bool fixture_parameter_value(const ClapPlugin* plugin, uint32_t id, double* value)
+{
+    (void)plugin;
+    if (id != 7 || value == 0) return false;
+    *value = fixture_gain;
+    return true;
+}
+
+static uint32_t fixture_latency(const ClapPlugin* plugin)
+{
+    (void)plugin;
+    return 32;
+}
+
+static const ClapParams fixture_parameters = {fixture_parameter_count,
+    fixture_parameter_info, fixture_parameter_value, 0, 0, 0};
+static const ClapLatency fixture_latency_extension = {fixture_latency};
+
 static const void* fixture_plugin_extension(const ClapPlugin* plugin, const char* id)
 {
     (void)plugin;
-    return id != 0 && strcmp(id, "clap.audio-ports") == 0 ? &fixture_audio_ports : 0;
+    if (id == 0) return 0;
+    if (strcmp(id, "clap.audio-ports") == 0) return &fixture_audio_ports;
+    if (strcmp(id, "clap.params") == 0) return &fixture_parameters;
+    if (strcmp(id, "clap.latency") == 0) return &fixture_latency_extension;
+    return 0;
 }
 
 static int32_t fixture_plugin_process(const ClapPlugin* plugin, const ClapProcess* process)
@@ -198,11 +297,27 @@ static int32_t fixture_plugin_process(const ClapPlugin* plugin, const ClapProces
         || process->audio_outputs[0].channel_count != 2
         || process->audio_inputs[0].data32 == 0 || process->audio_outputs[0].data32 == 0)
         return 0;
+    uint32_t event_index = 0;
+    const uint32_t event_count = process->in_events != 0 && process->in_events->size != 0
+        ? process->in_events->size(process->in_events)
+        : 0;
     for (uint32_t frame = 0; frame < process->frames_count; ++frame) {
+        while (event_index < event_count) {
+            const ClapEventHeader* header = process->in_events->get(process->in_events,
+                event_index);
+            if (header == 0 || header->time > frame) break;
+            if (header->time == frame && header->space_id == 0 && header->type == 5
+                && header->size >= sizeof(ClapEventParamValue)) {
+                const ClapEventParamValue* event = (const ClapEventParamValue*)header;
+                if (event->param_id == 7 && event->value >= 0.0 && event->value <= 1.0)
+                    fixture_gain = event->value;
+            }
+            ++event_index;
+        }
         process->audio_outputs[0].data32[0][frame]
-            = process->audio_inputs[0].data32[0][frame] * 0.5f;
+            = process->audio_inputs[0].data32[0][frame] * (float)fixture_gain;
         process->audio_outputs[0].data32[1][frame]
-            = process->audio_inputs[0].data32[1][frame] * 0.5f;
+            = process->audio_inputs[0].data32[1][frame] * (float)fixture_gain;
     }
     return 1;
 }

@@ -41,6 +41,7 @@ Groups of functions:
 | `nylon_transport_*` | play, stop, locate, position |
 | `nylon_track_levels`, `nylon_master_levels` | live linear peak and RMS readings |
 | `nylon_render_*` | deterministic offline file rendering |
+| `nylon_clap_*` | CLAP lifecycle, parameter metadata, latency, and stereo processing |
 
 Track kinds: 0 audio, 1 MIDI, 2 return, 3 master, 4 group, 5 cue.
 
@@ -72,6 +73,11 @@ configuration, dropout, and meter access. Consumers include the directory with
 carries the core library and the C header directory.
 `nylon::Recording` is a move-only input handle. It reserves media in a saved
 project, opens stopped, and creates one undoable audio clip when finished.
+`nylon::ClapInstance` exposes plugin activation, parameter metadata and current
+values, reported latency, and stereo processing. A caller can pass a bounded,
+sample-ordered array of parameter events to processing without allocating in
+the binding. Production playback places each instance in a separate worker
+process so a plugin fault does not terminate the controlling process.
 
 `bindings/cmake/NylonCore.cmake` defines the imported `nylon_core` target;
 `NYLON_CORE_LIBRARY` selects a static or shared core.

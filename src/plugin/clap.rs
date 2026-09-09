@@ -3,10 +3,15 @@
 use super::probe::clap_binary;
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
-use clap_sys::events::{clap_event_header, clap_input_events, clap_output_events};
+use clap_sys::events::{
+    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, clap_event_header, clap_event_param_value,
+    clap_input_events, clap_output_events,
+};
 use clap_sys::ext::audio_ports::{
     CLAP_EXT_AUDIO_PORTS, clap_audio_port_info, clap_plugin_audio_ports,
 };
+use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_plugin_latency};
+use clap_sys::ext::params::{CLAP_EXT_PARAMS, clap_param_info, clap_plugin_params};
 use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory};
 use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
@@ -22,12 +27,50 @@ use std::sync::atomic::{AtomicU8, Ordering};
 const RESTART_REQUESTED: u8 = 1;
 const PROCESS_REQUESTED: u8 = 2;
 const CALLBACK_REQUESTED: u8 = 4;
+pub const MAX_PARAMETER_EVENTS: usize = 1_024;
+const MAX_PARAMETERS: u32 = 16_384;
+
+const EMPTY_PARAMETER_EVENT: clap_event_param_value = clap_event_param_value {
+    header: clap_event_header {
+        size: std::mem::size_of::<clap_event_param_value>() as u32,
+        time: 0,
+        space_id: CLAP_CORE_EVENT_SPACE_ID,
+        type_: CLAP_EVENT_PARAM_VALUE,
+        flags: 0,
+    },
+    param_id: 0,
+    cookie: ptr::null_mut(),
+    note_id: -1,
+    port_index: -1,
+    channel: -1,
+    key: -1,
+    value: 0.0,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HostRequests {
     pub restart: bool,
     pub process: bool,
     pub callback: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParameterEvent {
+    pub sample_offset: u32,
+    pub identifier: u32,
+    pub value: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParameterInfo {
+    pub identifier: u32,
+    pub flags: u32,
+    pub name: String,
+    pub module: String,
+    pub minimum: f64,
+    pub maximum: f64,
+    pub default_value: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +88,8 @@ pub enum Error {
     PluginInitialization,
     InvalidConfiguration,
     UnsupportedPorts,
+    UnsupportedParameters,
+    InvalidParameters,
     Activation,
     StartProcessing,
     NotProcessing,
@@ -70,6 +115,10 @@ impl fmt::Display for Error {
                 output.write_str("CLAP processing configuration is invalid")
             }
             Self::UnsupportedPorts => output.write_str("CLAP plugin needs unsupported audio ports"),
+            Self::UnsupportedParameters => {
+                output.write_str("CLAP plugin does not expose parameters")
+            }
+            Self::InvalidParameters => output.write_str("CLAP plugin parameters are invalid"),
             Self::Activation => output.write_str("CLAP plugin activation failed"),
             Self::StartProcessing => output.write_str("CLAP plugin did not start processing"),
             Self::NotProcessing => output.write_str("CLAP plugin is not processing"),
@@ -102,6 +151,7 @@ pub struct Instance {
     max_frames: u32,
     input_ports: u32,
     steady_time: i64,
+    parameter_events: Box<[clap_event_param_value; MAX_PARAMETER_EVENTS]>,
 }
 
 impl Instance {
@@ -190,6 +240,7 @@ impl Instance {
                 max_frames: 0,
                 input_ports: 0,
                 steady_time: 0,
+                parameter_events: Box::new([EMPTY_PARAMETER_EVENT; MAX_PARAMETER_EVENTS]),
             })
         }
     }
@@ -244,6 +295,16 @@ impl Instance {
         output_left: &mut [f32],
         output_right: &mut [f32],
     ) -> Result<clap_process_status, Error> {
+        self.process_stereo_with_events(input, output_left, output_right, &[])
+    }
+
+    pub fn process_stereo_with_events(
+        &mut self,
+        input: Option<(&[f32], &[f32])>,
+        output_left: &mut [f32],
+        output_right: &mut [f32],
+        parameter_events: &[ParameterEvent],
+    ) -> Result<clap_process_status, Error> {
         if !self.processing {
             return Err(Error::NotProcessing);
         }
@@ -253,8 +314,26 @@ impl Instance {
             || frames > self.max_frames as usize
             || usize::from(input.is_some()) != self.input_ports as usize
             || input.is_some_and(|(left, right)| left.len() != frames || right.len() != frames)
+            || parameter_events.len() > MAX_PARAMETER_EVENTS
+            || parameter_events
+                .iter()
+                .any(|event| event.sample_offset >= frames as u32 || !event.value.is_finite())
+            || parameter_events
+                .windows(2)
+                .any(|events| events[0].sample_offset > events[1].sample_offset)
         {
             return Err(Error::InvalidBlock);
+        }
+        for (destination, source) in self.parameter_events.iter_mut().zip(parameter_events) {
+            *destination = clap_event_param_value {
+                header: clap_event_header {
+                    time: source.sample_offset,
+                    ..EMPTY_PARAMETER_EVENT.header
+                },
+                param_id: source.identifier,
+                value: source.value,
+                ..EMPTY_PARAMETER_EVENT
+            };
         }
         let mut output_channels = [output_left.as_mut_ptr(), output_right.as_mut_ptr()];
         let mut output = clap_audio_buffer {
@@ -275,10 +354,14 @@ impl Instance {
                 constant_mask: 0,
             }
         });
+        let event_context = InputEventContext {
+            events: self.parameter_events.as_ptr(),
+            count: parameter_events.len() as u32,
+        };
         let input_events = clap_input_events {
-            ctx: ptr::null_mut(),
-            size: Some(empty_event_count),
-            get: Some(empty_event_get),
+            ctx: ptr::from_ref(&event_context).cast_mut().cast(),
+            size: Some(parameter_event_count),
+            get: Some(parameter_event_get),
         };
         let output_events = clap_output_events {
             ctx: ptr::null_mut(),
@@ -306,6 +389,94 @@ impl Instance {
         }
         self.steady_time = self.steady_time.saturating_add(frames as i64);
         Ok(status)
+    }
+
+    pub fn parameters(&self) -> Result<Vec<ParameterInfo>, Error> {
+        let Some(extension) = self.parameter_extension_optional()? else {
+            return Ok(Vec::new());
+        };
+        let count = extension.count.ok_or(Error::UnsupportedParameters)?;
+        let get_info = extension.get_info.ok_or(Error::UnsupportedParameters)?;
+        // SAFETY: The initialized plugin owns the extension for its lifetime.
+        let count = unsafe { count(self.plugin) };
+        if count > MAX_PARAMETERS {
+            return Err(Error::InvalidParameters);
+        }
+        let mut parameters = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let mut raw = std::mem::MaybeUninit::<clap_param_info>::zeroed();
+            // SAFETY: The output has storage for one complete parameter record.
+            if !unsafe { get_info(self.plugin, index, raw.as_mut_ptr()) } {
+                return Err(Error::InvalidParameters);
+            }
+            // SAFETY: A successful callback initializes the complete record.
+            let raw = unsafe { raw.assume_init() };
+            if !raw.min_value.is_finite()
+                || !raw.max_value.is_finite()
+                || !raw.default_value.is_finite()
+                || raw.min_value > raw.max_value
+                || !(raw.min_value..=raw.max_value).contains(&raw.default_value)
+                || parameters
+                    .iter()
+                    .any(|parameter: &ParameterInfo| parameter.identifier == raw.id)
+            {
+                return Err(Error::InvalidParameters);
+            }
+            parameters.push(ParameterInfo {
+                identifier: raw.id,
+                flags: raw.flags,
+                name: fixed_text(&raw.name)?,
+                module: fixed_text(&raw.module)?,
+                minimum: raw.min_value,
+                maximum: raw.max_value,
+                default_value: raw.default_value,
+            });
+        }
+        Ok(parameters)
+    }
+
+    pub fn parameter_value(&self, identifier: u32) -> Result<f64, Error> {
+        let extension = self.parameter_extension()?;
+        let get_value = extension.get_value.ok_or(Error::UnsupportedParameters)?;
+        let mut value = 0.0;
+        // SAFETY: The initialized plugin owns the extension for its lifetime.
+        if !unsafe { get_value(self.plugin, identifier, &mut value) } || !value.is_finite() {
+            return Err(Error::InvalidParameters);
+        }
+        Ok(value)
+    }
+
+    pub fn latency_frames(&self) -> Result<u32, Error> {
+        if !self.active {
+            return Err(Error::NotProcessing);
+        }
+        // SAFETY: The plugin is active and owns the extension pointer.
+        unsafe {
+            let plugin = self.plugin.as_ref().ok_or(Error::InvalidPlugin)?;
+            let extension = (plugin.get_extension.unwrap())(self.plugin, CLAP_EXT_LATENCY.as_ptr())
+                .cast::<clap_plugin_latency>();
+            let Some(extension) = extension.as_ref() else {
+                return Ok(0);
+            };
+            Ok(extension.get.map_or(0, |get| get(self.plugin)))
+        }
+    }
+
+    fn parameter_extension(&self) -> Result<&clap_plugin_params, Error> {
+        self.parameter_extension_optional()?
+            .ok_or(Error::UnsupportedParameters)
+    }
+
+    fn parameter_extension_optional(&self) -> Result<Option<&clap_plugin_params>, Error> {
+        // SAFETY: The plugin is initialized and owns the returned extension pointer.
+        unsafe {
+            let plugin = self.plugin.as_ref().ok_or(Error::InvalidPlugin)?;
+            Ok(
+                (plugin.get_extension.unwrap())(self.plugin, CLAP_EXT_PARAMS.as_ptr())
+                    .cast::<clap_plugin_params>()
+                    .as_ref(),
+            )
+        }
     }
 
     pub fn reset(&mut self) -> Result<(), Error> {
@@ -413,15 +584,36 @@ unsafe extern "C" fn host_request_callback(host: *const clap_host) {
     unsafe { request(host, CALLBACK_REQUESTED) };
 }
 
-unsafe extern "C" fn empty_event_count(_list: *const clap_input_events) -> u32 {
-    0
+struct InputEventContext {
+    events: *const clap_event_param_value,
+    count: u32,
 }
 
-unsafe extern "C" fn empty_event_get(
-    _list: *const clap_input_events,
-    _index: u32,
+unsafe extern "C" fn parameter_event_count(list: *const clap_input_events) -> u32 {
+    // SAFETY: The list context points to the stack record held through process().
+    unsafe {
+        list.as_ref()
+            .and_then(|list| list.ctx.cast::<InputEventContext>().as_ref())
+            .map_or(0, |context| context.count)
+    }
+}
+
+unsafe extern "C" fn parameter_event_get(
+    list: *const clap_input_events,
+    index: u32,
 ) -> *const clap_event_header {
-    ptr::null()
+    // SAFETY: The bounded index selects initialized storage held through process().
+    let Some(context) = (unsafe {
+        list.as_ref()
+            .and_then(|list| list.ctx.cast::<InputEventContext>().as_ref())
+    }) else {
+        return ptr::null();
+    };
+    if index >= context.count {
+        return ptr::null();
+    }
+    // SAFETY: count never exceeds the preallocated event array length.
+    unsafe { ptr::from_ref(&(*context.events.add(index as usize)).header) }
 }
 
 unsafe extern "C" fn discard_output_event(
@@ -429,6 +621,17 @@ unsafe extern "C" fn discard_output_event(
     _event: *const clap_event_header,
 ) -> bool {
     false
+}
+
+fn fixed_text(text: &[c_char]) -> Result<String, Error> {
+    let Some(end) = text.iter().position(|byte| *byte == 0) else {
+        return Err(Error::InvalidParameters);
+    };
+    let bytes = text[..end]
+        .iter()
+        .map(|byte| *byte as u8)
+        .collect::<Vec<_>>();
+    String::from_utf8(bytes).map_err(|_| Error::InvalidParameters)
 }
 
 #[cfg(test)]
@@ -445,5 +648,15 @@ mod tests {
     fn request_flags_start_clear() {
         let requests = HostRequests::default();
         assert!(!requests.restart && !requests.process && !requests.callback);
+    }
+
+    #[test]
+    fn fixed_parameter_text_requires_utf8_and_a_terminator() {
+        assert_eq!(fixed_text(&[b'G' as c_char, 0]).unwrap(), "G");
+        assert_eq!(fixed_text(&[b'G' as c_char]), Err(Error::InvalidParameters));
+        assert_eq!(
+            fixed_text(&[-1_i8 as c_char, 0]),
+            Err(Error::InvalidParameters)
+        );
     }
 }

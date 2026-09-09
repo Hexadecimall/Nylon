@@ -198,6 +198,21 @@ removes the reserved file.
 
 Tests that need a real device are marked ignored and run deliberately.
 
+## Plugin processing
+
+Plugin discovery recognizes VST3, Audio Unit, CLAP, and LV2 packages without
+loading executable code. CLAP descriptor probing and audio processing run in
+separate processes. A failed load, malformed descriptor, timeout, or process
+failure cannot corrupt the project process and can quarantine the catalog
+entry.
+
+An active CLAP instance validates stereo ports, reports its processing latency,
+enumerates parameter metadata, and accepts up to 1,024 ordered parameter value
+events per block. Each event carries a sample offset, and its value applies to
+that frame. Event records live in fixed storage allocated when the instance is
+opened. The worker protocol publishes latency and parameter metadata during its
+handshake, then carries bounded audio blocks and parameter events.
+
 ## Benchmarks
 
 The render benchmark reports nanoseconds per 256-frame stereo block after warmup.

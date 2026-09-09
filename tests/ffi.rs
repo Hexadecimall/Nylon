@@ -77,6 +77,35 @@ fn null_handles_are_rejected() {
             ),
             0
         );
+        assert_eq!(
+            nylon_clap_instance_process_stereo_events(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                0,
+            ),
+            0
+        );
+        let mut parameter = NylonClapParameterInfo::default();
+        let mut value = 0.0;
+        let mut latency = 0;
+        assert_eq!(nylon_clap_instance_parameter_count(std::ptr::null()), 0);
+        assert_eq!(
+            nylon_clap_instance_parameter_info(std::ptr::null(), 0, &mut parameter),
+            0
+        );
+        assert_eq!(
+            nylon_clap_instance_parameter_value(std::ptr::null(), 0, &mut value),
+            0
+        );
+        assert_eq!(
+            nylon_clap_instance_latency(std::ptr::null(), &mut latency),
+            0
+        );
         assert_eq!(nylon_clap_instance_reset(std::ptr::null_mut()), 0);
         assert_eq!(nylon_clap_instance_take_requests(std::ptr::null()), 0);
         nylon_clap_instance_free(std::ptr::null_mut());
