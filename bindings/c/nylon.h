@@ -391,6 +391,20 @@ unsigned long long nylon_plugin_catalog_descriptor_feature(const void* catalog,
     unsigned long long entry, unsigned long long descriptor,
     unsigned long long feature, char* buffer, unsigned long long capacity);
 
+/* CLAP instances provide the processing primitive used by isolated plugin
+ * workers. Input pointers may both be null for instruments. Non-null audio
+ * regions contain `frames` values and may not overlap. Request bits are:
+ * restart=1, process=2, callback=4. */
+void* nylon_clap_instance_open(const char* path, const char* identifier);
+void nylon_clap_instance_free(void* instance);
+int nylon_clap_instance_activate(void* instance, double sample_rate,
+    unsigned int min_frames, unsigned int max_frames);
+int nylon_clap_instance_process_stereo(void* instance,
+    const float* input_left, const float* input_right,
+    float* output_left, float* output_right, unsigned int frames);
+int nylon_clap_instance_reset(void* instance);
+unsigned int nylon_clap_instance_take_requests(const void* instance);
+
 /* Live audio is owned by a separate control-thread handle. The platform
  * stream remains open while the musical transport is stopped, allowing
  * meters and edits to continue crossing block boundaries. */

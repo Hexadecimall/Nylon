@@ -179,6 +179,31 @@ private:
     void* m_handle{};
 };
 
+class ClapInstance {
+public:
+    ClapInstance() = default;
+    ~ClapInstance();
+    ClapInstance(const ClapInstance&) = delete;
+    ClapInstance& operator=(const ClapInstance&) = delete;
+    ClapInstance(ClapInstance&& other) noexcept;
+    ClapInstance& operator=(ClapInstance&& other) noexcept;
+
+    static ClapInstance open(const std::string& path, const std::string& identifier);
+    explicit operator bool() const { return m_handle != nullptr; }
+    bool activate(double sampleRate, std::uint32_t minFrames, std::uint32_t maxFrames);
+    bool processStereo(const float* inputLeft, const float* inputRight,
+        float* outputLeft, float* outputRight, std::uint32_t frames);
+    bool reset();
+    std::uint32_t takeRequests();
+
+private:
+    explicit ClapInstance(void* handle)
+        : m_handle(handle)
+    {
+    }
+    void* m_handle{};
+};
+
 class CompiledRouting {
 public:
     CompiledRouting();

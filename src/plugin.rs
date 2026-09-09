@@ -1,5 +1,6 @@
 //! Plugin discovery and quarantine state.
 
+pub mod clap;
 pub mod probe;
 
 use std::collections::HashSet;

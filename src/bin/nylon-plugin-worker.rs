@@ -1,0 +1,99 @@
+use nylon::plugin::clap::Instance;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
+const HEADER: [u8; 8] = *b"NYWORK1\0";
+const MAX_BLOCK_FRAMES: usize = 8_192;
+
+fn main() {
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if arguments.len() != 5 || arguments[0] != "clap" {
+        fail("Usage: nylon-plugin-worker clap <plugin> <id> <sample-rate> <max-frames>");
+    }
+    let Some(identifier) = arguments[2].to_str() else {
+        fail("Plugin identifier is invalid");
+    };
+    let sample_rate = arguments[3]
+        .to_str()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or_else(|| fail("Sample rate is invalid"));
+    let max_frames = arguments[4]
+        .to_str()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| (1..=MAX_BLOCK_FRAMES).contains(value))
+        .unwrap_or_else(|| fail("Block limit is invalid"));
+    let mut instance = Instance::open(Path::new(&arguments[1]), identifier)
+        .unwrap_or_else(|error| fail(&error.to_string()));
+    instance
+        .activate(sample_rate, 1, max_frames as u32)
+        .unwrap_or_else(|error| fail(&error.to_string()));
+    run(&mut instance, max_frames).unwrap_or_else(|error| fail(error));
+}
+
+fn run(instance: &mut Instance, max_frames: usize) -> Result<(), &'static str> {
+    let mut input = io::stdin().lock();
+    let mut output = io::stdout().lock();
+    let mut header = [0; HEADER.len()];
+    input
+        .read_exact(&mut header)
+        .map_err(|_| "Worker header is missing")?;
+    if header != HEADER {
+        return Err("Worker header is invalid");
+    }
+    output
+        .write_all(&HEADER)
+        .map_err(|_| "Worker output failed")?;
+    output.flush().map_err(|_| "Worker output failed")?;
+
+    let mut bytes = vec![0; max_frames * 8];
+    let mut input_left = vec![0.0; max_frames];
+    let mut input_right = vec![0.0; max_frames];
+    let mut output_left = vec![0.0; max_frames];
+    let mut output_right = vec![0.0; max_frames];
+    loop {
+        let mut count = [0; 4];
+        input
+            .read_exact(&mut count)
+            .map_err(|_| "Block header is missing")?;
+        let frames = u32::from_le_bytes(count) as usize;
+        if frames == 0 {
+            return Ok(());
+        }
+        if frames > max_frames {
+            return Err("Audio block exceeds the configured limit");
+        }
+        let byte_count = frames.checked_mul(8).ok_or("Audio block is too large")?;
+        input
+            .read_exact(&mut bytes[..byte_count])
+            .map_err(|_| "Audio block is truncated")?;
+        for frame in 0..frames {
+            let offset = frame * 8;
+            input_left[frame] = f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            input_right[frame] =
+                f32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap());
+        }
+        instance
+            .process_stereo(
+                Some((&input_left[..frames], &input_right[..frames])),
+                &mut output_left[..frames],
+                &mut output_right[..frames],
+            )
+            .map_err(|_| "Plugin processing failed")?;
+        for frame in 0..frames {
+            let offset = frame * 8;
+            bytes[offset..offset + 4].copy_from_slice(&output_left[frame].to_le_bytes());
+            bytes[offset + 4..offset + 8].copy_from_slice(&output_right[frame].to_le_bytes());
+        }
+        output
+            .write_all(&count)
+            .and_then(|()| output.write_all(&bytes[..byte_count]))
+            .and_then(|()| output.flush())
+            .map_err(|_| "Worker output failed")?;
+    }
+}
+
+fn fail(message: &str) -> ! {
+    let _ = writeln!(io::stderr().lock(), "{message}");
+    std::process::exit(1)
+}

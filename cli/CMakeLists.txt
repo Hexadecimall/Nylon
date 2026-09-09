@@ -41,16 +41,25 @@ target_compile_definitions(nylon_clap_crash_fixture PRIVATE NYLON_FIXTURE_CRASH=
 set_target_properties(nylon_clap_crash_fixture PROPERTIES PREFIX "" SUFFIX ".clap")
 if(WIN32)
     set(NYLON_PLUGIN_PROBE_DEFAULT "${NYLON_REPO_ROOT}/target/release/nylon-plugin-probe.exe")
+    set(NYLON_PLUGIN_WORKER_DEFAULT "${NYLON_REPO_ROOT}/target/release/nylon-plugin-worker.exe")
 else()
     set(NYLON_PLUGIN_PROBE_DEFAULT "${NYLON_REPO_ROOT}/target/release/nylon-plugin-probe")
+    set(NYLON_PLUGIN_WORKER_DEFAULT "${NYLON_REPO_ROOT}/target/release/nylon-plugin-worker")
 endif()
 set(NYLON_PLUGIN_PROBE "${NYLON_PLUGIN_PROBE_DEFAULT}"
     CACHE FILEPATH "Path to the Nylon plugin probe executable")
-install(PROGRAMS "${NYLON_PLUGIN_PROBE}" DESTINATION "${CMAKE_INSTALL_BINDIR}")
+set(NYLON_PLUGIN_WORKER "${NYLON_PLUGIN_WORKER_DEFAULT}"
+    CACHE FILEPATH "Path to the Nylon plugin worker executable")
+install(PROGRAMS "${NYLON_PLUGIN_PROBE}" "${NYLON_PLUGIN_WORKER}"
+    DESTINATION "${CMAKE_INSTALL_BINDIR}")
 add_test(NAME cli_project COMMAND "${Python3_EXECUTABLE}"
     "${NYLON_REPO_ROOT}/scripts/test_cli_project.py" "$<TARGET_FILE:nylon_control>"
     "$<TARGET_FILE:nylon_clap_fixture>" "${NYLON_PLUGIN_PROBE}"
     "$<TARGET_FILE:nylon_clap_crash_fixture>")
 add_test(NAME cli_server COMMAND "${Python3_EXECUTABLE}"
     "${NYLON_REPO_ROOT}/scripts/test_cli_server.py" "$<TARGET_FILE:nylon_control>")
+add_test(NAME plugin_worker COMMAND "${Python3_EXECUTABLE}"
+    "${NYLON_REPO_ROOT}/scripts/test_plugin_worker.py" "${NYLON_PLUGIN_WORKER}"
+    "$<TARGET_FILE:nylon_clap_fixture>" "$<TARGET_FILE:nylon_clap_crash_fixture>")
 set_tests_properties(cli_server PROPERTIES TIMEOUT 20)
+set_tests_properties(plugin_worker PROPERTIES TIMEOUT 20)

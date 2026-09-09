@@ -20,6 +20,7 @@ use crate::engine::voice::Patch;
 use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::plugin::Catalog as PluginCatalog;
+use crate::plugin::clap::Instance as ClapInstance;
 use crate::project::{
     AutomationCurve, AutomationParameter, AutomationPoint, ClipId, Command, MidiNote, Project,
     SceneId, TrackId, TrackKind,
@@ -3560,4 +3561,127 @@ pub unsafe extern "C" fn nylon_plugin_catalog_descriptor_feature(
         return copy_text("", buffer, capacity);
     };
     copy_text(&feature, buffer, capacity)
+}
+
+/// # Safety
+/// Both strings must be terminated and readable for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_open(
+    path: *const c_char,
+    identifier: *const c_char,
+) -> *mut ClapInstance {
+    if path.is_null() || identifier.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: The caller supplies terminated strings.
+    let (Ok(path), Ok(identifier)) = (unsafe {
+        (
+            CStr::from_ptr(path).to_str(),
+            CStr::from_ptr(identifier).to_str(),
+        )
+    }) else {
+        return std::ptr::null_mut();
+    };
+    ClapInstance::open(std::path::Path::new(path), identifier)
+        .map(Box::new)
+        .map_or(std::ptr::null_mut(), Box::into_raw)
+}
+
+/// # Safety
+/// The handle must be null or returned by `nylon_clap_instance_open` and not freed yet.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_free(instance: *mut ClapInstance) {
+    if !instance.is_null() {
+        // SAFETY: Ownership transfers back exactly once.
+        drop(unsafe { Box::from_raw(instance) });
+    }
+}
+
+/// # Safety
+/// The handle must remain live and exclusive for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_activate(
+    instance: *mut ClapInstance,
+    sample_rate: f64,
+    min_frames: u32,
+    max_frames: u32,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { instance.as_mut() }
+        .is_some_and(|instance| {
+            instance
+                .activate(sample_rate, min_frames, max_frames)
+                .is_ok()
+        })
+        .into()
+}
+
+/// # Safety
+/// The handle must remain live and exclusive. Every non-null buffer must
+/// contain `frames` samples. Input and output regions must not overlap.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_process_stereo(
+    instance: *mut ClapInstance,
+    input_left: *const f32,
+    input_right: *const f32,
+    output_left: *mut f32,
+    output_right: *mut f32,
+    frames: u32,
+) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    let Some(instance) = (unsafe { instance.as_mut() }) else {
+        return 0;
+    };
+    if output_left.is_null() || output_right.is_null() || frames == 0 {
+        return 0;
+    }
+    let frames = frames as usize;
+    let input = if input_left.is_null() && input_right.is_null() {
+        None
+    } else if input_left.is_null() || input_right.is_null() {
+        return 0;
+    } else {
+        // SAFETY: The caller supplies two readable, non-overlapping regions.
+        Some(unsafe {
+            (
+                std::slice::from_raw_parts(input_left, frames),
+                std::slice::from_raw_parts(input_right, frames),
+            )
+        })
+    };
+    // SAFETY: The caller supplies two writable, non-overlapping regions.
+    let (output_left, output_right) = unsafe {
+        (
+            std::slice::from_raw_parts_mut(output_left, frames),
+            std::slice::from_raw_parts_mut(output_right, frames),
+        )
+    };
+    instance
+        .process_stereo(input, output_left, output_right)
+        .is_ok()
+        .into()
+}
+
+/// # Safety
+/// The handle must remain live and exclusive for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_reset(instance: *mut ClapInstance) -> i32 {
+    // SAFETY: Handle validity is required by the interface.
+    unsafe { instance.as_mut() }
+        .is_some_and(|instance| instance.reset().is_ok())
+        .into()
+}
+
+/// # Safety
+/// The handle must remain live for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_clap_instance_take_requests(instance: *const ClapInstance) -> u32 {
+    // SAFETY: Handle validity is required by the interface.
+    let Some(instance) = (unsafe { instance.as_ref() }) else {
+        return 0;
+    };
+    let requests = instance.take_requests();
+    u32::from(requests.restart)
+        | (u32::from(requests.process) << 1)
+        | (u32::from(requests.callback) << 2)
 }

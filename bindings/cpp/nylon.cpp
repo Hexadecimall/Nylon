@@ -133,6 +133,41 @@ bool PluginCatalog::applyProbe(std::uint64_t index, const std::vector<std::uint8
         != 0;
 }
 
+ClapInstance::~ClapInstance() { nylon_clap_instance_free(m_handle); }
+ClapInstance::ClapInstance(ClapInstance&& other) noexcept
+    : m_handle(std::exchange(other.m_handle, nullptr))
+{
+}
+ClapInstance& ClapInstance::operator=(ClapInstance&& other) noexcept
+{
+    if (this != &other) {
+        nylon_clap_instance_free(m_handle);
+        m_handle = std::exchange(other.m_handle, nullptr);
+    }
+    return *this;
+}
+ClapInstance ClapInstance::open(const std::string& path, const std::string& identifier)
+{
+    return ClapInstance(nylon_clap_instance_open(path.c_str(), identifier.c_str()));
+}
+bool ClapInstance::activate(
+    double sampleRate, std::uint32_t minFrames, std::uint32_t maxFrames)
+{
+    return nylon_clap_instance_activate(m_handle, sampleRate, minFrames, maxFrames) != 0;
+}
+bool ClapInstance::processStereo(const float* inputLeft, const float* inputRight,
+    float* outputLeft, float* outputRight, std::uint32_t frames)
+{
+    return nylon_clap_instance_process_stereo(
+               m_handle, inputLeft, inputRight, outputLeft, outputRight, frames)
+        != 0;
+}
+bool ClapInstance::reset() { return nylon_clap_instance_reset(m_handle) != 0; }
+std::uint32_t ClapInstance::takeRequests()
+{
+    return nylon_clap_instance_take_requests(m_handle);
+}
+
 CompiledRouting::CompiledRouting() = default;
 CompiledRouting::CompiledRouting(void* handle)
     : m_handle(handle)
@@ -743,12 +778,18 @@ std::vector<AudioDevice> AudioEngine::inputDevices()
 
 bool AudioEngine::defaultOutput(std::uint64_t& deviceId)
 {
-    return nylon_audio_default_output(&deviceId) != 0;
+    unsigned long long nativeId = 0;
+    if (nylon_audio_default_output(&nativeId) == 0) return false;
+    deviceId = static_cast<std::uint64_t>(nativeId);
+    return true;
 }
 
 bool AudioEngine::defaultInput(std::uint64_t& deviceId)
 {
-    return nylon_audio_default_input(&deviceId) != 0;
+    unsigned long long nativeId = 0;
+    if (nylon_audio_default_input(&nativeId) == 0) return false;
+    deviceId = static_cast<std::uint64_t>(nativeId);
+    return true;
 }
 
 bool AudioEngine::open(const Project& project, std::uint64_t deviceId,

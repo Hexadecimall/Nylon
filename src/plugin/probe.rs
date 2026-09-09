@@ -134,7 +134,7 @@ impl Drop for EntryGuard {
     }
 }
 
-fn clap_binary(package: &Path) -> Result<PathBuf, Error> {
+pub(super) fn clap_binary(package: &Path) -> Result<PathBuf, Error> {
     if package.is_file() {
         return Ok(package.to_owned());
     }

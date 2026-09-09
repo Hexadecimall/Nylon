@@ -61,6 +61,25 @@ fn null_handles_are_rejected() {
         assert_eq!(nylon_recording_stop(std::ptr::null_mut()), 0);
         assert_eq!(nylon_recording_is_running(std::ptr::null()), 0);
         nylon_recording_free(std::ptr::null_mut());
+        assert!(nylon_clap_instance_open(std::ptr::null(), std::ptr::null()).is_null());
+        assert_eq!(
+            nylon_clap_instance_activate(std::ptr::null_mut(), 48_000.0, 1, 256),
+            0
+        );
+        assert_eq!(
+            nylon_clap_instance_process_stereo(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+            ),
+            0
+        );
+        assert_eq!(nylon_clap_instance_reset(std::ptr::null_mut()), 0);
+        assert_eq!(nylon_clap_instance_take_requests(std::ptr::null()), 0);
+        nylon_clap_instance_free(std::ptr::null_mut());
         let mut device = NylonTrackDevice::default();
         assert_eq!(nylon_track_device_count(std::ptr::null(), 0), 0);
         assert_eq!(

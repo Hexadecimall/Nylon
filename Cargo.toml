@@ -21,6 +21,13 @@ bench = false
 test = false
 required-features = ["plugin-probe"]
 
+[[bin]]
+name = "nylon-plugin-worker"
+path = "src/bin/nylon-plugin-worker.rs"
+bench = false
+test = false
+required-features = ["plugin-probe"]
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 
