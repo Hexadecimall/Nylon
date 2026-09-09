@@ -1,5 +1,6 @@
 #include "nylon.hpp"
 #include "control_server.hpp"
+#include "device_codec.hpp"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
@@ -229,6 +230,8 @@ bool parameter(const QString& text, float& value)
     return std::isfinite(value);
 }
 
+}
+
 bool parseTrackDevice(
     const QStringList& positional, int kindIndex, nylon::TrackDevice& device)
 {
@@ -382,6 +385,8 @@ QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
     return {{"index", static_cast<double>(index)}, {"kind", deviceKindName(device.kind)},
         {"enabled", device.enabled}, {"parameters", parameters}};
 }
+
+namespace {
 
 int remoteCommand(const QString& endpoint, const QStringList& positional)
 {

@@ -25,7 +25,7 @@ endif()
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Network)
 add_subdirectory("${NYLON_REPO_ROOT}/bindings/cpp" bindings_cpp)
 
-add_executable(nylon_control main.cpp control_server.cpp control_server.hpp)
+add_executable(nylon_control main.cpp control_server.cpp control_server.hpp device_codec.hpp)
 target_link_libraries(nylon_control PRIVATE Qt6::Core Qt6::Network nyloncpp)
 set_target_properties(nylon_control PROPERTIES OUTPUT_NAME "nylon-control")
 

@@ -1,4 +1,5 @@
 #include "control_server.hpp"
+#include "device_codec.hpp"
 
 #include "nylon.hpp"
 
@@ -8,6 +9,7 @@
 #include <QJsonObject>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QStringList>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -73,6 +75,17 @@ bool parameterValue(const QJsonValue& value, float& result)
     return std::isfinite(result);
 }
 
+bool stringArguments(const QJsonArray& values, QStringList& result)
+{
+    result.clear();
+    result.reserve(values.size());
+    for (const QJsonValue& value : values) {
+        if (!value.isString()) return false;
+        result.append(value.toString());
+    }
+    return true;
+}
+
 bool oscillatorShapeValue(const QJsonValue& value, nylon::OscillatorShape& shape)
 {
     if (!value.isString()) return false;
@@ -126,6 +139,7 @@ public:
         if (command == "status" && args.isEmpty()) return status();
         if (command == "notes" && args.size() == 2) return notes(args);
         if (command == "instrument" && args.size() == 1) return instrument(args);
+        if (command == "track-devices" && args.size() == 1) return trackDevices(args);
         if (command == "quit" && args.isEmpty()) {
             quit = true;
             return {{"ok", true}};
@@ -211,6 +225,59 @@ public:
             patch.unisonVoices = static_cast<std::uint32_t>(unisonVoices);
             if (!m_project.setTrackInstrument(track, patch))
                 return error("Invalid instrument patch");
+            return commitEdit();
+        }
+        if (command == "add-device" && args.size() >= 2) {
+            std::uint64_t track = 0;
+            QStringList values;
+            nylon::TrackDevice device;
+            if (!indexValue(args[0], track) || !stringArguments(args, values)
+                || !parseTrackDevice(values, 1, device)
+                || !m_project.addTrackDevice(track, device))
+                return error("Invalid track device");
+            return commitEdit();
+        }
+        if (command == "set-device" && args.size() >= 3) {
+            std::uint64_t track = 0;
+            std::uint64_t index = 0;
+            QStringList values;
+            nylon::TrackDevice device;
+            if (!indexValue(args[0], track) || !indexValue(args[1], index)
+                || !stringArguments(args, values) || !parseTrackDevice(values, 2, device)
+                || !m_project.setTrackDevice(track, index, device))
+                return error("Invalid track device");
+            return commitEdit();
+        }
+        if (command == "delete-device" && args.size() == 2) {
+            std::uint64_t track = 0;
+            std::uint64_t index = 0;
+            if (!indexValue(args[0], track) || !indexValue(args[1], index)
+                || !m_project.deleteTrackDevice(track, index))
+                return error("Invalid track device");
+            return commitEdit();
+        }
+        if (command == "move-device" && args.size() == 3) {
+            std::uint64_t track = 0;
+            std::uint64_t from = 0;
+            std::uint64_t to = 0;
+            if (!indexValue(args[0], track) || !indexValue(args[1], from)
+                || !indexValue(args[2], to) || !m_project.moveTrackDevice(track, from, to))
+                return error("Invalid track device move");
+            return commitEdit();
+        }
+        if (command == "set-device-enabled" && args.size() == 3) {
+            std::uint64_t track = 0;
+            std::uint64_t index = 0;
+            bool enabled = false;
+            if (!indexValue(args[0], track) || !indexValue(args[1], index)
+                || !flagValue(args[2], enabled))
+                return error("Invalid track device state");
+            auto devices = m_project.trackDevices(track);
+            if (index >= static_cast<std::uint64_t>(devices.size()))
+                return error("Invalid track device state");
+            devices[static_cast<std::size_t>(index)].enabled = enabled;
+            if (!m_project.setTrackDevice(track, index, devices[static_cast<std::size_t>(index)]))
+                return error("Invalid track device state");
             return commitEdit();
         }
         if (command == "create-midi-clip" && args.size() == 3) {
@@ -373,6 +440,18 @@ private:
                     {"decaySeconds", patch.decaySeconds}, {"sustain", patch.sustain},
                     {"releaseSeconds", patch.releaseSeconds}, {"cutoffHz", patch.cutoffHz},
                     {"resonance", patch.resonance}, {"levelDb", patch.levelDb}}}};
+    }
+
+    QJsonObject trackDevices(const QJsonArray& args)
+    {
+        std::uint64_t track = 0;
+        if (!indexValue(args[0], track) || track >= m_project.trackCount())
+            return error("Invalid track index");
+        QJsonArray result;
+        const auto devices = m_project.trackDevices(track);
+        for (std::size_t index = 0; index < devices.size(); ++index)
+            result.append(deviceJson(devices[index], index));
+        return {{"ok", true}, {"devices", result}};
     }
 
     QJsonObject audioResult(bool accepted, const QString& operation)

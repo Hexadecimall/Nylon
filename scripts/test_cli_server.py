@@ -62,6 +62,19 @@ def main():
                  "4", "18", "0.01", "0.2", "0.7", "0.3", "2400", "1.2", "-9")
             instrument = call("instrument", "0")["instrument"]
             assert instrument["unisonVoices"] == 4 and instrument["cutoffHz"] == 2400, instrument
+            call("add-device", "0", "reverb", "0.6", "2.8", "0.35", "0.7", "0.02", "1", "0.3")
+            call("add-device", "0", "chorus", "0.8", "0.012", "0.003", "0.1", "0.5", "0.25")
+            devices = call("track-devices", "0")["devices"]
+            assert [device["kind"] for device in devices] == ["reverb", "chorus"], devices
+            call("move-device", "0", "1", "0")
+            call("set-device-enabled", "0", "0", "off")
+            devices = call("track-devices", "0")["devices"]
+            assert devices[0]["kind"] == "chorus" and devices[0]["enabled"] is False, devices
+            call("set-device", "0", "1", "utility", "-3", "1.2", "0")
+            call("delete-device", "0", "1")
+            devices = call("track-devices", "0")["devices"]
+            assert len(devices) == 1 and devices[0]["kind"] == "chorus", devices
+            call("add-device", "0", "reverb", "0.6", "31", "0.35", "0.7", "0.02", "1", "0.3", succeeds=False)
             call("create-midi-clip", "0", "0", "4")
             call("add-note", "0", "0", "60", "80", "0.22", "0.5")
             call("quantize-notes", "0", "0", "0.25", "1")

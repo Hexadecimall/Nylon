@@ -128,6 +128,7 @@ Every reply is one JSON object. Direct edit commands save the bundle only
 after the core accepts the change. Recording duration is in seconds. Its
 optional device, sample rate, and block size fields default to the system
 input, project rate, and 256 frames.
+Device-chain commands also accept `--endpoint` and edit the running engine.
 
 ## Rust
 
