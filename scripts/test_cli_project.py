@@ -42,6 +42,12 @@ def main():
         tracks = call("tracks")["tracks"]
         assert tracks[0]["name"] == "Lead" and tracks[0]["kind"] == "midi", tracks
         assert tracks[1]["name"] == "Take" and tracks[1]["kind"] == "audio", tracks
+        call("set-track-latency", "0", "256")
+        call("add-route", "0", "1", "sidechain", "0.5")
+        routes = call("routes")["routes"]
+        assert routes == [{"destination": 1, "gain": 0.5, "index": 0,
+                           "kind": "sidechain", "source": 0}], routes
+        call("add-route", "1", "0", "main", succeeds=False)
         call("import-wave", "1", "0", str(source), "120")
         clips = call("clips", "1")["clips"]
         assert clips[0]["kind"] == "audio" and clips[0]["mediaPath"].startswith("Media/"), clips

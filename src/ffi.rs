@@ -180,6 +180,20 @@ track_getter!(nylon_track_solo, i32, 0, solo);
 track_getter!(nylon_track_arm, i32, 0, armed);
 track_getter!(nylon_track_color_index, i32, -1, color_index);
 
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_latency_frames(handle: *const Project, index: u64) -> u32 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Ok(index) = usize::try_from(index) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    unsafe { handle.as_ref() }
+        .and_then(|project| project.current.tracks.get(index))
+        .map_or(0, |track| track.latency_frames())
+}
+
 unsafe fn edit_track(
     handle: *mut Project,
     index: u64,
@@ -245,6 +259,170 @@ track_setter!(nylon_track_set_color_index, i32, |id, value| u8::try_from(
 )
 .ok()
 .map(|index| Command::SetTrackColor { id, index }));
+track_setter!(nylon_track_set_latency_frames, u32, |id, frames| Some(
+    Command::SetTrackLatency { id, frames }
+));
+
+fn edge_kind_from_code(code: i32) -> Option<EdgeKind> {
+    match code {
+        0 => Some(EdgeKind::Main),
+        1 => Some(EdgeKind::SendPreFader),
+        2 => Some(EdgeKind::SendPostFader),
+        3 => Some(EdgeKind::Sidechain),
+        _ => None,
+    }
+}
+
+fn edge_kind_code(kind: EdgeKind) -> i32 {
+    match kind {
+        EdgeKind::Main => 0,
+        EdgeKind::SendPreFader => 1,
+        EdgeKind::SendPostFader => 2,
+        EdgeKind::Sidechain => 3,
+    }
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_route_count(handle: *const Project) -> u64 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    unsafe { handle.as_ref() }.map_or(0, |project| project.current.routes.len() as u64)
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_route_source(handle: *const Project, index: u64) -> u64 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(project) = (unsafe { handle.as_ref() }) else {
+        return u64::MAX;
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return u64::MAX;
+    };
+    let Some(route) = project.current.routes.get(index).copied() else {
+        return u64::MAX;
+    };
+    project
+        .current
+        .tracks
+        .iter()
+        .position(|track| track.id() == route.source())
+        .map_or(u64::MAX, |value| value as u64)
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_route_destination(
+    handle: *const Project,
+    index: u64,
+) -> u64 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(project) = (unsafe { handle.as_ref() }) else {
+        return u64::MAX;
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return u64::MAX;
+    };
+    let Some(route) = project.current.routes.get(index).copied() else {
+        return u64::MAX;
+    };
+    project
+        .current
+        .tracks
+        .iter()
+        .position(|track| track.id() == route.destination())
+        .map_or(u64::MAX, |value| value as u64)
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_route_kind(handle: *const Project, index: u64) -> i32 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(project) = (unsafe { handle.as_ref() }) else {
+        return -1;
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return -1;
+    };
+    project
+        .current
+        .routes
+        .get(index)
+        .map_or(-1, |route| edge_kind_code(route.kind()))
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_route_gain(handle: *const Project, index: u64) -> f32 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(project) = (unsafe { handle.as_ref() }) else {
+        return f32::NAN;
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return f32::NAN;
+    };
+    project
+        .current
+        .routes
+        .get(index)
+        .map_or(f32::NAN, |route| route.gain())
+}
+
+/// # Safety
+/// A non-null handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_route_add(
+    handle: *mut Project,
+    source: u64,
+    destination: u64,
+    kind: i32,
+    gain: f32,
+) -> i32 {
+    // SAFETY: Handle validity and exclusive access are required by the interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let (Ok(source), Ok(destination)) = (usize::try_from(source), usize::try_from(destination))
+    else {
+        return 0;
+    };
+    let (Some(source), Some(destination), Some(kind)) = (
+        project.current.tracks.get(source),
+        project.current.tracks.get(destination),
+        edge_kind_from_code(kind),
+    ) else {
+        return 0;
+    };
+    let command = Command::CreateRoute {
+        source: source.id(),
+        destination: destination.id(),
+        kind,
+        gain,
+    };
+    i32::from(project.apply(&[command]).is_ok())
+}
+
+/// # Safety
+/// A non-null handle must be live and exclusively accessible to this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_route_delete(handle: *mut Project, index: u64) -> i32 {
+    // SAFETY: Handle validity and exclusive access are required by the interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return 0;
+    };
+    let Some(route) = project.current.routes.get(index) else {
+        return 0;
+    };
+    i32::from(project.apply(&[Command::DeleteRoute(route.id())]).is_ok())
+}
 
 /// # Safety
 /// A non-null handle must be live and exclusively accessible to this call.
@@ -585,12 +763,8 @@ pub unsafe extern "C" fn nylon_routing_add_edge(
     let (Ok(source), Ok(destination)) = (u16::try_from(source), u16::try_from(destination)) else {
         return 0;
     };
-    let kind = match kind {
-        0 => EdgeKind::Main,
-        1 => EdgeKind::SendPreFader,
-        2 => EdgeKind::SendPostFader,
-        3 => EdgeKind::Sidechain,
-        _ => return 0,
+    let Some(kind) = edge_kind_from_code(kind) else {
+        return 0;
     };
     // SAFETY: The caller supplies one writable output index.
     let Some(out_index) = (unsafe { out_index.as_mut() }) else {

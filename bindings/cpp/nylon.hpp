@@ -54,6 +54,13 @@ struct BounceReport {
 
 enum class RoutingKind : int { Main = 0, SendPreFader = 1, SendPostFader = 2, Sidechain = 3 };
 
+struct ProjectRoute {
+    std::uint64_t source;
+    std::uint64_t destination;
+    RoutingKind kind;
+    float gain;
+};
+
 class CompiledRouting {
 public:
     CompiledRouting();
@@ -155,6 +162,12 @@ public:
     bool setTrackArmed(std::uint64_t index, bool on);
     int trackColorIndex(std::uint64_t index) const;
     bool setTrackColorIndex(std::uint64_t index, int color);
+    std::uint32_t trackLatencyFrames(std::uint64_t index) const;
+    bool setTrackLatencyFrames(std::uint64_t index, std::uint32_t frames);
+
+    std::vector<ProjectRoute> routes() const;
+    bool addRoute(std::uint64_t source, std::uint64_t destination, RoutingKind kind, float gain);
+    bool deleteRoute(std::uint64_t index);
 
     std::uint64_t sceneCount() const;
     bool createScene(const std::string& name);

@@ -82,6 +82,27 @@ QString trackKindName(nylon::TrackKind kind)
     return "audio";
 }
 
+bool routingKind(const QString& text, nylon::RoutingKind& kind)
+{
+    if (text == "main") kind = nylon::RoutingKind::Main;
+    else if (text == "send-pre") kind = nylon::RoutingKind::SendPreFader;
+    else if (text == "send-post") kind = nylon::RoutingKind::SendPostFader;
+    else if (text == "sidechain") kind = nylon::RoutingKind::Sidechain;
+    else return false;
+    return true;
+}
+
+QString routingKindName(nylon::RoutingKind kind)
+{
+    switch (kind) {
+    case nylon::RoutingKind::Main: return "main";
+    case nylon::RoutingKind::SendPreFader: return "send-pre";
+    case nylon::RoutingKind::SendPostFader: return "send-post";
+    case nylon::RoutingKind::Sidechain: return "sidechain";
+    }
+    return "main";
+}
+
 int remoteCommand(const QString& endpoint, const QStringList& positional)
 {
     QLocalSocket socket;
@@ -168,9 +189,22 @@ int directCommand(const QString& bundle, const QStringList& positional)
                 {"kind", trackKindName(project.trackKind(index))},
                 {"volumeDb", project.trackVolumeDb(index)}, {"pan", project.trackPan(index)},
                 {"mute", project.trackMuted(index)}, {"solo", project.trackSolo(index)},
-                {"arm", project.trackArmed(index)}, {"color", project.trackColorIndex(index)}});
+                {"arm", project.trackArmed(index)}, {"color", project.trackColorIndex(index)},
+                {"latencyFrames", static_cast<double>(project.trackLatencyFrames(index))}});
         }
         return writeJson({{"ok", true}, {"tracks", tracks}});
+    }
+    if (command == "routes" && positional.size() == 1) {
+        QJsonArray routes;
+        const auto projectRoutes = project.routes();
+        for (std::size_t index = 0; index < projectRoutes.size(); ++index) {
+            const auto& route = projectRoutes[index];
+            routes.append(QJsonObject{{"index", static_cast<double>(index)},
+                {"source", static_cast<double>(route.source)},
+                {"destination", static_cast<double>(route.destination)},
+                {"kind", routingKindName(route.kind)}, {"gain", route.gain}});
+        }
+        return writeJson({{"ok", true}, {"routes", routes}});
     }
     if (command == "clips" && (positional.size() == 1 || positional.size() == 2)) {
         std::uint64_t selectedTrack = 0;
@@ -251,6 +285,26 @@ int directCommand(const QString& bundle, const QStringList& positional)
             || !flag(positional[3], enabled) || !number(positional[4], sourceTempo))
             return fail("Invalid audio clip warp setting");
         changed = project.setClipAudioWarp(track, scene, enabled, sourceTempo);
+    } else if (command == "set-track-latency" && positional.size() == 3) {
+        std::uint64_t track = 0;
+        std::uint32_t frames = 0;
+        if (!indexNumber(positional[1], track) || !unsignedNumber(positional[2], frames))
+            return fail("Invalid track latency");
+        changed = project.setTrackLatencyFrames(track, frames);
+    } else if (command == "add-route" && (positional.size() == 4 || positional.size() == 5)) {
+        std::uint64_t source = 0;
+        std::uint64_t destination = 0;
+        nylon::RoutingKind kind = nylon::RoutingKind::Main;
+        double gain = 1.0;
+        if (!indexNumber(positional[1], source) || !indexNumber(positional[2], destination)
+            || !routingKind(positional[3], kind)
+            || (positional.size() == 5 && !number(positional[4], gain)))
+            return fail("Invalid route");
+        changed = project.addRoute(source, destination, kind, static_cast<float>(gain));
+    } else if (command == "delete-route" && positional.size() == 2) {
+        std::uint64_t route = 0;
+        if (!indexNumber(positional[1], route)) return fail("Invalid route index");
+        changed = project.deleteRoute(route);
     } else if (command == "bounce" && (positional.size() == 4 || positional.size() == 5)) {
         double start = 0.0;
         double end = 0.0;

@@ -156,6 +156,22 @@ int nylon_track_set_arm(void* project, unsigned long long index, int enabled);
 /* Palette index 0..15. Fallback: -1. */
 int nylon_track_color_index(const void* project, unsigned long long index);
 int nylon_track_set_color_index(void* project, unsigned long long index, int color);
+unsigned int nylon_track_latency_frames(const void* project, unsigned long long index);
+int nylon_track_set_latency_frames(
+    void* project, unsigned long long index, unsigned int frames);
+
+/* Project routes use track indexes at the interface and stable track IDs in
+ * persisted state. Invalid route indexes return ULLONG_MAX, -1, or NaN. */
+unsigned long long nylon_project_route_count(const void* project);
+unsigned long long nylon_project_route_source(
+    const void* project, unsigned long long index);
+unsigned long long nylon_project_route_destination(
+    const void* project, unsigned long long index);
+int nylon_project_route_kind(const void* project, unsigned long long index);
+float nylon_project_route_gain(const void* project, unsigned long long index);
+int nylon_project_route_add(void* project, unsigned long long source,
+    unsigned long long destination, int kind, float gain);
+int nylon_project_route_delete(void* project, unsigned long long index);
 
 /* Session scenes. Names use the same UTF-8 buffer convention as track names. */
 unsigned long long nylon_scene_count(const void* project);

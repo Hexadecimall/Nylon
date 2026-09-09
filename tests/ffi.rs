@@ -302,6 +302,31 @@ fn native_routing_reports_order_and_compensation() {
 }
 
 #[test]
+fn native_project_routing_is_editable_by_track_index() {
+    let handle = nylon_project_new();
+    // SAFETY: This thread owns the project handle until release.
+    unsafe {
+        assert_eq!(nylon_project_add_track_kind(handle, 0), 1);
+        assert_eq!(nylon_project_add_track_kind(handle, 2), 1);
+        assert_eq!(nylon_track_set_latency_frames(handle, 0, 512), 1);
+        assert_eq!(nylon_track_latency_frames(handle, 0), 512);
+        assert_eq!(nylon_project_route_add(handle, 0, 1, 2, 0.75), 1);
+        assert_eq!(nylon_project_route_count(handle), 1);
+        assert_eq!(nylon_project_route_source(handle, 0), 0);
+        assert_eq!(nylon_project_route_destination(handle, 0), 1);
+        assert_eq!(nylon_project_route_kind(handle, 0), 2);
+        assert_eq!(nylon_project_route_gain(handle, 0), 0.75);
+        assert_eq!(nylon_project_route_add(handle, 1, 0, 0, 1.0), 0);
+        assert_eq!(nylon_project_route_count(handle), 1);
+        assert_eq!(nylon_project_route_delete(handle, 0), 1);
+        assert_eq!(nylon_project_route_count(handle), 0);
+        assert_eq!(nylon_project_undo(handle), 1);
+        assert_eq!(nylon_project_route_count(handle), 1);
+        nylon_project_free(handle);
+    }
+}
+
+#[test]
 fn native_session_notes_and_arrangement_are_editable() {
     let handle = nylon_project_new();
     // SAFETY: This thread owns the handle and every output buffer until release.

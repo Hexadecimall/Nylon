@@ -197,6 +197,39 @@ bool Project::setTrackColorIndex(std::uint64_t index, int color)
 {
     return nylon_track_set_color_index(m_handle, index, color) != 0;
 }
+std::uint32_t Project::trackLatencyFrames(std::uint64_t index) const
+{
+    return nylon_track_latency_frames(m_handle, index);
+}
+bool Project::setTrackLatencyFrames(std::uint64_t index, std::uint32_t frames)
+{
+    return nylon_track_set_latency_frames(m_handle, index, frames) != 0;
+}
+
+std::vector<ProjectRoute> Project::routes() const
+{
+    std::vector<ProjectRoute> result;
+    const auto count = nylon_project_route_count(m_handle);
+    result.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t index = 0; index < count; ++index) {
+        result.push_back({nylon_project_route_source(m_handle, index),
+            nylon_project_route_destination(m_handle, index),
+            static_cast<RoutingKind>(nylon_project_route_kind(m_handle, index)),
+            nylon_project_route_gain(m_handle, index)});
+    }
+    return result;
+}
+bool Project::addRoute(
+    std::uint64_t source, std::uint64_t destination, RoutingKind kind, float gain)
+{
+    return nylon_project_route_add(
+               m_handle, source, destination, static_cast<int>(kind), gain)
+        != 0;
+}
+bool Project::deleteRoute(std::uint64_t index)
+{
+    return nylon_project_route_delete(m_handle, index) != 0;
+}
 
 std::uint64_t Project::sceneCount() const { return nylon_scene_count(m_handle); }
 bool Project::createScene(const std::string& name) { return nylon_scene_create(m_handle, name.c_str()) != 0; }
