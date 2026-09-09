@@ -140,6 +140,12 @@ locates to the requested beat, and streams stereo blocks into a WAVE writer.
 Notes crossing the range start are retriggered with their remaining duration.
 The same project, range, rate, and seed produce identical bytes.
 
+Each platform has one backend, selected by the `platform_audio` flag the
+build script sets. A platform with none still compiles and reports the
+absence when a stream is asked for. Every backend reports the block size
+the host granted rather than the one that was requested, so a caller that
+assumes its own request will be wrong on a device that rounds.
+
 `src/audio/coreaudio` drives a hardware output unit on macOS. The device
 decides its own buffer size, so the requested block is a request and the
 granted size is reported back; the maximum slice is set to the largest
@@ -147,6 +153,20 @@ block the engine can fill, because a device asking for more than the
 requested size otherwise renders nothing. A static core carries no record
 of the frameworks it calls into, so anything linking it names them; the
 imported target in `bindings/cmake/NylonCore.cmake` does that.
+
+`src/audio/alsa` drives Linux. The library is opened through the dynamic
+loader rather than linked, so the core needs nothing installed to build
+and a machine without it reports no devices. ALSA offers no callback: a
+stream owns a thread that renders a block and writes it, which gives the
+renderer the same contract a callback host does. The device rounds the
+requested block to its own period, and underruns are recovered and
+counted as dropouts.
+
+`src/audio/wasapi` drives Windows. Its interfaces are declared in tree, as
+the other backends declare theirs. A shared-mode client signals an event
+when it wants audio and a thread waits on it, renders, and copies into the
+buffer the client hands out; the client converts for a device mixing at
+another rate. A wait that times out is counted as a dropout.
 
 Tests that need a real device are marked ignored and run deliberately.
 
