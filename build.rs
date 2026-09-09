@@ -7,7 +7,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(platform_audio)");
     if matches!(
         std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("macos" | "linux")
+        Ok("macos" | "linux" | "windows")
     ) {
         println!("cargo::rustc-cfg=platform_audio");
     }

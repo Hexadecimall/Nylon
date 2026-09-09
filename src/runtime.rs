@@ -16,6 +16,8 @@ use crate::project::{Project, Snapshot, TrackKind};
 use crate::audio::alsa::{AlsaBackend, AlsaStream};
 #[cfg(target_os = "macos")]
 use crate::audio::coreaudio::{CoreAudioBackend, CoreAudioStream};
+#[cfg(target_os = "windows")]
+use crate::audio::wasapi::{WasapiBackend, WasapiStream};
 
 /// Maximum number of devices returned through the native interface.
 pub const MAX_DEVICES: usize = 64;
@@ -24,6 +26,8 @@ pub const MAX_DEVICES: usize = 64;
 type PlatformStream = CoreAudioStream;
 #[cfg(target_os = "linux")]
 type PlatformStream = AlsaStream;
+#[cfg(target_os = "windows")]
+type PlatformStream = WasapiStream;
 
 /// Opens the host's output and starts it.
 ///
@@ -38,6 +42,8 @@ fn start_platform_stream(
     let backend = CoreAudioBackend::new();
     #[cfg(target_os = "linux")]
     let backend = AlsaBackend::new()?;
+    #[cfg(target_os = "windows")]
+    let backend = WasapiBackend::new();
     let mut stream = backend.open_output(config, engine)?;
     stream.start()?;
     Ok(stream)
@@ -300,6 +306,10 @@ pub fn output_devices(out: &mut [DeviceInfo]) -> Result<usize, AudioError> {
         // an error to report.
         AlsaBackend::new().map_or(Ok(0), |backend| backend.devices(out))
     }
+    #[cfg(target_os = "windows")]
+    {
+        WasapiBackend::new().devices(out)
+    }
     #[cfg(not(platform_audio))]
     {
         let _ = out;
@@ -321,6 +331,10 @@ pub fn default_output() -> Result<DeviceId, AudioError> {
     #[cfg(target_os = "linux")]
     {
         AlsaBackend::new()?.default_output()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        WasapiBackend::new().default_output()
     }
     #[cfg(not(platform_audio))]
     {
