@@ -15,6 +15,8 @@ use std::sync::{
 
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 const VERSION: u32 = 3;
+const DOCUMENT_NAME: &str = "project.nylon";
+const RECOVERY_NAME: &str = ".autosave.nylon";
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -505,6 +507,8 @@ impl Project {
             redo,
             next_id,
             bundle_directory: None,
+            revision: 0,
+            saved_revision: 0,
         })
     }
 
@@ -531,37 +535,126 @@ impl Project {
                 fs::copy(source.join(media_path), destination)?;
             }
         }
-        let sequence = SAVE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let temporary = directory.join(format!(".project-{}-{sequence}.tmp", std::process::id()));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        let result: Result<(), PersistenceError> = (|| {
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temporary, directory.join("project.nylon"))?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result?;
+        write_document(directory, DOCUMENT_NAME, &bytes)?;
         self.bundle_directory = Some(directory.to_path_buf());
+        self.saved_revision = self.revision;
+        Self::discard_recovery(directory)?;
         Ok(())
     }
 
     pub fn load_bundle(directory: &Path) -> Result<Self, PersistenceError> {
-        let file = File::open(directory.join("project.nylon"))?;
-        if file.metadata()?.len() > MAX_BYTES as u64 {
-            return Err(PersistenceError::SizeLimit);
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+        let bytes = read_document(&directory.join(DOCUMENT_NAME))?;
         let mut project = Self::from_bytes(&bytes)?;
         project.bundle_directory = Some(directory.to_path_buf());
         Ok(project)
+    }
+
+    /// Write the current state to the bundle recovery sidecar.
+    pub fn autosave(&self) -> Result<(), PersistenceError> {
+        let directory = self
+            .bundle_directory
+            .as_deref()
+            .ok_or(PersistenceError::Io)?;
+        if !self.is_modified() {
+            return Self::discard_recovery(directory);
+        }
+        write_document(directory, RECOVERY_NAME, &self.to_bytes()?)
+    }
+
+    /// Report whether a complete recovery document is present.
+    pub fn recovery_available(directory: &Path) -> bool {
+        read_document(&directory.join(RECOVERY_NAME))
+            .and_then(|bytes| Self::from_bytes(&bytes))
+            .is_ok()
+    }
+
+    /// Load the recovery document while retaining its bundle origin.
+    pub fn recover_bundle(directory: &Path) -> Result<Self, PersistenceError> {
+        let bytes = read_document(&directory.join(RECOVERY_NAME))?;
+        let mut project = Self::from_bytes(&bytes)?;
+        project.bundle_directory = Some(directory.to_path_buf());
+        project.revision = 1;
+        project.saved_revision = 0;
+        Ok(project)
+    }
+
+    pub fn discard_recovery(directory: &Path) -> Result<(), PersistenceError> {
+        match fs::remove_file(directory.join(RECOVERY_NAME)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(PersistenceError::Io),
+        }
+    }
+}
+
+fn read_document(path: &Path) -> Result<Vec<u8>, PersistenceError> {
+    let file = File::open(path)?;
+    if file.metadata()?.len() > MAX_BYTES as u64 {
+        return Err(PersistenceError::SizeLimit);
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn write_document(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), PersistenceError> {
+    fs::create_dir_all(directory)?;
+    let sequence = SAVE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = directory.join(format!(".{name}-{}-{sequence}.tmp", std::process::id()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result: Result<(), PersistenceError> = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        replace_document(&temporary, &directory.join(name))?;
+        #[cfg(unix)]
+        File::open(directory)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(not(windows))]
+fn replace_document(source: &Path, destination: &Path) -> Result<(), PersistenceError> {
+    fs::rename(source, destination)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_document(source: &Path, destination: &Path) -> Result<(), PersistenceError> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(existing: *const u16, replacement: *const u16, flags: u32) -> i32;
+    }
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: Both strings are NUL-terminated and live for the duration of the call.
+    let replaced = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(PersistenceError::Io)
+    } else {
+        Ok(())
     }
 }
 

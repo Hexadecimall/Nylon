@@ -39,6 +39,20 @@ bool Project::open(const std::string& bundleDirectory)
 {
     return nylon_project_open(m_handle, bundleDirectory.c_str()) != 0;
 }
+bool Project::isModified() const { return nylon_project_is_modified(m_handle) != 0; }
+bool Project::autosave() const { return nylon_project_autosave(m_handle) != 0; }
+bool Project::recoveryAvailable(const std::string& bundleDirectory)
+{
+    return nylon_project_recovery_available(bundleDirectory.c_str()) != 0;
+}
+bool Project::recover(const std::string& bundleDirectory)
+{
+    return nylon_project_recover(m_handle, bundleDirectory.c_str()) != 0;
+}
+bool Project::discardRecovery(const std::string& bundleDirectory)
+{
+    return nylon_project_discard_recovery(bundleDirectory.c_str()) != 0;
+}
 bool Project::bounceWave(const std::string& path, double startBeats, double endBeats,
     std::uint32_t sampleRate, BounceReport& report) const
 {

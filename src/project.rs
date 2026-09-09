@@ -409,6 +409,8 @@ pub struct Project {
     pub(crate) redo: Vec<Arc<Snapshot>>,
     pub(crate) next_id: u64,
     pub(crate) bundle_directory: Option<std::path::PathBuf>,
+    pub(crate) revision: u64,
+    pub(crate) saved_revision: u64,
 }
 
 impl Default for Project {
@@ -440,6 +442,8 @@ impl Project {
             redo: Vec::new(),
             next_id: 9,
             bundle_directory: None,
+            revision: 0,
+            saved_revision: 0,
         }
     }
 
@@ -448,6 +452,9 @@ impl Project {
     }
     pub fn bundle_directory(&self) -> Option<&std::path::Path> {
         self.bundle_directory.as_deref()
+    }
+    pub fn is_modified(&self) -> bool {
+        self.revision != self.saved_revision
     }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
@@ -750,6 +757,7 @@ impl Project {
             .push(std::mem::replace(&mut self.current, Arc::new(snapshot)));
         self.redo.clear();
         self.next_id = next_id;
+        self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
 
@@ -757,6 +765,7 @@ impl Project {
         if let Some(snapshot) = self.undo.pop() {
             self.redo
                 .push(std::mem::replace(&mut self.current, snapshot));
+            self.revision = self.revision.wrapping_add(1);
             true
         } else {
             false
@@ -767,6 +776,7 @@ impl Project {
         if let Some(snapshot) = self.redo.pop() {
             self.undo
                 .push(std::mem::replace(&mut self.current, snapshot));
+            self.revision = self.revision.wrapping_add(1);
             true
         } else {
             false

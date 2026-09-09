@@ -222,6 +222,36 @@ fn native_save_open_preserves_state_and_rejects_corrupt_documents() {
 }
 
 #[test]
+fn native_recovery_keeps_the_primary_document_separate() {
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::path::PathBuf::from("target").join(format!("native-recovery-{tick}"));
+    let path = std::ffi::CString::new(directory.to_str().unwrap()).unwrap();
+    let handle = nylon_project_new();
+    // SAFETY: This thread owns the handle and supplies a terminated path string.
+    unsafe {
+        assert_eq!(nylon_project_save(handle, path.as_ptr()), 1);
+        assert_eq!(nylon_project_is_modified(handle), 0);
+        assert_eq!(nylon_project_set_tempo(handle, 152.0), 1);
+        assert_eq!(nylon_project_is_modified(handle), 1);
+        assert_eq!(nylon_project_autosave(handle), 1);
+        assert_eq!(nylon_project_recovery_available(path.as_ptr()), 1);
+        assert_eq!(nylon_project_new_in_place(handle), 1);
+        assert_eq!(nylon_project_open(handle, path.as_ptr()), 1);
+        assert_eq!(nylon_project_tempo(handle), 120.0);
+        assert_eq!(nylon_project_recover(handle, path.as_ptr()), 1);
+        assert_eq!(nylon_project_tempo(handle), 152.0);
+        assert_eq!(nylon_project_is_modified(handle), 1);
+        assert_eq!(nylon_project_discard_recovery(path.as_ptr()), 1);
+        assert_eq!(nylon_project_recovery_available(path.as_ptr()), 0);
+        nylon_project_free(handle);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn native_session_notes_and_arrangement_are_editable() {
     let handle = nylon_project_new();
     // SAFETY: This thread owns the handle and every output buffer until release.

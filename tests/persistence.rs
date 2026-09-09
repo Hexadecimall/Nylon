@@ -223,3 +223,56 @@ fn bundle_save_replaces_the_document_without_leaving_temporary_files() {
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn autosave_preserves_the_saved_document_until_recovery_is_selected() {
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::path::PathBuf::from("target").join(format!("recovery-{tick}"));
+    let mut project = Project::new();
+    project.save_bundle(&directory).unwrap();
+    assert!(!project.is_modified());
+    assert!(!Project::recovery_available(&directory));
+
+    project.apply(&[Command::SetTempo(147.0)]).unwrap();
+    assert!(project.is_modified());
+    project.autosave().unwrap();
+    assert!(Project::recovery_available(&directory));
+    assert_eq!(
+        Project::load_bundle(&directory).unwrap().snapshot().tempo(),
+        120.0
+    );
+
+    let mut recovered = Project::recover_bundle(&directory).unwrap();
+    assert_eq!(recovered.snapshot().tempo(), 147.0);
+    assert!(recovered.is_modified());
+    recovered.save_bundle(&directory).unwrap();
+    assert!(!recovered.is_modified());
+    assert!(!Project::recovery_available(&directory));
+    assert_eq!(
+        Project::load_bundle(&directory).unwrap().snapshot().tempo(),
+        147.0
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn recovery_rejects_corruption_and_unsaved_projects_cannot_autosave() {
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::path::PathBuf::from("target").join(format!("bad-recovery-{tick}"));
+    let project = Project::new();
+    assert_eq!(project.autosave(), Err(PersistenceError::Io));
+
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join(".autosave.nylon"), b"damaged").unwrap();
+    assert!(!Project::recovery_available(&directory));
+    assert!(Project::recover_bundle(&directory).is_err());
+    Project::discard_recovery(&directory).unwrap();
+    assert!(!directory.join(".autosave.nylon").exists());
+    std::fs::remove_dir_all(directory).unwrap();
+}

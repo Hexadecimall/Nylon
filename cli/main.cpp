@@ -127,6 +127,15 @@ int directCommand(const QString& bundle, const QStringList& positional)
     const QString command = positional[0];
     if (command == "devices" && positional.size() == 1) return listDevices();
     if (bundle.isEmpty()) return fail("A project bundle is required with --project");
+    if (command == "recovery-status" && positional.size() == 1) {
+        return writeJson({{"ok", true},
+            {"available", nylon::Project::recoveryAvailable(bundle.toStdString())}});
+    }
+    if (command == "discard-recovery" && positional.size() == 1) {
+        if (!nylon::Project::discardRecovery(bundle.toStdString()))
+            return fail("Could not discard the recovery document");
+        return writeJson({{"ok", true}});
+    }
 
     nylon::Project project;
     if (!project) return fail("Could not create a project handle");
@@ -134,6 +143,11 @@ int directCommand(const QString& bundle, const QStringList& positional)
         if (positional.size() != 1) return fail("new takes no arguments");
         if (QFileInfo::exists(bundle)) return fail("The project bundle already exists");
         if (!project.save(bundle.toStdString())) return fail("Could not create the project bundle");
+        return writeJson({{"ok", true}});
+    }
+    if (command == "recover" && positional.size() == 1) {
+        if (!project.recover(bundle.toStdString())) return fail("No valid recovery document");
+        if (!project.save(bundle.toStdString())) return fail("Could not save recovered state");
         return writeJson({{"ok", true}});
     }
     if (!project.open(bundle.toStdString())) return fail("Could not open the project bundle");

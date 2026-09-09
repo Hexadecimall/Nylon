@@ -86,6 +86,14 @@ int nylon_project_new_in_place(void* project);
  * bundle's. Both return 0 on any I/O or format error. */
 int nylon_project_save(void* project, const char* bundle_directory);
 int nylon_project_open(void* project, const char* bundle_directory);
+int nylon_project_is_modified(const void* project);
+
+/* Writes modified state to an atomic recovery sidecar. A saved project is
+ * required. Recovery stays separate from the primary document until selected. */
+int nylon_project_autosave(const void* project);
+int nylon_project_recovery_available(const char* bundle_directory);
+int nylon_project_recover(void* project, const char* bundle_directory);
+int nylon_project_discard_recovery(const char* bundle_directory);
 
 /* Renders a beat range to a stereo 24-bit WAVE file at the selected sample
  * rate. The report is written only after the file is complete. */

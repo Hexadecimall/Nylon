@@ -73,6 +73,11 @@ public:
     // Bundle directory persistence; paths are UTF-8.
     bool save(const std::string& bundleDirectory);
     bool open(const std::string& bundleDirectory);
+    bool isModified() const;
+    bool autosave() const;
+    static bool recoveryAvailable(const std::string& bundleDirectory);
+    bool recover(const std::string& bundleDirectory);
+    static bool discardRecovery(const std::string& bundleDirectory);
     bool bounceWave(const std::string& path, double startBeats, double endBeats,
         std::uint32_t sampleRate, BounceReport& report) const;
 

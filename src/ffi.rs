@@ -464,6 +464,76 @@ pub unsafe extern "C" fn nylon_project_save(handle: *mut Project, directory: *co
 }
 
 /// # Safety
+/// A non-null handle must refer to a live project with no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_is_modified(handle: *const Project) -> i32 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    unsafe { handle.as_ref() }.map_or(0, |project| i32::from(project.is_modified()))
+}
+
+/// # Safety
+/// The project must be live with no concurrent mutation. This performs control-thread I/O.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_autosave(handle: *const Project) -> i32 {
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    unsafe { handle.as_ref() }.map_or(0, |project| i32::from(project.autosave().is_ok()))
+}
+
+unsafe fn recovery_directory(directory: *const c_char) -> Option<std::path::PathBuf> {
+    if directory.is_null() {
+        return None;
+    }
+    // SAFETY: Callers supply a terminated readable directory string.
+    let directory = unsafe { CStr::from_ptr(directory) }.to_str().ok()?;
+    if directory.is_empty() {
+        return None;
+    }
+    Some(std::path::PathBuf::from(directory))
+}
+
+/// # Safety
+/// `directory` must be a readable NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_recovery_available(directory: *const c_char) -> i32 {
+    // SAFETY: The caller supplies the directory storage for this call.
+    unsafe { recovery_directory(directory) }
+        .map_or(0, |path| i32::from(Project::recovery_available(&path)))
+}
+
+/// # Safety
+/// The project must be live and exclusive. `directory` must be a readable
+/// NUL-terminated UTF-8 string. Failure preserves the current project.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_recover(
+    handle: *mut Project,
+    directory: *const c_char,
+) -> i32 {
+    // SAFETY: The caller provides a live exclusive handle.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    // SAFETY: The caller supplies the directory storage for this call.
+    let Some(directory) = (unsafe { recovery_directory(directory) }) else {
+        return 0;
+    };
+    let Ok(recovered) = Project::recover_bundle(&directory) else {
+        return 0;
+    };
+    *project = recovered;
+    1
+}
+
+/// # Safety
+/// `directory` must be a readable NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_project_discard_recovery(directory: *const c_char) -> i32 {
+    // SAFETY: The caller supplies the directory storage for this call.
+    unsafe { recovery_directory(directory) }.map_or(0, |path| {
+        i32::from(Project::discard_recovery(&path).is_ok())
+    })
+}
+
+/// # Safety
 /// The project must be live and exclusive. A non-null directory must be a readable
 /// NUL-terminated UTF-8 string. Failed loads preserve the current project and history.
 #[unsafe(no_mangle)]
