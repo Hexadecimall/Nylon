@@ -599,6 +599,15 @@ fn zeroed_track_audio() -> Box<[[[f32; 2]; MAX_FRAMES]; MAX_TRACKS]> {
         .unwrap_or_else(|_| unreachable!())
 }
 
+/// Builds instrument banks one at a time into heap storage.
+fn voice_banks(sample_rate: f32) -> Box<[VoiceBank]> {
+    let mut banks = Vec::with_capacity(MAX_INSTRUMENTS);
+    for _ in 0..MAX_INSTRUMENTS {
+        banks.push(VoiceBank::new(Patch::default(), sample_rate));
+    }
+    banks.into_boxed_slice()
+}
+
 /// The renderer that mixes a project.
 pub struct PlaybackEngine {
     mixer: Mixer,
@@ -617,7 +626,7 @@ pub struct PlaybackEngine {
     // without optimisation copies a returned value through the stack, and a
     // thread with a small stack cannot afford that.
     applied_score: Box<Score>,
-    instruments: Box<[VoiceBank; MAX_INSTRUMENTS]>,
+    instruments: Box<[VoiceBank]>,
     // One buffer per instrument track, which the mixer then sums. Owned so
     // the render path borrows it rather than allocating.
     track_audio: Box<[[[f32; 2]; MAX_FRAMES]; MAX_TRACKS]>,
@@ -653,9 +662,7 @@ impl PlaybackEngine {
             state: state_writer,
             applied: MixSettings::new(),
             applied_score: Score::boxed(),
-            instruments: Box::new(core::array::from_fn(|_| {
-                VoiceBank::new(Patch::default(), rate as f32)
-            })),
+            instruments: voice_banks(rate as f32),
             track_audio: zeroed_track_audio(),
             automation_dropped: 0,
         };
