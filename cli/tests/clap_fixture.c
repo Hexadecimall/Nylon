@@ -374,6 +374,9 @@ static const void* fixture_plugin_extension(const ClapPlugin* plugin, const char
 static int32_t fixture_plugin_process(const ClapPlugin* plugin, const ClapProcess* process)
 {
     (void)plugin;
+#if defined(NYLON_FIXTURE_HANG)
+    for (;;) {}
+#endif
     if (!fixture_plugin_processing || process == 0 || process->audio_inputs_count != 1
         || process->audio_outputs_count != 1 || process->audio_inputs == 0
         || process->audio_outputs == 0 || process->audio_inputs[0].channel_count != 2

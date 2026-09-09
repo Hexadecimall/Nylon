@@ -219,7 +219,10 @@ so instruments with no audio input receive events and produce stereo output.
 The core worker client starts and owns the process, validates bounded handshake
 metadata, reuses request and response buffers, and rejects malformed event
 ranges before sending a block. It performs blocking pipe I/O and therefore runs
-on a dedicated IPC thread. A bounded bridge adds one block of declared latency
+on a dedicated IPC thread. A process watchdog bounds startup to ten seconds and
+each processing or state response to two seconds. A missed deadline terminates
+the worker, closes its request pipe, and makes later calls fail immediately. A
+bounded bridge adds one block of declared latency
 between that thread and the render callback. Every audio and event buffer is
 allocated when the bridge opens. The callback uses wait-free queues and returns
 a delayed dry block when the worker misses its deadline. Submitted, completed,

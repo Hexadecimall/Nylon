@@ -12,7 +12,7 @@ bool close(float left, float right) { return std::fabs(left - right) < 0.000001F
 
 int main(int argc, char** argv)
 {
-    if (argc != 3) return 1;
+    if (argc != 4) return 1;
     auto worker = nylon::ClapWorker::open(argv[1], argv[2],
         "app.nylon.fixture", 48'000.0, 64);
     if (!worker) return 2;
@@ -84,5 +84,20 @@ int main(int argc, char** argv)
     if (bridge.submittedBlocks() != 2 || bridge.underruns() != 0
         || bridge.queueDrops() != 0 || bridge.workerFailures() != 0)
         return 20;
+    auto hanging = nylon::ClapWorker::open(argv[1], argv[3],
+        "app.nylon.fixture", 48'000.0, 64);
+    if (!hanging) return 21;
+    const auto hangStart = std::chrono::steady_clock::now();
+    if (hanging.processStereo(inputLeft, inputRight, outputLeft, outputRight, 1,
+            nullptr, 0, nullptr, 0))
+        return 22;
+    if (std::chrono::steady_clock::now() - hangStart > std::chrono::seconds(3))
+        return 23;
+    const auto retryStart = std::chrono::steady_clock::now();
+    if (hanging.processStereo(inputLeft, inputRight, outputLeft, outputRight, 1,
+            nullptr, 0, nullptr, 0))
+        return 24;
+    if (std::chrono::steady_clock::now() - retryStart > std::chrono::milliseconds(50))
+        return 25;
     return 0;
 }

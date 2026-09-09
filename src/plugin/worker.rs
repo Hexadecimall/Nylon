@@ -12,7 +12,9 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::thread;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const HEADER: [u8; 8] = *b"NYWORK4\0";
@@ -23,6 +25,8 @@ const MAX_PARAMETERS: usize = 16_384;
 const MAX_PARAMETER_NAME_BYTES: usize = 255;
 const MAX_PARAMETER_MODULE_BYTES: usize = 1_023;
 const STOP_TIMEOUT: Duration = Duration::from_millis(100);
+const START_TIMEOUT: Duration = Duration::from_secs(10);
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub enum Error {
@@ -35,6 +39,7 @@ pub enum Error {
     ParameterLimit,
     InvalidBlock,
     StateTooLarge,
+    Timeout,
 }
 
 impl fmt::Display for Error {
@@ -49,6 +54,7 @@ impl fmt::Display for Error {
             Self::ParameterLimit => output.write_str("Worker parameter limit was exceeded"),
             Self::InvalidBlock => output.write_str("Worker audio block is invalid"),
             Self::StateTooLarge => output.write_str("Plugin state exceeds the size limit"),
+            Self::Timeout => output.write_str("Worker process stopped responding"),
         }
     }
 }
@@ -65,7 +71,7 @@ struct Handshake {
 
 /// Owns one plugin process and its blocking protocol pipes.
 pub struct Client {
-    child: Child,
+    process: ProcessGuard,
     input: Option<ChildStdin>,
     output: ChildStdout,
     latency_frames: u32,
@@ -75,6 +81,7 @@ pub struct Client {
     max_frames: usize,
     request: Vec<u8>,
     response: Vec<u8>,
+    responsive: bool,
 }
 
 impl Client {
@@ -111,25 +118,24 @@ impl Client {
             terminate(&mut child);
             return Err(Error::MissingPipe);
         };
-        if let Err(error) = input.write_all(&HEADER).map_err(Error::Input) {
-            terminate(&mut child);
-            return Err(error);
-        }
-        if let Err(error) = input.flush().map_err(Error::Input) {
-            terminate(&mut child);
-            return Err(error);
-        }
-        let handshake = match read_handshake(&mut output) {
+        let process = ProcessGuard::new(child);
+        process.arm(START_TIMEOUT);
+        let handshake_result = (|| {
+            input.write_all(&HEADER).map_err(Error::Input)?;
+            input.flush().map_err(Error::Input)?;
+            read_handshake(&mut output)
+        })();
+        let handshake = match process.finish(handshake_result) {
             Ok(handshake) => handshake,
             Err(error) => {
-                terminate(&mut child);
+                process.terminate();
                 return Err(error);
             }
         };
         let request_capacity =
             12 + MAX_PARAMETER_EVENTS * 16 + MAX_NOTE_EVENTS * 26 + max_frames * 8;
         Ok(Self {
-            child,
+            process,
             input: Some(input),
             output,
             latency_frames: handshake.latency_frames,
@@ -139,6 +145,7 @@ impl Client {
             max_frames,
             request: Vec::with_capacity(request_capacity),
             response: vec![0; max_frames * 8],
+            responsive: true,
         })
     }
 
@@ -199,6 +206,9 @@ impl Client {
         {
             return Err(Error::InvalidBlock);
         }
+        if !self.responsive {
+            return Err(Error::MissingPipe);
+        }
 
         self.request.clear();
         push_u32(&mut self.request, frames as u32);
@@ -228,62 +238,79 @@ impl Client {
             self.request.extend_from_slice(&left.to_le_bytes());
             self.request.extend_from_slice(&right.to_le_bytes());
         }
-        self.write_request()?;
-
-        let response_frames = read_u32(&mut self.output).map_err(Error::Output)? as usize;
-        if response_frames != frames {
-            return Err(Error::InvalidProtocol);
-        }
-        let byte_count = frames * 8;
-        self.output
-            .read_exact(&mut self.response[..byte_count])
-            .map_err(Error::Output)?;
-        for frame in 0..frames {
-            let offset = frame * 8;
-            output_left[frame] = f32::from_le_bytes(
-                self.response[offset..offset + 4]
-                    .try_into()
-                    .map_err(|_| Error::InvalidProtocol)?,
-            );
-            output_right[frame] = f32::from_le_bytes(
-                self.response[offset + 4..offset + 8]
-                    .try_into()
-                    .map_err(|_| Error::InvalidProtocol)?,
-            );
-        }
-        Ok(())
+        self.process.arm(RESPONSE_TIMEOUT);
+        let result = (|| {
+            self.write_request()?;
+            let response_frames = read_u32(&mut self.output).map_err(Error::Output)? as usize;
+            if response_frames != frames {
+                return Err(Error::InvalidProtocol);
+            }
+            let byte_count = frames * 8;
+            self.output
+                .read_exact(&mut self.response[..byte_count])
+                .map_err(Error::Output)?;
+            for frame in 0..frames {
+                let offset = frame * 8;
+                output_left[frame] = f32::from_le_bytes(
+                    self.response[offset..offset + 4]
+                        .try_into()
+                        .map_err(|_| Error::InvalidProtocol)?,
+                );
+                output_right[frame] = f32::from_le_bytes(
+                    self.response[offset + 4..offset + 8]
+                        .try_into()
+                        .map_err(|_| Error::InvalidProtocol)?,
+                );
+            }
+            Ok(())
+        })();
+        self.finish_operation(result)
     }
 
     pub fn save_state(&mut self) -> Result<Vec<u8>, Error> {
+        if !self.responsive {
+            return Err(Error::MissingPipe);
+        }
         self.request.clear();
         push_u32(&mut self.request, SAVE_STATE);
-        self.write_request()?;
-        if read_u32(&mut self.output).map_err(Error::Output)? != SAVE_STATE {
-            return Err(Error::InvalidProtocol);
-        }
-        let length = usize::try_from(read_u64(&mut self.output).map_err(Error::Output)?)
-            .ok()
-            .filter(|length| *length <= MAX_STATE_BYTES)
-            .ok_or(Error::StateTooLarge)?;
-        let mut state = vec![0; length];
-        self.output.read_exact(&mut state).map_err(Error::Output)?;
-        Ok(state)
+        self.process.arm(RESPONSE_TIMEOUT);
+        let result = (|| {
+            self.write_request()?;
+            if read_u32(&mut self.output).map_err(Error::Output)? != SAVE_STATE {
+                return Err(Error::InvalidProtocol);
+            }
+            let length = usize::try_from(read_u64(&mut self.output).map_err(Error::Output)?)
+                .ok()
+                .filter(|length| *length <= MAX_STATE_BYTES)
+                .ok_or(Error::StateTooLarge)?;
+            let mut state = vec![0; length];
+            self.output.read_exact(&mut state).map_err(Error::Output)?;
+            Ok(state)
+        })();
+        self.finish_operation(result)
     }
 
     pub fn load_state(&mut self, state: &[u8]) -> Result<(), Error> {
         if state.len() > MAX_STATE_BYTES {
             return Err(Error::StateTooLarge);
         }
+        if !self.responsive {
+            return Err(Error::MissingPipe);
+        }
         self.request.clear();
         push_u32(&mut self.request, LOAD_STATE);
         self.request
             .extend_from_slice(&(state.len() as u64).to_le_bytes());
         self.request.extend_from_slice(state);
-        self.write_request()?;
-        if read_u32(&mut self.output).map_err(Error::Output)? != LOAD_STATE {
-            return Err(Error::InvalidProtocol);
-        }
-        Ok(())
+        self.process.arm(RESPONSE_TIMEOUT);
+        let result = (|| {
+            self.write_request()?;
+            if read_u32(&mut self.output).map_err(Error::Output)? != LOAD_STATE {
+                return Err(Error::InvalidProtocol);
+            }
+            Ok(())
+        })();
+        self.finish_operation(result)
     }
 
     pub fn shutdown(mut self) {
@@ -296,21 +323,129 @@ impl Client {
         input.flush().map_err(Error::Input)
     }
 
+    fn finish_operation<T>(&mut self, result: Result<T, Error>) -> Result<T, Error> {
+        let result = self.process.finish(result);
+        if result.is_err() {
+            self.responsive = false;
+            drop(self.input.take());
+        }
+        result
+    }
+
     fn stop(&mut self) {
-        if let Some(mut input) = self.input.take() {
-            let _ = input.write_all(&0_u32.to_le_bytes());
-            let _ = input.flush();
+        drop(self.input.take());
+        self.process.stop();
+    }
+}
+
+enum WatchdogCommand {
+    Arm(Duration),
+    Disarm,
+    Stop,
+}
+
+struct ProcessGuard {
+    child: Arc<Mutex<Child>>,
+    commands: Sender<WatchdogCommand>,
+    acknowledgements: Receiver<bool>,
+    watchdog: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl ProcessGuard {
+    fn new(child: Child) -> Self {
+        let child = Arc::new(Mutex::new(child));
+        let (command_tx, command_rx) = mpsc::channel();
+        let (ack_tx, ack_rx) = mpsc::channel();
+        let watched = Arc::clone(&child);
+        let watchdog = thread::spawn(move || watchdog_loop(watched, command_rx, ack_tx));
+        Self {
+            child,
+            commands: command_tx,
+            acknowledgements: ack_rx,
+            watchdog: Mutex::new(Some(watchdog)),
+        }
+    }
+
+    fn arm(&self, timeout: Duration) {
+        let _ = self.commands.send(WatchdogCommand::Arm(timeout));
+    }
+
+    fn finish<T>(&self, result: Result<T, Error>) -> Result<T, Error> {
+        if self.commands.send(WatchdogCommand::Disarm).is_err() {
+            return Err(Error::Timeout);
+        }
+        match self.acknowledgements.recv() {
+            Ok(true) | Err(_) => Err(Error::Timeout),
+            Ok(false) => result,
+        }
+    }
+
+    fn terminate(&self) {
+        if let Ok(mut child) = self.child.lock() {
+            terminate(&mut child);
+        }
+    }
+
+    fn stop(&self) {
+        let _ = self.commands.send(WatchdogCommand::Stop);
+        if let Ok(mut slot) = self.watchdog.lock()
+            && let Some(watchdog) = slot.take()
+        {
+            let _ = watchdog.join();
         }
         let deadline = Instant::now() + STOP_TIMEOUT;
         loop {
-            match self.child.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(1)),
+            let status = self
+                .child
+                .lock()
+                .ok()
+                .and_then(|mut child| child.try_wait().ok());
+            match status {
+                Some(Some(_)) => return,
+                Some(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(1));
+                }
                 _ => break,
             }
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.terminate();
+    }
+}
+
+fn watchdog_loop(
+    child: Arc<Mutex<Child>>,
+    commands: Receiver<WatchdogCommand>,
+    acknowledgements: Sender<bool>,
+) {
+    let mut deadline: Option<Instant> = None;
+    let mut timed_out = false;
+    loop {
+        let command = match deadline {
+            Some(at) => commands.recv_timeout(at.saturating_duration_since(Instant::now())),
+            None => match commands.recv() {
+                Ok(command) => Ok(command),
+                Err(_) => return,
+            },
+        };
+        match command {
+            Ok(WatchdogCommand::Arm(timeout)) => {
+                deadline = Some(Instant::now() + timeout);
+                timed_out = false;
+            }
+            Ok(WatchdogCommand::Disarm) => {
+                deadline = None;
+                let _ = acknowledgements.send(timed_out);
+                timed_out = false;
+            }
+            Ok(WatchdogCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.kill();
+                }
+                deadline = None;
+                timed_out = true;
+            }
+        }
     }
 }
 
