@@ -852,6 +852,10 @@ impl Backend for CoreAudioBackend {
     }
 }
 
+/// Planar input storage with the alignment required by `AudioUnitRender`.
+#[repr(align(16))]
+struct CaptureStorage([[f32; MAX_FRAMES]; 2]);
+
 /// Shared state the input callback reads.
 struct CaptureShared {
     // The unit the callback pulls from, which the stream keeps alive.
@@ -862,7 +866,8 @@ struct CaptureShared {
     // The buffer the unit is asked to fill. It is allocated when the
     // stream opens, so the callback only writes into it.
     channels: usize,
-    storage: [[f32; MAX_FRAMES]; 2],
+    storage: CaptureStorage,
+    block: [[f32; 2]; MAX_FRAMES],
 }
 
 // SAFETY: The state is owned by one stream, which stops the unit before
@@ -879,7 +884,7 @@ unsafe extern "C" fn input_callback(
     ref_con: *mut c_void,
     flags: *mut u32,
     timestamp: *const TimeStamp,
-    bus: u32,
+    _bus: u32,
     frames: u32,
     _buffers: *mut BufferList,
 ) -> OSStatus {
@@ -905,30 +910,37 @@ unsafe extern "C" fn input_callback(
             Buffer {
                 channels: 1,
                 data_byte_size: (count * size_of::<f32>()) as u32,
-                data: shared.storage[0].as_mut_ptr().cast(),
+                data: shared.storage.0[0].as_mut_ptr().cast(),
             },
             Buffer {
                 channels: 1,
                 data_byte_size: (count * size_of::<f32>()) as u32,
-                data: shared.storage[1].as_mut_ptr().cast(),
+                data: shared.storage.0[1].as_mut_ptr().cast(),
             },
         ],
     };
     // SAFETY: The unit is running and the list points at storage large
     // enough for the frames it was asked for.
-    let status =
-        unsafe { AudioUnitRender(shared.unit, flags, timestamp, bus, frames, &raw mut list) };
+    let status = unsafe {
+        AudioUnitRender(
+            shared.unit,
+            flags,
+            timestamp,
+            ELEMENT_INPUT,
+            frames,
+            &raw mut list,
+        )
+    };
     if status != NO_ERROR {
         shared.dropouts.fetch_add(1, Ordering::Relaxed);
         return NO_ERROR;
     }
 
     // The channels arrive apart; the capturer takes stereo frames.
-    let mut block = [[0.0_f32; 2]; MAX_FRAMES];
     // A mono device is heard on both sides rather than only the left.
     let right = usize::from(shared.channels > 1);
-    for (index, frame) in block[..count].iter_mut().enumerate() {
-        *frame = [shared.storage[0][index], shared.storage[right][index]];
+    for (index, frame) in shared.block[..count].iter_mut().enumerate() {
+        *frame = [shared.storage.0[0][index], shared.storage.0[right][index]];
     }
     let timing = BlockTiming {
         frame: shared.frames.load(Ordering::Relaxed),
@@ -937,7 +949,7 @@ unsafe extern "C" fn input_callback(
     // SAFETY: The capturer is owned by the stream, which stops the unit
     // before dropping it, so no other reference exists during this call.
     let capturer = unsafe { &mut *shared.capturer };
-    capturer.capture(&block[..count], timing);
+    capturer.capture(&shared.block[..count], timing);
     shared.frames.fetch_add(count as u64, Ordering::Relaxed);
     NO_ERROR
 }
@@ -1137,24 +1149,22 @@ impl InputBackend for CoreAudioBackend {
             unit,
             initialized: false,
             running: false,
-            config,
+            config: StreamConfig {
+                device: DeviceId(u64::from(device)),
+                channels: taken as u16,
+                ..config
+            },
             shared: Box::new(CaptureShared {
                 unit,
                 capturer: ptr::null_mut::<PlaceholderCapturer>(),
                 frames: AtomicU64::new(0),
                 dropouts: AtomicU64::new(0),
                 channels: taken,
-                storage: [[0.0; MAX_FRAMES]; 2],
+                storage: CaptureStorage([[0.0; MAX_FRAMES]; 2]),
+                block: [[0.0; 2]; MAX_FRAMES],
             }),
             capturer: None,
         };
-
-        let mut prepared = capturer;
-        prepared.prepare(config);
-        let boxed: Box<dyn Capturer> = Box::new(prepared);
-        let mut boxed = boxed;
-        stream.shared.capturer = &raw mut *boxed;
-        stream.capturer = Some(boxed);
 
         // The hardware unit carries both directions; only input is wanted.
         let enable: u32 = 1;
@@ -1296,6 +1306,12 @@ impl InputBackend for CoreAudioBackend {
         if status == NO_ERROR && settled.sample_rate > 0.0 {
             stream.config.sample_rate = settled.sample_rate as u32;
         }
+        let mut prepared = capturer;
+        prepared.prepare(stream.config);
+        let boxed: Box<dyn Capturer> = Box::new(prepared);
+        let mut boxed = boxed;
+        stream.shared.capturer = &raw mut *boxed;
+        stream.capturer = Some(boxed);
         Ok(stream)
     }
 }
@@ -1317,8 +1333,8 @@ impl CoreAudioCapture {
     /// so the callback cannot be running when it is handed over.
     #[must_use]
     pub fn into_capturer(mut self) -> Option<Box<dyn Capturer>> {
-        if self.running {
-            let _ = self.stop();
+        if self.running && self.stop().is_err() {
+            return None;
         }
         self.capturer.take()
     }
@@ -1581,6 +1597,42 @@ mod tests {
 
     impl Capturer for SilentCapturer {
         fn capture(&mut self, _input: &[[f32; 2]], _timing: BlockTiming) {}
+    }
+
+    struct CountingCapturer {
+        frames: std::sync::Arc<AtomicU64>,
+    }
+
+    impl Capturer for CountingCapturer {
+        fn capture(&mut self, input: &[[f32; 2]], _timing: BlockTiming) {
+            self.frames.fetch_add(input.len() as u64, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a real audio input device and permission"]
+    fn a_real_input_delivers_frames() {
+        let backend = CoreAudioBackend::new();
+        let device = backend.default_input().unwrap();
+        let frames = std::sync::Arc::new(AtomicU64::new(0));
+        let mut stream = backend
+            .open_input(
+                StreamConfig {
+                    device,
+                    sample_rate: 48_000,
+                    channels: 2,
+                    block_frames: 512,
+                },
+                CountingCapturer {
+                    frames: frames.clone(),
+                },
+            )
+            .unwrap();
+        stream.start().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        stream.stop().unwrap();
+        assert!(frames.load(Ordering::Relaxed) > 0);
+        assert!(stream.frames_rendered() > 0);
     }
 
     /// An empty entry for a buffer the host fills.
