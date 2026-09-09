@@ -96,6 +96,7 @@ def main():
             call("undo")
             call("redo")
             call("play", succeeds=False)
+            call("panic", succeeds=False)
             call("locate", "bad", succeeds=False)
             call("unknown", succeeds=False)
             call("quit")

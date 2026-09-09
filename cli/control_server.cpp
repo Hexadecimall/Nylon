@@ -201,6 +201,8 @@ public:
             return audioResult(
                 m_audio.allNotesOff(m_project, track), "release the live MIDI notes");
         }
+        if (command == "panic" && args.isEmpty())
+            return audioResult(m_audio.allNotesOff(m_project), "release all live MIDI notes");
         if (command == "locate" && args.size() == 1) {
             double beats = 0.0;
             if (!numberValue(args[0], beats) || beats < 0.0) return error("Invalid beat position");

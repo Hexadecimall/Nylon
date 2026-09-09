@@ -574,6 +574,28 @@ impl AudioRuntime {
             .is_some_and(|publisher| publisher.all_notes_off(track))
     }
 
+    /// Releases every live note on every MIDI track at the next callback boundary.
+    pub fn all_notes_off_all(&mut self, project: &Project) -> bool {
+        if !self.is_open() {
+            return false;
+        }
+        let snapshot = project.snapshot();
+        let Some(publisher) = self.publisher.as_mut() else {
+            return false;
+        };
+        let mut found = false;
+        for (index, track) in snapshot.tracks().iter().enumerate() {
+            if track.kind() != TrackKind::Midi {
+                continue;
+            }
+            found = true;
+            if !publisher.all_notes_off(index) {
+                return false;
+            }
+        }
+        found
+    }
+
     /// Moves the playhead at the next block boundary.
     pub fn locate(&mut self, beats: f64) -> bool {
         if !self.is_open() || !beats.is_finite() || beats < 0.0 {

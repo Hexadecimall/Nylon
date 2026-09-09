@@ -552,6 +552,7 @@ public:
         std::uint8_t velocity);
     bool noteOff(const Project& project, std::uint64_t track, std::uint8_t pitch);
     bool allNotesOff(const Project& project, std::uint64_t track);
+    bool allNotesOff(const Project& project);
 
     bool play();
     bool stop();

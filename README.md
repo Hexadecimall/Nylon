@@ -60,6 +60,7 @@ nylon-control --endpoint nylon-live track-devices 0
 nylon-control --endpoint nylon-live note-on 0 60 100
 nylon-control --endpoint nylon-live note-off 0 60
 nylon-control --endpoint nylon-live all-notes-off 0
+nylon-control --endpoint nylon-live panic
 nylon-control --endpoint nylon-live launch-clip 0 0 1
 nylon-control --endpoint nylon-live stop-clip 0
 nylon-control --endpoint nylon-live quit

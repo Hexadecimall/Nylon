@@ -594,6 +594,7 @@ int nylon_live_note_off(void* audio, const void* project,
     unsigned long long track, unsigned char pitch);
 int nylon_live_all_notes_off(
     void* audio, const void* project, unsigned long long track);
+int nylon_live_all_notes_off_all(void* audio, const void* project);
 
 int nylon_transport_play(void* audio);
 int nylon_transport_stop(void* audio);

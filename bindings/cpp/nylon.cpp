@@ -1166,6 +1166,10 @@ bool AudioEngine::allNotesOff(const Project& project, std::uint64_t track)
 {
     return nylon_live_all_notes_off(m_handle, project.raw(), track) != 0;
 }
+bool AudioEngine::allNotesOff(const Project& project)
+{
+    return nylon_live_all_notes_off_all(m_handle, project.raw()) != 0;
+}
 bool AudioEngine::play() { return nylon_transport_play(m_handle) != 0; }
 bool AudioEngine::stop() { return nylon_transport_stop(m_handle) != 0; }
 bool AudioEngine::locate(double beats) { return nylon_transport_locate(m_handle, beats) != 0; }

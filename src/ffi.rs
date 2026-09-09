@@ -3650,6 +3650,25 @@ pub unsafe extern "C" fn nylon_live_all_notes_off(
     i32::from(audio.all_notes_off(project, track))
 }
 
+/// Queues release of every live note on every MIDI track.
+///
+/// # Safety
+/// Both handles must be live on the calling control thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_live_all_notes_off_all(
+    audio: *mut AudioRuntime,
+    project: *const Project,
+) -> i32 {
+    // SAFETY: The interface contract makes the audio handle exclusive.
+    let audio = unsafe { audio.as_mut() };
+    // SAFETY: The interface contract keeps the project live and immutable.
+    let project = unsafe { project.as_ref() };
+    let (Some(audio), Some(project)) = (audio, project) else {
+        return 0;
+    };
+    i32::from(audio.all_notes_off_all(project))
+}
+
 /// # Safety
 /// The handle must be live with no concurrent access.
 #[unsafe(no_mangle)]
