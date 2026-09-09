@@ -52,6 +52,9 @@ signals:
     void locateRequested(double beats);
     // The row under the last track was clicked.
     void addTrackRequested();
+    // A double-click on an empty lane asks for a clip of `lengthBeats`
+    // starting at `startBeats` on `track`.
+    void clipRequested(int track, double startBeats, double lengthBeats);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -59,6 +62,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
     void updateScrollRanges();
@@ -73,6 +77,10 @@ private:
     QRect addTrackRect() const;
     // Applies a volume drag at a point inside the header.
     void dragVolume(int track, int x);
+    // Beat under a point in the timeline, clamped at zero.
+    double beatsAt(int x) const;
+    // Whether a point is in the ruler, where the playhead is dragged.
+    bool inRuler(const QPoint& point) const;
 
     ProjectBridge* m_bridge;
     const Theme* m_theme;
@@ -81,6 +89,8 @@ private:
     QList<double> m_levels;
     // Track whose volume slider is being dragged, or -1.
     int m_volumeDrag = -1;
+    // True while the playhead is being dragged along the ruler.
+    bool m_scrubbing = false;
     double m_playheadBeats = 0.0;
 };
 

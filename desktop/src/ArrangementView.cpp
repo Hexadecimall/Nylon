@@ -300,6 +300,44 @@ void ArrangementView::setPlayheadBeats(double beats)
     viewport()->update();
 }
 
+double ArrangementView::beatsAt(int x) const
+{
+    const double scale = static_cast<double>(pixelsPerBar()) / static_cast<double>(beatsPerBar());
+    if (scale <= 0.0) {
+        return 0.0;
+    }
+    const double beats = static_cast<double>(x + horizontalScrollBar()->value() - headerWidth() - separator())
+        / scale;
+    return qMax(0.0, beats);
+}
+
+bool ArrangementView::inRuler(const QPoint& point) const
+{
+    return point.y() < rulerHeight() && point.x() >= headerWidth() + separator();
+}
+
+void ArrangementView::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    const QPoint point = event->position().toPoint();
+    if (event->button() != Qt::LeftButton || inRuler(point) || point.x() < headerWidth()) {
+        QAbstractScrollArea::mouseDoubleClickEvent(event);
+        return;
+    }
+    const int track = trackAt(point.y());
+    if (track < 0) {
+        QAbstractScrollArea::mouseDoubleClickEvent(event);
+        return;
+    }
+    // A new clip starts at the bar the click landed in and runs one bar,
+    // which is what a double-click in a timeline is expected to make.
+    const int beats = beatsPerBar();
+    const double bar = std::floor(beatsAt(point.x()) / beats) * beats;
+    selectTrack(track);
+    emit trackSelected(track);
+    emit clipRequested(track, bar, static_cast<double>(beats));
+    event->accept();
+}
+
 void ArrangementView::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() != Qt::LeftButton) {
@@ -307,12 +345,9 @@ void ArrangementView::mousePressEvent(QMouseEvent* event)
         return;
     }
     const QPoint point = event->position().toPoint();
-    if (point.y() < rulerHeight() && point.x() >= headerWidth() + separator()) {
-        const double scale = static_cast<double>(pixelsPerBar()) / static_cast<double>(beatsPerBar());
-        const double beats = (static_cast<double>(point.x() + horizontalScrollBar()->value()
-                                  - headerWidth() - separator()))
-            / scale;
-        setPlayheadBeats(beats);
+    if (inRuler(point)) {
+        m_scrubbing = true;
+        setPlayheadBeats(beatsAt(point.x()));
         emit locateRequested(m_playheadBeats);
         event->accept();
         return;
@@ -346,6 +381,14 @@ void ArrangementView::mousePressEvent(QMouseEvent* event)
 
 void ArrangementView::mouseMoveEvent(QMouseEvent* event)
 {
+    if (m_scrubbing) {
+        // The playhead follows the pointer along the ruler, including past
+        // the ends of the window, where it clamps.
+        setPlayheadBeats(beatsAt(event->position().toPoint().x()));
+        emit locateRequested(m_playheadBeats);
+        event->accept();
+        return;
+    }
     if (m_volumeDrag < 0) {
         QAbstractScrollArea::mouseMoveEvent(event);
         return;
@@ -356,6 +399,11 @@ void ArrangementView::mouseMoveEvent(QMouseEvent* event)
 
 void ArrangementView::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (m_scrubbing) {
+        m_scrubbing = false;
+        event->accept();
+        return;
+    }
     if (m_volumeDrag < 0) {
         QAbstractScrollArea::mouseReleaseEvent(event);
         return;

@@ -346,6 +346,10 @@ void MainWindow::buildWorkspace()
     connect(m_transport, &TransportBar::arrangementRequested, this, &MainWindow::showArrangement);
     connect(m_transport, &TransportBar::playRequested, this, &MainWindow::startPlayback);
     connect(m_transport, &TransportBar::stopRequested, this, &MainWindow::stopPlayback);
+    connect(m_arrangement, &ArrangementView::clipRequested, this,
+        [this](int track, double start, double length) {
+            createArrangementClip(track, start, length);
+        });
     connect(m_arrangement, &ArrangementView::addTrackRequested, this, [this] {
         if (QAction* add = action(QStringLiteral("actionAddTrack"))) {
             add->trigger();
@@ -391,6 +395,7 @@ void MainWindow::buildWorkspace()
             showStatus(tr("Created MIDI clip."));
         }
     });
+    connect(m_browser, &BrowserPanel::categoryDetached, this, &MainWindow::openCategoryWindow);
     connect(m_browser, &BrowserPanel::fileActivated, this, [this](const QString& path) {
         showStatus(tr("Loading %1 is not available until the core imports media.").arg(path));
     });
@@ -684,6 +689,84 @@ void MainWindow::openAudio()
         connect(m_audioPoll, &QTimer::timeout, this, &MainWindow::pollAudio);
     }
     m_audioPoll->start();
+}
+
+int MainWindow::createArrangementClip(int track, double startBeats, double lengthBeats)
+{
+    if (track < 0 || static_cast<quint64>(track) >= m_bridge->trackCount()) {
+        return -1;
+    }
+    const quint64 index = static_cast<quint64>(track);
+    if (m_bridge->trackKind(index) != ProjectBridge::TrackKind::Midi) {
+        showStatus(tr("Only a MIDI track can hold a clip until audio recording exists."));
+        return -1;
+    }
+    // A clip lives in a slot and is placed on the timeline from there, so
+    // the first free slot on this track carries the new one.
+    int scene = -1;
+    const quint64 scenes = m_bridge->sceneCount();
+    for (quint64 candidate = 0; candidate < scenes; ++candidate) {
+        if (!m_bridge->clipSlotOccupied(index, candidate)) {
+            scene = static_cast<int>(candidate);
+            break;
+        }
+    }
+    if (scene < 0) {
+        if (!m_bridge->createScene(tr("Scene %1").arg(scenes + 1))) {
+            showStatus(tr("The core would not add a scene for the clip."));
+            return -1;
+        }
+        scene = static_cast<int>(scenes);
+    }
+    if (!m_bridge->createMidiClip(index, static_cast<quint64>(scene), lengthBeats)) {
+        showStatus(tr("The core rejected the clip."));
+        return -1;
+    }
+    BeatRange range {};
+    range.startBeats = startBeats;
+    range.lengthBeats = lengthBeats;
+    if (!m_bridge->addArrangementClipFromSlot(index, static_cast<quint64>(scene), range)) {
+        showStatus(tr("The clip was made but would not go on the timeline."));
+        return -1;
+    }
+    selectTrack(track);
+    m_detail->setSelectedClip(track, scene);
+    m_detail->showClipPage();
+    showLowerWidget(m_detail);
+    showStatus(tr("Clip added. Draw notes in the editor, then press play."));
+    return scene;
+}
+
+void MainWindow::openCategoryWindow(const QString& category)
+{
+    if (BrowserPanel::folderForCategory(category).isEmpty()) {
+        return;
+    }
+    if (QWidget* open = m_categoryWindows.value(category)) {
+        open->raise();
+        open->activateWindow();
+        return;
+    }
+    // A category window is a browser of its own, so it searches and loads
+    // exactly like the panel in the workspace.
+    auto* window = new QWidget(this, Qt::Window);
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->setWindowTitle(tr("%1 - Nylon").arg(category));
+    auto* panel = new BrowserPanel(&m_themes->theme(), window);
+    panel->selectCategory(category);
+    connect(panel, &BrowserPanel::fileActivated, this, [this](const QString& path) {
+        showStatus(tr("Loading %1 is not available until the core imports media.").arg(path));
+    });
+    connect(m_themes, &ThemeManager::themeChanged, panel, [panel](const Theme& theme) {
+        panel->setTheme(&theme);
+    });
+    auto* layout = new QVBoxLayout(window);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(panel);
+    window->resize(420, 560);
+    connect(window, &QObject::destroyed, this, [this, category] { m_categoryWindows.remove(category); });
+    m_categoryWindows.insert(category, window);
+    window->show();
 }
 
 void MainWindow::updateEngineStatus()

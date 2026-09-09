@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QHash>
 #include <QTimer>
 #include <QSize>
 
@@ -87,6 +88,11 @@ private:
     void stopPlayback();
     void pollAudio();
     void updateEngineStatus();
+    // Creates a clip on `track` at `startBeats` and places it on the
+    // timeline. Returns the scene its source slot ended up in, or -1.
+    int createArrangementClip(int track, double startBeats, double lengthBeats);
+    // Opens one library category in a window of its own.
+    void openCategoryWindow(const QString& category);
     void buildMenus();
     void buildWorkspace();
     void applyTheme(const Theme& theme);
@@ -132,6 +138,8 @@ private:
     QTimer* m_audioPoll = nullptr;
     // Reads out the device, the block size and any dropouts.
     QLabel* m_engineStatus = nullptr;
+    // Library categories opened in their own windows, by category name.
+    QHash<QString, QWidget*> m_categoryWindows;
 
     Qt::Edges edgesAt(const QPoint& pos) const;
     void updateResizeCursor(const QPoint& pos);

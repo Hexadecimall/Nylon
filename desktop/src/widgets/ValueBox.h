@@ -27,6 +27,7 @@ signals:
     void committed(double value);
 
 protected:
+    void focusInEvent(QFocusEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
@@ -37,6 +38,9 @@ private:
     void commitText();
 
     int m_decimals = 2;
+    // Whether the focus came from the person rather than from the window
+    // being shown, which is what decides the ring.
+    bool m_focusShown = false;
     bool m_editing = false;
     QString m_buffer;
 };

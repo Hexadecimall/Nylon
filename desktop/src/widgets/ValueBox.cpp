@@ -45,6 +45,7 @@ void ValueBox::beginEdit()
     m_editing = true;
     // Typing replaces the value; an empty commit leaves it unchanged.
     m_buffer.clear();
+    m_focusShown = true;
     setFocus();
     update();
 }
@@ -115,6 +116,16 @@ void ValueBox::keyPressEvent(QKeyEvent* event)
     }
 }
 
+void ValueBox::focusInEvent(QFocusEvent* event)
+{
+    // A window that has just opened hands focus to its first control. That
+    // is not a selection, so it does not draw one.
+    const Qt::FocusReason reason = event->reason();
+    m_focusShown = reason != Qt::ActiveWindowFocusReason && reason != Qt::OtherFocusReason
+        && reason != Qt::PopupFocusReason;
+    ControlWidget::focusInEvent(event);
+}
+
 void ValueBox::focusOutEvent(QFocusEvent* event)
 {
     if (m_editing) {
@@ -130,7 +141,7 @@ void ValueBox::paintEvent(QPaintEvent*)
     const int sep = qBound(0, t->metricInt(QStringLiteral("separator"), 1), 4);
     const QPainterPath shape = paint::rounded(*t, QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5));
     paint::control(p, *t, shape, t->color(QStringLiteral("control.background")).darker(115), true);
-    if (hasFocus()) {
+    if (hasFocus() && m_focusShown) {
         p.setPen(QPen(t->color(QStringLiteral("accent")), sep));
         p.setBrush(Qt::NoBrush);
         p.drawPath(shape);

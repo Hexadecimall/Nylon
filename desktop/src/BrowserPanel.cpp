@@ -48,17 +48,6 @@ const Category kCategories[] = {
     {"Grooves", "Grooves", Icon::Groove},
 };
 
-// Icon for one of the folders outside the library, by its label.
-Icon iconForPlace(const QString& name)
-{
-    if (name == QObject::tr("Home")) return Icon::Home;
-    if (name == QObject::tr("Music")) return Icon::Music;
-    if (name == QObject::tr("Downloads")) return Icon::Download;
-    if (name == QObject::tr("Desktop")) return Icon::Desktop;
-    if (name == QObject::tr("Documents")) return Icon::Document;
-    return Icon::Folder;
-}
-
 } // namespace
 
 BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
@@ -66,7 +55,6 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
     , m_theme(theme)
     , m_search(new QLineEdit(this))
     , m_categories(new QListWidget(this))
-    , m_places(new QListWidget(this))
     , m_tree(new QTreeView(this))
     , m_model(new QFileSystemModel(this))
     , m_proxy(new QSortFilterProxyModel(this))
@@ -93,19 +81,6 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
     m_categories->setStatusTip(tr("Library categories. Each one is a folder in the library."));
     for (const Category& c : kCategories) {
         m_categories->addItem(QString::fromLatin1(c.name));
-    }
-
-    m_places->setObjectName(QStringLiteral("browserPlaces"));
-    m_places->setFrameShape(QFrame::NoFrame);
-    m_places->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_places->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_places->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_places->setUniformItemSizes(false);
-    m_places->setTextElideMode(Qt::ElideRight);
-    m_places->setStatusTip(tr("Folders outside the library."));
-    for (const auto& place : places()) {
-        auto* item = new QListWidgetItem(place.first, m_places);
-        item->setData(Qt::UserRole, place.second);
     }
 
     m_model->setReadOnly(true);
@@ -144,23 +119,23 @@ BrowserPanel::BrowserPanel(const Theme* theme, QWidget* parent)
     title->setObjectName(QStringLiteral("panelTitle"));
     auto* categoryTitle = new QLabel(tr("CATEGORIES"), this);
     categoryTitle->setObjectName(QStringLiteral("sectionLabel"));
-    auto* placeTitle = new QLabel(tr("PLACES"), this);
-    placeTitle->setObjectName(QStringLiteral("sectionLabel"));
     auto* contentTitle = new QLabel(tr("FILES"), this);
     contentTitle->setObjectName(QStringLiteral("sectionLabel"));
     layout->addWidget(title);
     layout->addWidget(m_search);
     layout->addWidget(categoryTitle);
     layout->addWidget(m_categories);
-    layout->addWidget(placeTitle);
-    layout->addWidget(m_places);
     layout->addWidget(contentTitle);
     layout->addWidget(m_empty);
     layout->addWidget(m_tree, 1);
     layout->addWidget(m_info);
 
     connect(m_categories, &QListWidget::currentRowChanged, this, [this] { onCategoryChanged(); });
-    connect(m_places, &QListWidget::currentRowChanged, this, [this] { onPlaceChanged(); });
+    connect(m_categories, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        if (item) {
+            emit categoryDetached(item->text());
+        }
+    });
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString& text) {
         m_proxy->setFilterFixedString(text);
         m_tree->expandToDepth(text.isEmpty() ? 0 : 3);
@@ -190,7 +165,6 @@ void BrowserPanel::setTheme(const Theme* theme)
     const int iconSide = qMax(12, rowHeight - 8);
     const qreal ratio = devicePixelRatioF();
     m_categories->setIconSize(QSize(iconSide, iconSide));
-    m_places->setIconSize(QSize(iconSide, iconSide));
     for (int index = 0; index < categoryCount; ++index) {
         m_categories->item(index)->setSizeHint(QSize(qMax(64, browserWidth - pad * 2), rowHeight));
         m_categories->item(index)->setIcon(iconFor(kCategories[index].icon, glyph, iconSide, ratio));
@@ -198,12 +172,6 @@ void BrowserPanel::setTheme(const Theme* theme)
     // The list is exactly as tall as its rows, so the section below it
     // starts right after the last one.
     m_categories->setFixedHeight(categoryCount * rowHeight + 2);
-    const int placeCount = m_places->count();
-    for (int index = 0; index < placeCount; ++index) {
-        m_places->item(index)->setSizeHint(QSize(qMax(64, browserWidth - pad * 2), rowHeight));
-        m_places->item(index)->setIcon(iconFor(iconForPlace(m_places->item(index)->text()), glyph, iconSide, ratio));
-    }
-    m_places->setFixedHeight(placeCount * rowHeight + 2);
     layout()->setContentsMargins(pad, pad, pad, pad);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::transparent);
@@ -213,7 +181,6 @@ void BrowserPanel::setTheme(const Theme* theme)
     pal.setColor(QPalette::Text, m_theme->color(QStringLiteral("text.primary")));
     setPalette(pal);
     m_categories->setPalette(pal);
-    m_places->setPalette(pal);
     m_tree->setPalette(pal);
     m_tree->viewport()->setPalette(pal);
     update();
@@ -237,27 +204,6 @@ void BrowserPanel::setLibraryRoot(const QString& path)
 {
     QSettings settings;
     settings.setValue(QLatin1String(kSettingsKey), path);
-}
-
-QList<QPair<QString, QString>> BrowserPanel::places()
-{
-    // The standard folders a person keeps material in. A location the
-    // platform does not define, or that does not exist, is left out.
-    const QList<QPair<QString, QStandardPaths::StandardLocation>> wanted {
-        {tr("Home"), QStandardPaths::HomeLocation},
-        {tr("Music"), QStandardPaths::MusicLocation},
-        {tr("Downloads"), QStandardPaths::DownloadLocation},
-        {tr("Desktop"), QStandardPaths::DesktopLocation},
-        {tr("Documents"), QStandardPaths::DocumentsLocation},
-    };
-    QList<QPair<QString, QString>> found;
-    for (const auto& entry : wanted) {
-        const QString path = QStandardPaths::writableLocation(entry.second);
-        if (!path.isEmpty() && QDir(path).exists()) {
-            found.append({entry.first, path});
-        }
-    }
-    return found;
 }
 
 QStringList BrowserPanel::categories()
@@ -341,30 +287,12 @@ void BrowserPanel::showFolder(const QString& path, const QString& label)
 
 void BrowserPanel::onCategoryChanged()
 {
-    if (m_categories->currentRow() >= 0) {
-        const QSignalBlocker block(m_places);
-        m_places->clearSelection();
-        m_places->setCurrentRow(-1);
-    }
     // Show the location relative to the library so the label never carries
     // the user's home directory.
     showFolder(currentFolder(),
         QDir(libraryRoot()).dirName() + QLatin1Char('/') + folderForCategory(currentCategory()));
 }
 
-void BrowserPanel::onPlaceChanged()
-{
-    const QListWidgetItem* item = m_places->currentItem();
-    if (!item) {
-        return;
-    }
-    {
-        const QSignalBlocker block(m_categories);
-        m_categories->clearSelection();
-        m_categories->setCurrentRow(-1);
-    }
-    showFolder(item->data(Qt::UserRole).toString(), item->text());
-}
 
 void BrowserPanel::updateEmptyState()
 {
