@@ -358,6 +358,15 @@ pub trait Stream {
 
     /// Blocks dropped because a callback ran past its deadline.
     fn dropouts(&self) -> u64;
+
+    /// Whether the device has gone away, by being unplugged or taken by
+    /// something else. A lost stream produces no more audio and has to be
+    /// closed and opened again on another device.
+    ///
+    /// A host that cannot lose a device this way never reports it.
+    fn is_lost(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

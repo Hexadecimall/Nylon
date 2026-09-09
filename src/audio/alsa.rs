@@ -402,6 +402,7 @@ impl Backend for AlsaBackend {
             frames: AtomicU64::new(0),
             dropouts: AtomicU64::new(0),
             realtime: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
         });
         let worker = Worker {
             device,
@@ -453,6 +454,8 @@ struct Shared {
     dropouts: AtomicU64,
     /// Whether the playback thread was granted real-time scheduling.
     realtime: AtomicBool,
+    /// Set when the device stops accepting audio for good.
+    lost: AtomicBool,
 }
 
 /// The playback thread's own state.
@@ -522,7 +525,9 @@ impl Worker {
                 let recovered =
                     unsafe { (self.device.library.recover)(self.device.pcm, count as c_int, 1) };
                 if recovered < 0 {
-                    // Nothing more can be done with this device.
+                    // The device is gone rather than merely behind: it was
+                    // unplugged, or the host took it away.
+                    self.shared.lost.store(true, Ordering::Release);
                     self.shared.finished.store(true, Ordering::Release);
                     break;
                 }
@@ -581,6 +586,10 @@ impl Stream for AlsaStream {
 
     fn dropouts(&self) -> u64 {
         self.shared.dropouts.load(Ordering::Relaxed)
+    }
+
+    fn is_lost(&self) -> bool {
+        self.shared.lost.load(Ordering::Acquire)
     }
 }
 

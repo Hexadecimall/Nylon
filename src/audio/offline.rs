@@ -268,6 +268,8 @@ mod tests {
         let stream = backend.open_output(config(), Counting::new()).unwrap();
         assert_eq!(stream.config(), config());
         assert!(!stream.is_running());
+        // An offline stream has no device to lose.
+        assert!(!stream.is_lost());
         assert_eq!(stream.frames_rendered(), 0);
         assert_eq!(stream.dropouts(), 0);
     }

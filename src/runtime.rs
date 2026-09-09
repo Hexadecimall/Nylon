@@ -5,6 +5,7 @@
 //! type retains the control endpoint used by transport, meters, and edits.
 
 use crate::audio::{AudioError, Backend, DeviceId, DeviceInfo, Stream, StreamConfig};
+use crate::engine::device::DeviceConfig;
 use crate::engine::playback::{
     MixSettings, PlaybackEngine, PlaybackState, Publisher, Score, TrackSettings,
 };
@@ -106,18 +107,21 @@ impl AudioRuntime {
             channels: 2,
         };
         config.validate()?;
+        let snapshot = project.snapshot();
         let timeline = timeline_from_project(project)
             .map_err(|_| AudioError::Host("project media could not be loaded"))?;
-        let (routing, output_node) = playback_routing(&project.snapshot())
+        let (routing, output_node) = playback_routing(&snapshot)
             .map_err(|_| AudioError::Host("project routing could not be compiled"))?;
+        let devices = playback_devices(&snapshot);
+        let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
         let (engine, mut publisher) = PlaybackEngine::new(f64::from(sample_rate));
         let playing = false;
-        (self.settings, self.score) = state_from_snapshot(&project.snapshot(), playing);
+        (self.settings, self.score) = state_from_snapshot(&snapshot, playing);
         if !publisher.publish(&self.settings)
             || !publisher.publish_score(&self.score)
             || !publisher.publish_audio(timeline)
             || !publisher
-                .publish_routing(&routing, output_node)
+                .publish_routing_with_devices(&routing, output_node, &device_slices)
                 .map_err(|_| AudioError::Host("project routing could not be prepared"))?
         {
             return Err(AudioError::Host("initial state could not be published"));
@@ -162,7 +166,11 @@ impl AudioRuntime {
     pub fn is_open(&self) -> bool {
         #[cfg(platform_audio)]
         {
-            self.stream.as_ref().is_some_and(Stream::is_running)
+            // A device that has been unplugged is not open, whatever the
+            // stream was last asked to do.
+            self.stream
+                .as_ref()
+                .is_some_and(|stream| stream.is_running() && !stream.is_lost())
         }
         #[cfg(not(platform_audio))]
         {
@@ -180,6 +188,20 @@ impl AudioRuntime {
         #[cfg(not(platform_audio))]
         {
             None
+        }
+    }
+
+    /// Whether the device was taken away while the stream was open. The
+    /// runtime has to be closed and opened again on another device.
+    #[must_use]
+    pub fn is_device_lost(&self) -> bool {
+        #[cfg(platform_audio)]
+        {
+            self.stream.as_ref().is_some_and(Stream::is_lost)
+        }
+        #[cfg(not(platform_audio))]
+        {
+            false
         }
     }
 
@@ -205,11 +227,14 @@ impl AudioRuntime {
         let Ok(timeline) = timeline_from_project(project) else {
             return false;
         };
-        let Ok((routing, output_node)) = playback_routing(&project.snapshot()) else {
+        let snapshot = project.snapshot();
+        let Ok((routing, output_node)) = playback_routing(&snapshot) else {
             return false;
         };
+        let devices = playback_devices(&snapshot);
+        let device_slices: Vec<&[DeviceConfig]> = devices.iter().map(Vec::as_slice).collect();
         let playing = self.settings.is_playing();
-        (self.settings, self.score) = state_from_snapshot(&project.snapshot(), playing);
+        (self.settings, self.score) = state_from_snapshot(&snapshot, playing);
         self.dirty_settings = true;
         self.dirty_score = true;
         let state_sent = self.flush();
@@ -219,7 +244,7 @@ impl AudioRuntime {
             .is_some_and(|publisher| publisher.publish_audio(timeline));
         let routing_sent = self.publisher.as_mut().is_some_and(|publisher| {
             publisher
-                .publish_routing(&routing, output_node)
+                .publish_routing_with_devices(&routing, output_node, &device_slices)
                 .unwrap_or(false)
         });
         state_sent && audio_sent && routing_sent
@@ -346,6 +371,22 @@ pub(crate) fn playback_routing(
         }
     }
     Ok((graph.compile()?, output_node))
+}
+
+pub(crate) fn playback_devices(snapshot: &Snapshot) -> Vec<Vec<DeviceConfig>> {
+    let mut result: Vec<Vec<DeviceConfig>> = snapshot
+        .tracks()
+        .iter()
+        .map(|track| {
+            track
+                .devices()
+                .iter()
+                .map(|device| device.config())
+                .collect()
+        })
+        .collect();
+    result.push(Vec::new());
+    result
 }
 
 /// Lists output devices available from the platform backend.

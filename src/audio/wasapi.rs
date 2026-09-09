@@ -98,6 +98,9 @@ const AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY: u32 = 0x0800_0000;
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 0x0003;
 const VT_LPWSTR: u16 = 31;
 const WAIT_OBJECT_0: u32 = 0;
+/// Returned once the device has been unplugged or taken over. Nothing
+/// further can be done with the client.
+const AUDCLNT_E_DEVICE_INVALIDATED: Hresult = -2_004_287_484;
 const EVENT_TIMEOUT_MS: u32 = 2_000;
 /// A hundred-nanosecond tick, the unit the client takes its buffer
 /// duration in.
@@ -720,6 +723,7 @@ impl Backend for WasapiBackend {
             frames: AtomicU64::new(0),
             dropouts: AtomicU64::new(0),
             realtime: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
         });
         let worker = Worker {
             client,
@@ -815,6 +819,8 @@ struct Shared {
     dropouts: AtomicU64,
     /// Whether the playback thread was admitted to the audio class.
     realtime: AtomicBool,
+    /// Set when the device is taken away.
+    lost: AtomicBool,
 }
 
 /// The playback thread's own state.
@@ -859,7 +865,11 @@ impl Worker {
                 // SAFETY: The client is initialized and idle.
                 unsafe { (self.client.table().reset)(self.client.pointer) };
                 // SAFETY: As above.
-                if unsafe { (self.client.table().start)(self.client.pointer) } != S_OK {
+                let status = unsafe { (self.client.table().start)(self.client.pointer) };
+                if status != S_OK {
+                    if status == AUDCLNT_E_DEVICE_INVALIDATED {
+                        self.shared.lost.store(true, Ordering::Release);
+                    }
                     self.shared.finished.store(true, Ordering::Release);
                     break;
                 }
@@ -877,9 +887,14 @@ impl Worker {
 
             let mut padding: u32 = 0;
             // SAFETY: The client is running.
-            if unsafe { (self.client.table().padding)(self.client.pointer, &raw mut padding) }
-                != S_OK
-            {
+            let status =
+                unsafe { (self.client.table().padding)(self.client.pointer, &raw mut padding) };
+            if status != S_OK {
+                if status == AUDCLNT_E_DEVICE_INVALIDATED {
+                    self.shared.lost.store(true, Ordering::Release);
+                    self.shared.finished.store(true, Ordering::Release);
+                    break;
+                }
                 continue;
             }
             let available = self.buffer_frames.saturating_sub(padding);
@@ -898,6 +913,11 @@ impl Worker {
                 )
             };
             if status != S_OK || buffer.is_null() {
+                if status == AUDCLNT_E_DEVICE_INVALIDATED {
+                    self.shared.lost.store(true, Ordering::Release);
+                    self.shared.finished.store(true, Ordering::Release);
+                    break;
+                }
                 self.shared.dropouts.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
@@ -979,6 +999,10 @@ impl Stream for WasapiStream {
 
     fn dropouts(&self) -> u64 {
         self.shared.dropouts.load(Ordering::Relaxed)
+    }
+
+    fn is_lost(&self) -> bool {
+        self.shared.lost.load(Ordering::Acquire)
     }
 }
 
