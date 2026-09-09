@@ -3,6 +3,9 @@
 
 use crate::audio::{DeviceId, DeviceInfo, Direction, Name, Rates};
 use crate::bounce::{Options as BounceOptions, render_wave};
+use crate::dsp::biquad::Kind as FilterKind;
+use crate::dsp::compressor::Parameters as CompressorParameters;
+use crate::engine::device::DeviceKind as TrackDeviceKind;
 use crate::media::import_wave;
 use crate::mixer::Levels;
 use crate::project::{ClipId, Command, MidiNote, Project, SceneId, TrackId, TrackKind};
@@ -51,6 +54,15 @@ pub struct NylonBounceReport {
     pub frames: u64,
     pub peak_left: f32,
     pub peak_right: f32,
+}
+
+/// Fixed-size native device description. Parameter meanings depend on kind.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NylonTrackDevice {
+    pub kind: i32,
+    pub enabled: i32,
+    pub parameters: [f32; 7],
 }
 
 impl From<Levels> for NylonLevels {
@@ -262,6 +274,302 @@ track_setter!(nylon_track_set_color_index, i32, |id, value| u8::try_from(
 track_setter!(nylon_track_set_latency_frames, u32, |id, frames| Some(
     Command::SetTrackLatency { id, frames }
 ));
+
+fn track_device_kind(record: NylonTrackDevice) -> Option<TrackDeviceKind> {
+    let parameters = record.parameters;
+    match record.kind {
+        0 => Some(TrackDeviceKind::Utility {
+            gain_db: parameters[0],
+            width: parameters[1],
+            balance: parameters[2],
+        }),
+        1 => {
+            let filter = match parameters[0] {
+                0.0 => FilterKind::LowPass,
+                1.0 => FilterKind::HighPass,
+                2.0 => FilterKind::BandPass,
+                3.0 => FilterKind::Notch,
+                4.0 => FilterKind::AllPass,
+                5.0 => FilterKind::Peaking,
+                6.0 => FilterKind::LowShelf,
+                7.0 => FilterKind::HighShelf,
+                _ => return None,
+            };
+            Some(TrackDeviceKind::Equalizer {
+                kind: filter,
+                frequency: parameters[1],
+                q: parameters[2],
+                gain_db: parameters[3],
+            })
+        }
+        2 => Some(TrackDeviceKind::Compressor {
+            parameters: CompressorParameters {
+                threshold_db: parameters[0],
+                ratio: parameters[1],
+                knee_db: parameters[2],
+                attack_seconds: parameters[3],
+                release_seconds: parameters[4],
+                makeup_db: parameters[5],
+            },
+            external_sidechain: match parameters[6] {
+                0.0 => false,
+                1.0 => true,
+                _ => return None,
+            },
+        }),
+        3 => Some(TrackDeviceKind::StereoDelay {
+            delay_seconds: parameters[0],
+            feedback: parameters[1],
+            mix: parameters[2],
+        }),
+        _ => None,
+    }
+}
+
+fn native_track_device(kind: TrackDeviceKind, enabled: bool) -> NylonTrackDevice {
+    let mut record = NylonTrackDevice {
+        enabled: i32::from(enabled),
+        ..NylonTrackDevice::default()
+    };
+    match kind {
+        TrackDeviceKind::Utility {
+            gain_db,
+            width,
+            balance,
+        } => {
+            record.kind = 0;
+            record.parameters[..3].copy_from_slice(&[gain_db, width, balance]);
+        }
+        TrackDeviceKind::Equalizer {
+            kind,
+            frequency,
+            q,
+            gain_db,
+        } => {
+            record.kind = 1;
+            record.parameters[..4].copy_from_slice(&[
+                match kind {
+                    FilterKind::LowPass => 0.0,
+                    FilterKind::HighPass => 1.0,
+                    FilterKind::BandPass => 2.0,
+                    FilterKind::Notch => 3.0,
+                    FilterKind::AllPass => 4.0,
+                    FilterKind::Peaking => 5.0,
+                    FilterKind::LowShelf => 6.0,
+                    FilterKind::HighShelf => 7.0,
+                },
+                frequency,
+                q,
+                gain_db,
+            ]);
+        }
+        TrackDeviceKind::Compressor {
+            parameters,
+            external_sidechain,
+        } => {
+            record.kind = 2;
+            record.parameters.copy_from_slice(&[
+                parameters.threshold_db,
+                parameters.ratio,
+                parameters.knee_db,
+                parameters.attack_seconds,
+                parameters.release_seconds,
+                parameters.makeup_db,
+                f32::from(u8::from(external_sidechain)),
+            ]);
+        }
+        TrackDeviceKind::StereoDelay {
+            delay_seconds,
+            feedback,
+            mix,
+        } => {
+            record.kind = 3;
+            record.parameters[..3].copy_from_slice(&[delay_seconds, feedback, mix]);
+        }
+    }
+    record
+}
+
+/// # Safety
+/// A non-null handle must be live and have no concurrent mutation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_device_count(handle: *const Project, track: u64) -> u64 {
+    let Ok(track) = usize::try_from(track) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    unsafe { handle.as_ref() }
+        .and_then(|project| project.current.tracks.get(track))
+        .map_or(0, |track| track.devices().len() as u64)
+}
+
+/// # Safety
+/// A non-null handle must be live. `out` must point to writable storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_device_get(
+    handle: *const Project,
+    track: u64,
+    device: u64,
+    out: *mut NylonTrackDevice,
+) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    let (Ok(track), Ok(device)) = (usize::try_from(track), usize::try_from(device)) else {
+        return 0;
+    };
+    // SAFETY: Handle validity and access exclusion are required by the interface.
+    let Some(item) = (unsafe { handle.as_ref() })
+        .and_then(|project| project.current.tracks.get(track))
+        .and_then(|track| track.devices().get(device))
+    else {
+        return 0;
+    };
+    // SAFETY: The caller supplies writable storage for one record.
+    unsafe { out.write(native_track_device(item.kind(), item.enabled())) };
+    1
+}
+
+/// # Safety
+/// A non-null handle must be exclusively accessible. `device` must be readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_device_add(
+    handle: *mut Project,
+    track: u64,
+    device: *const NylonTrackDevice,
+) -> i32 {
+    // SAFETY: The caller supplies a readable record for the duration of this call.
+    let Some(record) = (unsafe { device.as_ref() }).copied() else {
+        return 0;
+    };
+    let Some(kind) = track_device_kind(record) else {
+        return 0;
+    };
+    let enabled = match record.enabled {
+        0 => false,
+        1 => true,
+        _ => return 0,
+    };
+    // SAFETY: Handle validity and exclusivity are required by the interface.
+    unsafe {
+        edit_track(handle, track, |track| {
+            Some(Command::AddDevice {
+                track,
+                config: crate::engine::device::DeviceConfig { enabled, kind },
+            })
+        })
+    }
+}
+
+/// # Safety
+/// A non-null handle must be exclusively accessible. `device` must be readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_device_set(
+    handle: *mut Project,
+    track: u64,
+    index: u64,
+    device: *const NylonTrackDevice,
+) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let (Ok(track), Ok(index)) = (usize::try_from(track), usize::try_from(index)) else {
+        return 0;
+    };
+    // SAFETY: The caller supplies a readable record for the duration of this call.
+    let Some(record) = (unsafe { device.as_ref() }).copied() else {
+        return 0;
+    };
+    let Some(kind) = track_device_kind(record) else {
+        return 0;
+    };
+    let enabled = match record.enabled {
+        0 => false,
+        1 => true,
+        _ => return 0,
+    };
+    let Some(id) = project
+        .current
+        .tracks
+        .get(track)
+        .and_then(|track| track.devices().get(index))
+        .map(|device| device.id())
+    else {
+        return 0;
+    };
+    i32::from(
+        project
+            .apply(&[
+                Command::SetDeviceKind { id, kind },
+                Command::SetDeviceEnabled { id, enabled },
+            ])
+            .is_ok(),
+    )
+}
+
+/// # Safety
+/// A non-null handle must be exclusively accessible.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_device_delete(
+    handle: *mut Project,
+    track: u64,
+    index: u64,
+) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let (Ok(track), Ok(index)) = (usize::try_from(track), usize::try_from(index)) else {
+        return 0;
+    };
+    let Some(id) = project
+        .current
+        .tracks
+        .get(track)
+        .and_then(|track| track.devices().get(index))
+        .map(|device| device.id())
+    else {
+        return 0;
+    };
+    i32::from(project.apply(&[Command::DeleteDevice(id)]).is_ok())
+}
+
+/// # Safety
+/// A non-null handle must be exclusively accessible.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nylon_track_device_move(
+    handle: *mut Project,
+    track: u64,
+    from: u64,
+    to: u64,
+) -> i32 {
+    // SAFETY: Handle validity and exclusivity are required by the interface.
+    let Some(project) = (unsafe { handle.as_mut() }) else {
+        return 0;
+    };
+    let (Ok(track), Ok(from), Ok(to)) = (
+        usize::try_from(track),
+        usize::try_from(from),
+        usize::try_from(to),
+    ) else {
+        return 0;
+    };
+    let Some(id) = project
+        .current
+        .tracks
+        .get(track)
+        .and_then(|track| track.devices().get(from))
+        .map(|device| device.id())
+    else {
+        return 0;
+    };
+    i32::from(
+        project
+            .apply(&[Command::MoveDevice { id, index: to }])
+            .is_ok(),
+    )
+}
 
 fn edge_kind_from_code(code: i32) -> Option<EdgeKind> {
     match code {

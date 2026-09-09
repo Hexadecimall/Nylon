@@ -103,6 +103,110 @@ QString routingKindName(nylon::RoutingKind kind)
     return "main";
 }
 
+QString deviceKindName(nylon::DeviceKind kind)
+{
+    switch (kind) {
+    case nylon::DeviceKind::Utility: return "utility";
+    case nylon::DeviceKind::Equalizer: return "equalizer";
+    case nylon::DeviceKind::Compressor: return "compressor";
+    case nylon::DeviceKind::StereoDelay: return "delay";
+    }
+    return "utility";
+}
+
+QString filterKindName(int kind)
+{
+    static const QStringList names{
+        "low-pass", "high-pass", "band-pass", "notch", "all-pass", "peaking",
+        "low-shelf", "high-shelf"};
+    return kind >= 0 && kind < names.size() ? names[kind] : QString();
+}
+
+bool filterKind(const QString& text, float& kind)
+{
+    for (int index = 0; index < 8; ++index) {
+        if (text == filterKindName(index)) {
+            kind = static_cast<float>(index);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool parameter(const QString& text, float& value)
+{
+    double parsed = 0.0;
+    if (!number(text, parsed)) return false;
+    value = static_cast<float>(parsed);
+    return std::isfinite(value);
+}
+
+bool parseTrackDevice(
+    const QStringList& positional, int kindIndex, nylon::TrackDevice& device)
+{
+    const QString kind = positional[kindIndex];
+    device.enabled = true;
+    if (kind == "utility" && positional.size() == kindIndex + 4) {
+        device.kind = nylon::DeviceKind::Utility;
+        return parameter(positional[kindIndex + 1], device.parameters[0])
+            && parameter(positional[kindIndex + 2], device.parameters[1])
+            && parameter(positional[kindIndex + 3], device.parameters[2]);
+    }
+    if (kind == "equalizer" && positional.size() == kindIndex + 5) {
+        device.kind = nylon::DeviceKind::Equalizer;
+        return filterKind(positional[kindIndex + 1], device.parameters[0])
+            && parameter(positional[kindIndex + 2], device.parameters[1])
+            && parameter(positional[kindIndex + 3], device.parameters[2])
+            && parameter(positional[kindIndex + 4], device.parameters[3]);
+    }
+    if (kind == "compressor" && positional.size() == kindIndex + 8) {
+        device.kind = nylon::DeviceKind::Compressor;
+        bool sidechain = false;
+        for (int index = 0; index < 6; ++index) {
+            if (!parameter(positional[kindIndex + 1 + index], device.parameters[index]))
+                return false;
+        }
+        if (!flag(positional[kindIndex + 7], sidechain)) return false;
+        device.parameters[6] = sidechain ? 1.0F : 0.0F;
+        return true;
+    }
+    if (kind == "delay" && positional.size() == kindIndex + 4) {
+        device.kind = nylon::DeviceKind::StereoDelay;
+        return parameter(positional[kindIndex + 1], device.parameters[0])
+            && parameter(positional[kindIndex + 2], device.parameters[1])
+            && parameter(positional[kindIndex + 3], device.parameters[2]);
+    }
+    return false;
+}
+
+QJsonObject deviceJson(const nylon::TrackDevice& device, std::uint64_t index)
+{
+    QJsonObject parameters;
+    switch (device.kind) {
+    case nylon::DeviceKind::Utility:
+        parameters = {{"gainDb", device.parameters[0]}, {"width", device.parameters[1]},
+            {"balance", device.parameters[2]}};
+        break;
+    case nylon::DeviceKind::Equalizer:
+        parameters = {{"filter", filterKindName(static_cast<int>(device.parameters[0]))},
+            {"frequency", device.parameters[1]}, {"q", device.parameters[2]},
+            {"gainDb", device.parameters[3]}};
+        break;
+    case nylon::DeviceKind::Compressor:
+        parameters = {{"thresholdDb", device.parameters[0]}, {"ratio", device.parameters[1]},
+            {"kneeDb", device.parameters[2]}, {"attackSeconds", device.parameters[3]},
+            {"releaseSeconds", device.parameters[4]}, {"makeupDb", device.parameters[5]},
+            {"externalSidechain", device.parameters[6] == 1.0F}};
+        break;
+    case nylon::DeviceKind::StereoDelay:
+        parameters = {{"delaySeconds", device.parameters[0]},
+            {"feedback", device.parameters[1]}, {"mix", device.parameters[2]}};
+        break;
+    }
+    return {{"index", static_cast<double>(index)}, {"kind", deviceKindName(device.kind)},
+        {"enabled", device.enabled}, {"parameters", parameters}};
+}
+
 int remoteCommand(const QString& endpoint, const QStringList& positional)
 {
     QLocalSocket socket;
@@ -206,6 +310,17 @@ int directCommand(const QString& bundle, const QStringList& positional)
         }
         return writeJson({{"ok", true}, {"routes", routes}});
     }
+    if (command == "track-devices" && positional.size() == 2) {
+        std::uint64_t track = 0;
+        if (!indexNumber(positional[1], track) || track >= project.trackCount())
+            return fail("Invalid track index");
+        QJsonArray devices;
+        const auto chain = project.trackDevices(track);
+        for (std::size_t index = 0; index < chain.size(); ++index)
+            devices.append(deviceJson(chain[index], index));
+        return writeJson({{"ok", true}, {"track", static_cast<double>(track)},
+            {"devices", devices}});
+    }
     if (command == "clips" && (positional.size() == 1 || positional.size() == 2)) {
         std::uint64_t selectedTrack = 0;
         if (positional.size() == 2 && !indexNumber(positional[1], selectedTrack))
@@ -305,6 +420,48 @@ int directCommand(const QString& bundle, const QStringList& positional)
         std::uint64_t route = 0;
         if (!indexNumber(positional[1], route)) return fail("Invalid route index");
         changed = project.deleteRoute(route);
+    } else if (command == "add-device" && positional.size() >= 3) {
+        std::uint64_t track = 0;
+        nylon::TrackDevice device;
+        if (!indexNumber(positional[1], track) || !parseTrackDevice(positional, 2, device))
+            return fail("Invalid track device");
+        changed = project.addTrackDevice(track, device);
+    } else if (command == "set-device" && positional.size() >= 4) {
+        std::uint64_t track = 0;
+        std::uint64_t index = 0;
+        nylon::TrackDevice device;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], index)
+            || !parseTrackDevice(positional, 3, device))
+            return fail("Invalid track device");
+        const auto chain = project.trackDevices(track);
+        if (index >= chain.size()) return fail("Invalid device index");
+        device.enabled = chain[static_cast<std::size_t>(index)].enabled;
+        changed = project.setTrackDevice(track, index, device);
+    } else if (command == "set-device-enabled" && positional.size() == 4) {
+        std::uint64_t track = 0;
+        std::uint64_t index = 0;
+        bool enabled = false;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], index)
+            || !flag(positional[3], enabled))
+            return fail("Invalid device state");
+        auto chain = project.trackDevices(track);
+        if (index >= chain.size()) return fail("Invalid device index");
+        chain[static_cast<std::size_t>(index)].enabled = enabled;
+        changed = project.setTrackDevice(track, index, chain[static_cast<std::size_t>(index)]);
+    } else if (command == "move-device" && positional.size() == 4) {
+        std::uint64_t track = 0;
+        std::uint64_t from = 0;
+        std::uint64_t to = 0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], from)
+            || !indexNumber(positional[3], to))
+            return fail("Invalid device position");
+        changed = project.moveTrackDevice(track, from, to);
+    } else if (command == "delete-device" && positional.size() == 3) {
+        std::uint64_t track = 0;
+        std::uint64_t index = 0;
+        if (!indexNumber(positional[1], track) || !indexNumber(positional[2], index))
+            return fail("Invalid device index");
+        changed = project.deleteTrackDevice(track, index);
     } else if (command == "bounce" && (positional.size() == 4 || positional.size() == 5)) {
         double start = 0.0;
         double end = 0.0;

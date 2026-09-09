@@ -12,12 +12,14 @@
 //! test can step a render one block at a time and inspect the result.
 
 use super::{
-    AudioError, Backend, BlockTiming, DeviceId, DeviceInfo, Direction, Name, Rates, Renderer,
-    SUPPORTED_RATES, Stream, StreamConfig,
+    AudioError, Backend, BlockTiming, Capturer, DeviceId, DeviceInfo, Direction, InputBackend,
+    Name, Rates, Renderer, SUPPORTED_RATES, Stream, StreamConfig,
 };
 
-/// Identifier of the single device the offline backend offers.
+/// Identifier of the single output device the offline backend offers.
 pub const DEVICE: DeviceId = DeviceId(0);
+/// Identifier of the single input device it offers.
+pub const INPUT_DEVICE: DeviceId = DeviceId(1);
 
 /// A backend with one device that never blocks.
 #[derive(Clone, Copy, Debug, Default)]
@@ -30,13 +32,26 @@ impl OfflineBackend {
         Self
     }
 
-    /// Description of the device this backend offers.
+    /// Description of the output device this backend offers.
     #[must_use]
     pub fn device_info() -> DeviceInfo {
         DeviceInfo {
             id: DEVICE,
             name: Name::truncated("Offline"),
             direction: Direction::Output,
+            channels: 2,
+            rates: Rates::from_slice(&SUPPORTED_RATES),
+            is_default: true,
+        }
+    }
+
+    /// Description of the input device this backend offers.
+    #[must_use]
+    pub fn input_device_info() -> DeviceInfo {
+        DeviceInfo {
+            id: INPUT_DEVICE,
+            name: Name::truncated("Offline input"),
+            direction: Direction::Input,
             channels: 2,
             rates: Rates::from_slice(&SUPPORTED_RATES),
             is_default: true,
@@ -82,6 +97,144 @@ impl Backend for OfflineBackend {
             running: false,
             frames: 0,
         })
+    }
+}
+
+impl InputBackend for OfflineBackend {
+    type Capture = OfflineCapture;
+
+    fn input_devices(&self, out: &mut [DeviceInfo]) -> Result<usize, AudioError> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+        out[0] = Self::input_device_info();
+        Ok(1)
+    }
+
+    fn default_input(&self) -> Result<DeviceId, AudioError> {
+        Ok(INPUT_DEVICE)
+    }
+
+    fn open_input<C: Capturer + 'static>(
+        &self,
+        config: StreamConfig,
+        capturer: C,
+    ) -> Result<Self::Capture, AudioError> {
+        if config.device != INPUT_DEVICE {
+            return Err(AudioError::DeviceMissing);
+        }
+        config.validate()?;
+        let mut capturer = capturer;
+        capturer.prepare(config);
+        // Boxing happens on the control thread, before any audio moves.
+        Ok(OfflineCapture {
+            config,
+            capturer: Some(Box::new(capturer)),
+            running: false,
+            frames: 0,
+        })
+    }
+}
+
+/// A stream that captures whatever it is handed, rather than reading a
+/// device. It is what a test uses to drive a recording path, and what an
+/// import feeds when material arrives from a file rather than a jack.
+pub struct OfflineCapture {
+    config: StreamConfig,
+    // Held in an option so the capturer can be taken back once the stream
+    // is finished with, which is how a test reads what it recorded.
+    capturer: Option<Box<dyn Capturer>>,
+    running: bool,
+    frames: u64,
+}
+
+impl OfflineCapture {
+    /// Hands `input` to the capturer as though the device had delivered
+    /// it. Returns the frames taken.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError::WrongState`] when the stream is not running
+    /// and [`AudioError::Unsupported`] when the buffer is longer than the
+    /// configured block.
+    pub fn capture_from(&mut self, input: &[[f32; 2]]) -> Result<usize, AudioError> {
+        if !self.running {
+            return Err(AudioError::WrongState);
+        }
+        if input.len() > self.config.block_frames {
+            return Err(AudioError::Unsupported("block size"));
+        }
+        let Some(capturer) = self.capturer.as_mut() else {
+            return Err(AudioError::WrongState);
+        };
+        let timing = BlockTiming {
+            frame: self.frames,
+            dropouts: 0,
+        };
+        capturer.capture(input, timing);
+        self.frames += input.len() as u64;
+        Ok(input.len())
+    }
+
+    /// Hands over `input` one block at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError::WrongState`] when the stream is not running.
+    pub fn capture_all(&mut self, input: &[[f32; 2]]) -> Result<usize, AudioError> {
+        if !self.running {
+            return Err(AudioError::WrongState);
+        }
+        let block = self.config.block_frames;
+        let mut taken = 0;
+        while taken < input.len() {
+            let end = (taken + block).min(input.len());
+            self.capture_from(&input[taken..end])?;
+            taken = end;
+        }
+        Ok(taken)
+    }
+
+    /// Returns the capturer, ending the stream.
+    #[must_use]
+    pub fn into_capturer(mut self) -> Option<Box<dyn Capturer>> {
+        self.running = false;
+        self.capturer.take()
+    }
+}
+
+impl Stream for OfflineCapture {
+    fn config(&self) -> StreamConfig {
+        self.config
+    }
+
+    fn start(&mut self) -> Result<(), AudioError> {
+        if self.running {
+            return Err(AudioError::WrongState);
+        }
+        self.running = true;
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), AudioError> {
+        if !self.running {
+            return Err(AudioError::WrongState);
+        }
+        self.running = false;
+        Ok(())
+    }
+
+    fn is_running(&self) -> bool {
+        self.running
+    }
+
+    fn frames_rendered(&self) -> u64 {
+        self.frames
+    }
+
+    fn dropouts(&self) -> u64 {
+        // Nothing here runs against a clock, so nothing arrives late.
+        0
     }
 }
 
@@ -200,6 +353,162 @@ impl Stream for OfflineStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::MIN_BLOCK;
+    /// A capturer that keeps what it was handed, so a test can look at it.
+    struct Recording {
+        frames: Vec<[f32; 2]>,
+        blocks: usize,
+        prepared: Option<StreamConfig>,
+        first_frame: Option<u64>,
+    }
+
+    impl Recording {
+        fn new() -> Self {
+            Self {
+                frames: Vec::new(),
+                blocks: 0,
+                prepared: None,
+                first_frame: None,
+            }
+        }
+    }
+
+    impl Capturer for Recording {
+        fn capture(&mut self, input: &[[f32; 2]], timing: BlockTiming) {
+            if self.first_frame.is_none() {
+                self.first_frame = Some(timing.frame);
+            }
+            self.frames.extend_from_slice(input);
+            self.blocks += 1;
+        }
+
+        fn prepare(&mut self, config: StreamConfig) {
+            self.prepared = Some(config);
+        }
+    }
+
+    /// The smallest block a stream may be opened with, which keeps the
+    /// tests below honest about splitting.
+    fn input_config(block: usize) -> StreamConfig {
+        StreamConfig {
+            device: INPUT_DEVICE,
+            sample_rate: 48_000,
+            block_frames: block,
+            channels: 2,
+        }
+    }
+
+    #[test]
+    fn an_input_device_is_offered_beside_the_output() {
+        let backend = OfflineBackend::new();
+        let mut devices = [OfflineBackend::device_info(); 2];
+        assert_eq!(backend.input_devices(&mut devices).unwrap(), 1);
+        assert_eq!(devices[0].id, INPUT_DEVICE);
+        assert_eq!(devices[0].direction, Direction::Input);
+        assert_ne!(devices[0].id, DEVICE, "the two devices are not the same");
+        assert_eq!(backend.default_input().unwrap(), INPUT_DEVICE);
+        // A caller with no room is told nothing was written.
+        assert_eq!(backend.input_devices(&mut []).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_capture_stream_hands_over_what_it_is_given() {
+        let backend = OfflineBackend::new();
+        let mut stream = backend
+            .open_input(input_config(MIN_BLOCK), Recording::new())
+            .expect("the input would not open");
+        assert_eq!(stream.config().block_frames, MIN_BLOCK);
+        assert!(!stream.is_running());
+        assert_eq!(stream.frames_rendered(), 0);
+        assert_eq!(stream.dropouts(), 0);
+        assert!(!stream.is_lost());
+
+        // Nothing is taken until the stream runs.
+        assert_eq!(
+            stream.capture_from(&[[0.0, 0.0]]),
+            Err(AudioError::WrongState)
+        );
+        assert!(stream.start().is_ok());
+        assert_eq!(stream.start(), Err(AudioError::WrongState));
+
+        let material: Vec<[f32; 2]> = (0..MIN_BLOCK * 2 + 3)
+            .map(|index| [index as f32, -(index as f32)])
+            .collect();
+        let count = material.len();
+        assert_eq!(stream.capture_all(&material).unwrap(), count);
+        assert_eq!(stream.frames_rendered(), count as u64);
+        // A block longer than the configured one is refused rather than
+        // split behind the caller's back.
+        assert_eq!(
+            stream.capture_from(&material),
+            Err(AudioError::Unsupported("block size"))
+        );
+        assert!(stream.stop().is_ok());
+        assert_eq!(stream.stop(), Err(AudioError::WrongState));
+
+        // The capturer comes back so its owner can read what it took; what
+        // it took is checked in the test below.
+        assert!(stream.into_capturer().is_some());
+    }
+
+    #[test]
+    fn capture_keeps_every_frame_in_order_and_counts_the_blocks() {
+        let backend = OfflineBackend::new();
+        // Two whole blocks and a short one, so the split is visible.
+        let material: Vec<[f32; 2]> = (0..MIN_BLOCK * 2 + 1)
+            .map(|index| [index as f32, index as f32 * 0.5])
+            .collect();
+
+        // The capturer is kept here rather than inside the stream so the
+        // test can read it afterwards.
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(Recording::new()));
+        struct Forwarding(std::sync::Arc<std::sync::Mutex<Recording>>);
+        impl Capturer for Forwarding {
+            fn capture(&mut self, input: &[[f32; 2]], timing: BlockTiming) {
+                self.0.lock().unwrap().capture(input, timing);
+            }
+            fn prepare(&mut self, config: StreamConfig) {
+                self.0.lock().unwrap().prepare(config);
+            }
+        }
+
+        let mut stream = backend
+            .open_input(
+                input_config(MIN_BLOCK),
+                Forwarding(std::sync::Arc::clone(&shared)),
+            )
+            .expect("the input would not open");
+        assert!(stream.start().is_ok());
+        assert_eq!(stream.capture_all(&material).unwrap(), material.len());
+
+        let recording = shared.lock().unwrap();
+        assert_eq!(recording.frames, material, "the material arrived changed");
+        assert_eq!(recording.blocks, 3, "the material was not split by block");
+        assert_eq!(recording.first_frame, Some(0));
+        assert_eq!(
+            recording.prepared.map(|config| config.block_frames),
+            Some(MIN_BLOCK),
+            "the capturer was not told what it was opened with"
+        );
+    }
+
+    #[test]
+    fn an_input_stream_refuses_the_wrong_device_and_a_bad_rate() {
+        let backend = OfflineBackend::new();
+        let wrong = StreamConfig {
+            device: DEVICE,
+            ..input_config(MIN_BLOCK)
+        };
+        assert!(matches!(
+            backend.open_input(wrong, Recording::new()),
+            Err(AudioError::DeviceMissing)
+        ));
+        let unusable = StreamConfig {
+            sample_rate: 0,
+            ..input_config(MIN_BLOCK)
+        };
+        assert!(backend.open_input(unusable, Recording::new()).is_err());
+    }
 
     /// A renderer that writes a rising ramp so the tests can tell which
     /// frame each sample came from, and records what it was prepared with.

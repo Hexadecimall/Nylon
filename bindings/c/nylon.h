@@ -46,6 +46,18 @@ typedef struct NylonBounceReport {
     float peak_right;
 } NylonBounceReport;
 
+/* Track device kinds: 0 utility, 1 equalizer, 2 compressor, 3 stereo delay.
+ * Parameter layouts:
+ * utility: gain dB, width, balance
+ * equalizer: filter kind 0..7, frequency, Q, gain dB
+ * compressor: threshold, ratio, knee, attack, release, makeup, sidechain flag
+ * stereo delay: delay seconds, feedback, mix */
+typedef struct NylonTrackDevice {
+    int kind;
+    int enabled;
+    float parameters[7];
+} NylonTrackDevice;
+
 /* Allocates a new, empty project. Returns null on allocation failure. */
 void* nylon_project_new(void);
 
@@ -159,6 +171,19 @@ int nylon_track_set_color_index(void* project, unsigned long long index, int col
 unsigned int nylon_track_latency_frames(const void* project, unsigned long long index);
 int nylon_track_set_latency_frames(
     void* project, unsigned long long index, unsigned int frames);
+
+unsigned long long nylon_track_device_count(
+    const void* project, unsigned long long track);
+int nylon_track_device_get(const void* project, unsigned long long track,
+    unsigned long long device, NylonTrackDevice* out);
+int nylon_track_device_add(
+    void* project, unsigned long long track, const NylonTrackDevice* device);
+int nylon_track_device_set(void* project, unsigned long long track,
+    unsigned long long index, const NylonTrackDevice* device);
+int nylon_track_device_delete(
+    void* project, unsigned long long track, unsigned long long index);
+int nylon_track_device_move(void* project, unsigned long long track,
+    unsigned long long from, unsigned long long to);
 
 /* Project routes use track indexes at the interface and stable track IDs in
  * persisted state. Invalid route indexes return ULLONG_MAX, -1, or NaN. */

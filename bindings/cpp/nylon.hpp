@@ -3,6 +3,7 @@
 // ownership, UTF-8 string handling, and typed enums.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -59,6 +60,25 @@ struct ProjectRoute {
     std::uint64_t destination;
     RoutingKind kind;
     float gain;
+};
+
+enum class DeviceKind : int { Utility = 0, Equalizer = 1, Compressor = 2, StereoDelay = 3 };
+
+enum class FilterKind : int {
+    LowPass = 0,
+    HighPass = 1,
+    BandPass = 2,
+    Notch = 3,
+    AllPass = 4,
+    Peaking = 5,
+    LowShelf = 6,
+    HighShelf = 7
+};
+
+struct TrackDevice {
+    DeviceKind kind{DeviceKind::Utility};
+    bool enabled{true};
+    std::array<float, 7> parameters{};
 };
 
 class CompiledRouting {
@@ -164,6 +184,13 @@ public:
     bool setTrackColorIndex(std::uint64_t index, int color);
     std::uint32_t trackLatencyFrames(std::uint64_t index) const;
     bool setTrackLatencyFrames(std::uint64_t index, std::uint32_t frames);
+
+    std::vector<TrackDevice> trackDevices(std::uint64_t track) const;
+    bool addTrackDevice(std::uint64_t track, const TrackDevice& device);
+    bool setTrackDevice(
+        std::uint64_t track, std::uint64_t index, const TrackDevice& device);
+    bool deleteTrackDevice(std::uint64_t track, std::uint64_t index);
+    bool moveTrackDevice(std::uint64_t track, std::uint64_t from, std::uint64_t to);
 
     std::vector<ProjectRoute> routes() const;
     bool addRoute(std::uint64_t source, std::uint64_t destination, RoutingKind kind, float gain);

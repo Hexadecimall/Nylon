@@ -1,4 +1,4 @@
-use nylon::engine::device::DeviceKind;
+use nylon::engine::device::{DeviceConfig, DeviceKind};
 use nylon::persistence::PersistenceError;
 use nylon::project::{Command, MidiNote, Project, TrackKind};
 use nylon::routing::EdgeKind;
@@ -25,10 +25,13 @@ fn session() -> Project {
             Command::SetTrackArm { id, enabled: true },
             Command::AddDevice {
                 track: id,
-                kind: DeviceKind::StereoDelay {
-                    delay_seconds: 0.375,
-                    feedback: 0.45,
-                    mix: 0.2,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::StereoDelay {
+                        delay_seconds: 0.375,
+                        feedback: 0.45,
+                        mix: 0.2,
+                    },
                 },
             },
             Command::SetTimeSignature {

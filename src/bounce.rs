@@ -383,10 +383,13 @@ mod tests {
         processed
             .apply(&[Command::AddDevice {
                 track,
-                kind: DeviceKind::Utility {
-                    gain_db: -6.020_6,
-                    width: 1.0,
-                    balance: 0.0,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Utility {
+                        gain_db: -6.020_6,
+                        width: 1.0,
+                        balance: 0.0,
+                    },
                 },
             }])
             .unwrap();

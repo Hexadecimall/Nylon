@@ -1,4 +1,4 @@
-use nylon::engine::device::DeviceKind;
+use nylon::engine::device::{DeviceConfig, DeviceKind};
 use nylon::project::{Command, MidiNote, Project, ProjectError, TrackKind};
 use nylon::routing::EdgeKind;
 
@@ -456,18 +456,24 @@ fn device_chains_are_validated_ordered_and_undoable() {
         .apply(&[
             Command::AddDevice {
                 track,
-                kind: DeviceKind::Utility {
-                    gain_db: -6.0,
-                    width: 1.0,
-                    balance: 0.0,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::Utility {
+                        gain_db: -6.0,
+                        width: 1.0,
+                        balance: 0.0,
+                    },
                 },
             },
             Command::AddDevice {
                 track,
-                kind: DeviceKind::StereoDelay {
-                    delay_seconds: 0.25,
-                    feedback: 0.4,
-                    mix: 0.3,
+                config: DeviceConfig {
+                    enabled: true,
+                    kind: DeviceKind::StereoDelay {
+                        delay_seconds: 0.25,
+                        feedback: 0.4,
+                        mix: 0.3,
+                    },
                 },
             },
         ])

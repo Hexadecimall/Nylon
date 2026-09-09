@@ -38,6 +38,19 @@ fn null_handles_are_rejected() {
         assert_eq!(nylon_transport_locate(std::ptr::null_mut(), 1.0), 0);
         assert_eq!(nylon_transport_position_beats(std::ptr::null_mut()), 0.0);
         assert_eq!(nylon_audio_default_output(std::ptr::null_mut()), 0);
+        let mut device = NylonTrackDevice::default();
+        assert_eq!(nylon_track_device_count(std::ptr::null(), 0), 0);
+        assert_eq!(
+            nylon_track_device_get(std::ptr::null(), 0, 0, &mut device),
+            0
+        );
+        assert_eq!(nylon_track_device_add(std::ptr::null_mut(), 0, &device), 0);
+        assert_eq!(
+            nylon_track_device_set(std::ptr::null_mut(), 0, 0, &device),
+            0
+        );
+        assert_eq!(nylon_track_device_delete(std::ptr::null_mut(), 0, 0), 0);
+        assert_eq!(nylon_track_device_move(std::ptr::null_mut(), 0, 0, 0), 0);
         let mut report = NylonBounceReport::default();
         assert_eq!(
             nylon_render_bounce_wave(
@@ -188,6 +201,61 @@ fn native_mixer_controls_validate_and_restore_history() {
         assert_eq!(nylon_project_track_count(handle), 0);
         assert_eq!(nylon_project_new_in_place(handle), 1);
         assert_eq!(nylon_project_can_undo(handle), 0);
+        nylon_project_free(handle);
+    }
+}
+
+#[test]
+fn native_track_devices_are_typed_ordered_and_undoable() {
+    let handle = nylon_project_new();
+    // SAFETY: This thread owns the handle and every device record.
+    unsafe {
+        assert_eq!(nylon_project_add_track(handle), 1);
+        let utility = NylonTrackDevice {
+            kind: 0,
+            enabled: 0,
+            parameters: [-6.0, 1.25, -0.1, 0.0, 0.0, 0.0, 0.0],
+        };
+        let delay = NylonTrackDevice {
+            kind: 3,
+            enabled: 1,
+            parameters: [0.25, 0.4, 0.3, 0.0, 0.0, 0.0, 0.0],
+        };
+        assert_eq!(nylon_track_device_add(handle, 0, &utility), 1);
+        assert_eq!(nylon_track_device_add(handle, 0, &delay), 1);
+        assert_eq!(nylon_track_device_count(handle, 0), 2);
+        let mut read = NylonTrackDevice::default();
+        assert_eq!(nylon_track_device_get(handle, 0, 0, &mut read), 1);
+        assert_eq!(read, utility);
+        assert_eq!(nylon_track_device_move(handle, 0, 1, 0), 1);
+        assert_eq!(nylon_track_device_get(handle, 0, 0, &mut read), 1);
+        assert_eq!(read, delay);
+
+        let changed = NylonTrackDevice {
+            kind: 0,
+            enabled: 1,
+            parameters: [-3.0, 0.5, 0.2, 0.0, 0.0, 0.0, 0.0],
+        };
+        assert_eq!(nylon_track_device_set(handle, 0, 1, &changed), 1);
+        assert_eq!(nylon_track_device_get(handle, 0, 1, &mut read), 1);
+        assert_eq!(read, changed);
+        assert_eq!(nylon_project_undo(handle), 1);
+        assert_eq!(nylon_track_device_get(handle, 0, 1, &mut read), 1);
+        assert_eq!(read, utility);
+
+        let invalid = NylonTrackDevice {
+            kind: 3,
+            enabled: 1,
+            parameters: [0.25, 1.0, 0.5, 0.0, 0.0, 0.0, 0.0],
+        };
+        assert_eq!(nylon_track_device_set(handle, 0, 0, &invalid), 0);
+        assert_eq!(nylon_track_device_delete(handle, 0, 0), 1);
+        assert_eq!(nylon_track_device_count(handle, 0), 1);
+        assert_eq!(nylon_track_device_get(handle, 0, 1, &mut read), 0);
+        assert_eq!(
+            nylon_track_device_get(handle, 0, 0, std::ptr::null_mut()),
+            0
+        );
         nylon_project_free(handle);
     }
 }

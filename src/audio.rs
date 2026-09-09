@@ -294,6 +294,56 @@ pub trait Renderer: Send {
     fn prepare(&mut self, _config: StreamConfig) {}
 }
 
+/// Consumes audio arriving from a device.
+///
+/// Like a [`Renderer`], this runs on the audio thread: it must not
+/// allocate, lock, or block. Material that has to reach the control
+/// thread goes through a queue prepared before the stream opens.
+pub trait Capturer: Send {
+    /// Takes `input.len()` stereo frames as the device delivered them.
+    fn capture(&mut self, input: &[[f32; 2]], timing: BlockTiming);
+
+    /// Called before the first block with the configuration granted,
+    /// which may differ from the one requested.
+    fn prepare(&mut self, _config: StreamConfig) {}
+}
+
+/// A host that can also record.
+///
+/// Kept apart from [`Backend`] because a host may offer playback without
+/// capture, and because the offline backend has nothing to record from
+/// until it is given something.
+pub trait InputBackend {
+    /// The stream type this backend opens for capture.
+    type Capture: Stream;
+
+    /// Lists input devices, writing at most `out.len()` entries and
+    /// returning how many were written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError::Host`] when the host cannot be queried.
+    fn input_devices(&self, out: &mut [DeviceInfo]) -> Result<usize, AudioError>;
+
+    /// Identifier of the default input device.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError::DeviceMissing`] when the host has none.
+    fn default_input(&self) -> Result<DeviceId, AudioError>;
+
+    /// Opens an input stream, created stopped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AudioError`] when the device or configuration is refused.
+    fn open_input<C: Capturer + 'static>(
+        &self,
+        config: StreamConfig,
+        capturer: C,
+    ) -> Result<Self::Capture, AudioError>;
+}
+
 /// A source of audio devices.
 pub trait Backend {
     /// The stream type this backend opens.

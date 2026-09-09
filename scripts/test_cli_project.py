@@ -48,6 +48,21 @@ def main():
         assert routes == [{"destination": 1, "gain": 0.5, "index": 0,
                            "kind": "sidechain", "source": 0}], routes
         call("add-route", "1", "0", "main", succeeds=False)
+        call("add-device", "0", "utility", "-6", "1.25", "-0.1")
+        call("add-device", "0", "delay", "0.25", "0.4", "0.3")
+        chain = call("track-devices", "0")["devices"]
+        assert [device["kind"] for device in chain] == ["utility", "delay"], chain
+        assert chain[0]["parameters"]["gainDb"] == -6 and chain[0]["enabled"], chain
+        call("move-device", "0", "1", "0")
+        call("set-device-enabled", "0", "1", "off")
+        call("set-device", "0", "0", "equalizer", "peaking", "1000", "0.7", "3")
+        chain = call("track-devices", "0")["devices"]
+        assert chain[0]["kind"] == "equalizer", chain
+        assert chain[0]["parameters"]["filter"] == "peaking", chain
+        assert chain[1]["kind"] == "utility" and not chain[1]["enabled"], chain
+        call("delete-device", "0", "1")
+        assert len(call("track-devices", "0")["devices"]) == 1
+        call("add-device", "0", "delay", "0.2", "1", "0.5", succeeds=False)
         call("import-wave", "1", "0", str(source), "120")
         clips = call("clips", "1")["clips"]
         assert clips[0]["kind"] == "audio" and clips[0]["mediaPath"].startswith("Media/"), clips

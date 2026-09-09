@@ -395,7 +395,7 @@ pub enum Command {
     },
     AddDevice {
         track: TrackId,
-        kind: DeviceKind,
+        config: DeviceConfig,
     },
     DeleteDevice(DeviceId),
     MoveDevice {
@@ -679,13 +679,10 @@ impl Project {
                         .compiled_routing()
                         .map_err(|_| ProjectError::InvalidRouting)?;
                 }
-                Command::AddDevice { track, kind } => {
-                    DeviceConfig {
-                        enabled: true,
-                        kind: *kind,
-                    }
-                    .validate(snapshot.sample_rate as f32)
-                    .map_err(|_| ProjectError::InvalidDevice)?;
+                Command::AddDevice { track, config } => {
+                    (*config)
+                        .validate(snapshot.sample_rate as f32)
+                        .map_err(|_| ProjectError::InvalidDevice)?;
                     let target = snapshot.track_mut(*track)?;
                     if target.devices.len() == MAX_DEVICES {
                         return Err(ProjectError::DeviceCapacity);
@@ -694,10 +691,7 @@ impl Project {
                     next_id = next_identifier(next_id)?;
                     target.devices.push(Device {
                         id,
-                        config: DeviceConfig {
-                            enabled: true,
-                            kind: *kind,
-                        },
+                        config: *config,
                     });
                 }
                 Command::DeleteDevice(id) => {

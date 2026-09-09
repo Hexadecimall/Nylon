@@ -206,6 +206,64 @@ bool Project::setTrackLatencyFrames(std::uint64_t index, std::uint32_t frames)
     return nylon_track_set_latency_frames(m_handle, index, frames) != 0;
 }
 
+namespace {
+NylonTrackDevice nativeDevice(const TrackDevice& device)
+{
+    NylonTrackDevice result{};
+    result.kind = static_cast<int>(device.kind);
+    result.enabled = device.enabled ? 1 : 0;
+    for (std::size_t index = 0; index < device.parameters.size(); ++index)
+        result.parameters[index] = device.parameters[index];
+    return result;
+}
+
+TrackDevice trackDevice(const NylonTrackDevice& device)
+{
+    TrackDevice result;
+    result.kind = static_cast<DeviceKind>(device.kind);
+    result.enabled = device.enabled != 0;
+    for (std::size_t index = 0; index < result.parameters.size(); ++index)
+        result.parameters[index] = device.parameters[index];
+    return result;
+}
+}
+
+std::vector<TrackDevice> Project::trackDevices(std::uint64_t track) const
+{
+    std::vector<TrackDevice> result;
+    const auto count = nylon_track_device_count(m_handle, track);
+    result.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t index = 0; index < count; ++index) {
+        NylonTrackDevice device{};
+        if (!nylon_track_device_get(m_handle, track, index, &device)) return {};
+        result.push_back(trackDevice(device));
+    }
+    return result;
+}
+
+bool Project::addTrackDevice(std::uint64_t track, const TrackDevice& device)
+{
+    const auto native = nativeDevice(device);
+    return nylon_track_device_add(m_handle, track, &native) != 0;
+}
+
+bool Project::setTrackDevice(
+    std::uint64_t track, std::uint64_t index, const TrackDevice& device)
+{
+    const auto native = nativeDevice(device);
+    return nylon_track_device_set(m_handle, track, index, &native) != 0;
+}
+
+bool Project::deleteTrackDevice(std::uint64_t track, std::uint64_t index)
+{
+    return nylon_track_device_delete(m_handle, track, index) != 0;
+}
+
+bool Project::moveTrackDevice(std::uint64_t track, std::uint64_t from, std::uint64_t to)
+{
+    return nylon_track_device_move(m_handle, track, from, to) != 0;
+}
+
 std::vector<ProjectRoute> Project::routes() const
 {
     std::vector<ProjectRoute> result;

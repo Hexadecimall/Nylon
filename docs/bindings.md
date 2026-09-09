@@ -32,7 +32,7 @@ Groups of functions:
 | Prefix | Covers |
 | --- | --- |
 | `nylon_project_*` | tempo, time signature, sample rate, undo/redo, bundle save/open, reset |
-| `nylon_track_*` | name, kind, volume, pan, mute, solo, arm, color, deletion |
+| `nylon_track_*` | name, kind, volume, pan, mute, solo, arm, color, devices, deletion |
 | `nylon_scene_*` | scene count, creation, deletion, names |
 | `nylon_clip_*` | slot state, MIDI creation, WAVE import, clip settings, notes |
 | `nylon_arrangement_*` | clips placed on the timeline |
@@ -49,7 +49,9 @@ Header: `bindings/cpp/nylon.hpp`, library `nyloncpp` (built by
 `bindings/cpp/CMakeLists.txt`; link it with `-lnyloncpp` plus the core).
 `nylon::Project` is a move-only owner of a project handle with one method
 per project C function, `std::string` for names, and `nylon::MidiNote` /
-`nylon::BeatRange` value types. `Project::bounceWave` writes a selected beat
+`nylon::BeatRange` value types. `nylon::TrackDevice` carries a typed device,
+its enabled state, and seven fixed parameter slots across the ABI.
+`Project::bounceWave` writes a selected beat
 range as stereo 24-bit WAVE and returns its frame count and peaks. Audio clip
 imports copy decoded WAVE sources into the bundle's `Media/` directory before
 the undoable clip edit is accepted.
@@ -80,6 +82,14 @@ nylon-control --project Session.nylon import-wave 1 0 take.wav 120
 nylon-control --project Session.nylon clips 1
 nylon-control --project Session.nylon place-clip 1 0 0 16
 nylon-control --project Session.nylon set-audio-gain 1 0 -3
+nylon-control --project Session.nylon add-device 0 utility -6 1 0
+nylon-control --project Session.nylon add-device 0 equalizer peaking 1000 0.7 3
+nylon-control --project Session.nylon add-device 0 compressor -18 4 6 0.01 0.1 0 off
+nylon-control --project Session.nylon add-device 0 delay 0.25 0.4 0.3
+nylon-control --project Session.nylon track-devices 0
+nylon-control --project Session.nylon set-device-enabled 0 1 off
+nylon-control --project Session.nylon move-device 0 1 0
+nylon-control --project Session.nylon delete-device 0 1
 nylon-control --project Session.nylon set-tempo 128
 nylon-control --project Session.nylon bounce mix.wav 0 64 48000
 nylon-control --project Session.nylon recovery-status
