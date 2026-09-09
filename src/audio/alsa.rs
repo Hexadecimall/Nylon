@@ -35,9 +35,49 @@ const SND_PCM_ACCESS_RW_INTERLEAVED: c_int = 3;
 const RTLD_NOW: c_int = 2;
 const RTLD_LOCAL: c_int = 0;
 
+/// First-in first-out real-time scheduling, from the scheduler header.
+const SCHED_FIFO: c_int = 1;
+
+/// How far above the lowest real-time priority the playback thread asks
+/// to run. Low enough to leave the kernel's own threads above it.
+const PRIORITY_STEP: c_int = 10;
+
+#[repr(C)]
+struct SchedParam {
+    priority: c_int,
+}
+
 unsafe extern "C" {
     fn dlopen(file: *const c_char, mode: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+    fn pthread_self() -> usize;
+    fn pthread_setschedparam(thread: usize, policy: c_int, param: *const SchedParam) -> c_int;
+    fn sched_get_priority_min(policy: c_int) -> c_int;
+    fn sched_get_priority_max(policy: c_int) -> c_int;
+}
+
+/// Asks for real-time scheduling on the calling thread.
+///
+/// A machine that does not allow it keeps the ordinary policy, which
+/// still plays; it is more likely to be interrupted under load. There is
+/// nothing to undo: the thread exits with the stream.
+fn request_realtime() -> bool {
+    // SAFETY: Both calls take a policy and return a priority or -1.
+    let (lowest, highest) = unsafe {
+        (
+            sched_get_priority_min(SCHED_FIFO),
+            sched_get_priority_max(SCHED_FIFO),
+        )
+    };
+    if lowest < 0 || highest < lowest {
+        return false;
+    }
+    let param = SchedParam {
+        priority: (lowest + PRIORITY_STEP).min(highest),
+    };
+    // SAFETY: The thread is the calling one and the parameter outlives
+    // the call.
+    unsafe { pthread_setschedparam(pthread_self(), SCHED_FIFO, &raw const param) == 0 }
 }
 
 /// The library's entry points, resolved once.
@@ -361,6 +401,7 @@ impl Backend for AlsaBackend {
             finished: AtomicBool::new(false),
             frames: AtomicU64::new(0),
             dropouts: AtomicU64::new(0),
+            realtime: AtomicBool::new(false),
         });
         let worker = Worker {
             device,
@@ -410,6 +451,8 @@ struct Shared {
     finished: AtomicBool,
     frames: AtomicU64,
     dropouts: AtomicU64,
+    /// Whether the playback thread was granted real-time scheduling.
+    realtime: AtomicBool,
 }
 
 /// The playback thread's own state.
@@ -426,6 +469,9 @@ impl Worker {
     /// Nothing here allocates: the block buffer is filled before the loop
     /// starts and reused for every write.
     fn run(mut self) {
+        self.shared
+            .realtime
+            .store(request_realtime(), Ordering::Relaxed);
         let frames = self.config.block_frames;
         let mut block = vec![[0.0_f32; 2]; frames];
         let mut position = 0_u64;
@@ -493,6 +539,15 @@ pub struct AlsaStream {
     shared: Arc<Shared>,
     config: StreamConfig,
     thread: Option<JoinHandle<()>>,
+}
+
+impl AlsaStream {
+    /// Whether the playback thread runs under real-time scheduling. A
+    /// machine that does not allow it still plays.
+    #[must_use]
+    pub fn is_realtime(&self) -> bool {
+        self.shared.realtime.load(Ordering::Relaxed)
+    }
 }
 
 impl Stream for AlsaStream {
@@ -679,6 +734,9 @@ mod tests {
             frames.load(Ordering::Relaxed) > 0,
             "the stream never called the renderer"
         );
+        // Real-time scheduling is asked for but not required: a machine
+        // that refuses it still renders, which is what was just checked.
+        let _ = stream.is_realtime();
         assert!(stream.stop().is_ok());
         assert_eq!(stream.stop(), Err(AudioError::WrongState));
     }

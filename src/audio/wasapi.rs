@@ -140,6 +140,12 @@ unsafe extern "system" {
     fn PropVariantClear(value: *mut PropVariant) -> Hresult;
 }
 
+#[link(name = "avrt")]
+unsafe extern "system" {
+    fn AvSetMmThreadCharacteristicsW(task: *const u16, index: *mut u32) -> *mut c_void;
+    fn AvRevertMmThreadCharacteristics(handle: *mut c_void) -> c_int;
+}
+
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn CreateEventW(
@@ -713,6 +719,7 @@ impl Backend for WasapiBackend {
             finished: AtomicBool::new(false),
             frames: AtomicU64::new(0),
             dropouts: AtomicU64::new(0),
+            realtime: AtomicBool::new(false),
         });
         let worker = Worker {
             client,
@@ -734,6 +741,52 @@ impl Backend for WasapiBackend {
             config: running,
             thread: Some(thread),
         })
+    }
+}
+
+/// Membership of the scheduler's audio class, given up when dropped.
+///
+/// A machine that refuses it still plays; the thread is then scheduled
+/// like any other and is more likely to be interrupted under load.
+struct AudioClass(*mut c_void);
+
+impl AudioClass {
+    /// Joins the class for the calling thread.
+    fn join() -> Self {
+        // The scheduler names its classes; this is the one meant for
+        // audio that must not be interrupted.
+        let task: [u16; 10] = [
+            b'P' as u16,
+            b'r' as u16,
+            b'o' as u16,
+            b' ' as u16,
+            b'A' as u16,
+            b'u' as u16,
+            b'd' as u16,
+            b'i' as u16,
+            b'o' as u16,
+            0,
+        ];
+        let mut index: u32 = 0;
+        // SAFETY: The name is terminated and the index is written.
+        let handle = unsafe { AvSetMmThreadCharacteristicsW(task.as_ptr(), &raw mut index) };
+        Self(handle)
+    }
+
+    /// Whether the class was granted.
+    fn joined(&self) -> bool {
+        !self.0.is_null()
+    }
+}
+
+impl Drop for AudioClass {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: The handle came from the call above and is given up
+            // once.
+            unsafe { AvRevertMmThreadCharacteristics(self.0) };
+            self.0 = core::ptr::null_mut();
+        }
     }
 }
 
@@ -760,6 +813,8 @@ struct Shared {
     finished: AtomicBool,
     frames: AtomicU64,
     dropouts: AtomicU64,
+    /// Whether the playback thread was admitted to the audio class.
+    realtime: AtomicBool,
 }
 
 /// The playback thread's own state.
@@ -782,6 +837,10 @@ impl Worker {
         // The interfaces were created in the multithreaded apartment, so
         // this thread joins it too.
         let _apartment = Apartment::enter();
+        let class = AudioClass::join();
+        self.shared
+            .realtime
+            .store(class.joined(), Ordering::Relaxed);
         let mut block = vec![[0.0_f32; 2]; self.block];
         let mut position = 0_u64;
         let mut started = false;
@@ -878,6 +937,15 @@ pub struct WasapiStream {
     shared: Arc<Shared>,
     config: StreamConfig,
     thread: Option<JoinHandle<()>>,
+}
+
+impl WasapiStream {
+    /// Whether the playback thread runs in the scheduler's audio class. A
+    /// machine that refuses it still plays.
+    #[must_use]
+    pub fn is_realtime(&self) -> bool {
+        self.shared.realtime.load(Ordering::Relaxed)
+    }
 }
 
 impl Stream for WasapiStream {
@@ -1036,6 +1104,8 @@ mod tests {
             "the stream never called the renderer"
         );
         assert!(stream.frames_rendered() > 0);
+        // The audio class is asked for but not required.
+        let _ = stream.is_realtime();
         assert!(stream.stop().is_ok());
     }
 }
